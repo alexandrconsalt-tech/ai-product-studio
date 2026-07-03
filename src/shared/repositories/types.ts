@@ -22,6 +22,27 @@ export type RepositorySnapshot = Readonly<{
   prompts: readonly Prompt[];
 }>;
 
+/**
+ * `load`/`save`/`reset` are the only methods the current Zustand stores call
+ * (via `useRepositoryStore`) — they operate on the whole `RepositorySnapshot`,
+ * which is cheap for a client-held, Local-Storage-backed repository.
+ *
+ * `upsertProject`/`deleteProject`/`upsertProduct`/`upsertArchitecture`/
+ * `upsertPipeline`/`upsertRun` are intentionally part of this interface even
+ * though no store calls them today. They are the per-entity mutation contract
+ * a future network-backed `ProjectRepository` implementation (§8.7 of
+ * CLAUDE.md) should expose, so a backend swap doesn't require sending the
+ * entire snapshot on every mutation. Do not delete them as "dead code" — they
+ * are forward-compatibility surface, not accidental duplication. Do not add a
+ * second, third mutation method for the same entity either; if a store needs
+ * a new mutation, add it here once, in this per-entity shape.
+ *
+ * CLAUDE.md §63 debt item 5 tracks migrating the stores to call these methods
+ * once a real backend exists — deferred deliberately rather than done now,
+ * since rewriting every store's snapshot-manipulation logic against a
+ * Local-Storage-only backend would add complexity with no present benefit
+ * (CLAUDE.md §2 principle 6, simplicity first).
+ */
 export type ProjectRepository = Readonly<{
   load(): RepositorySnapshot;
   save(snapshot: RepositorySnapshot): void;
