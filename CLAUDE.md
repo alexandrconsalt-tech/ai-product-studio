@@ -123,7 +123,7 @@ Nothing in the repository explicitly connects §3.1 and §3.3. This document mak
 3. **Search for reusable code** — this repo already has 7 Zustand stores, 12 entities, and a full `shared/ui` primitive set (§44.4). Adding a new one without checking these first is a defect, not a stylistic choice.
 4. **Design the solution** — for anything touching more than one file outside a single component, write a one-paragraph plan before editing (mentally or in the PR description); for anything touching the domain model, check §9 (DDD) boundaries first.
 5. **Implement.**
-6. **Test** — there are currently **zero automated tests in this repository** (verified: no `*.test.ts`/`*.spec.ts` files exist anywhere under `src/`). Do not assume tests exist; do not silently skip adding them either — see §19 and §63 for how to handle this gap.
+6. **Test** — run `npm test` (Vitest). Domain-layer entities have partial coverage (§19); most of the codebase (stores, UI, simulation) still has none. Do not assume coverage exists beyond what §19 documents; do not silently skip adding tests for new domain logic either.
 7. **Refactor** only what you touched; do not drive-by refactor unrelated code (violates M-1.1).
 8. **Self-review** using §65 before considering the task complete.
 9. **Update documentation** — if you change an entity, its `README.md` and the relevant `docs/domain/*.md` must change in the same unit of work. If you change orchestrator/skill logic that doesn't exist in code yet, do not retroactively edit those spec files to match a code shortcut — fix the code.
@@ -169,7 +169,7 @@ Nothing in the repository explicitly connects §3.1 and §3.3. This document mak
 **Mandatory rules:**
 - **RI-1.** Before creating any new file, run a search for an existing equivalent. This repo has empty scaffold directories (`framework-library/*`, `templates/*`, `skills/ai-engineering/`, `skills/evaluation/`, `skills/product-management/`, `docs/architecture/`, `docs/decisions/`, `docs/product/`, `src/widgets/`) that look like they contain something but don't (all `.gitkeep` only, verified). Do not assume a populated directory exists just because its name suggests it should.
 - **RI-2.** Before adding a dependency, check `package.json` — the dependency set is deliberately small (React 19, Next 15, Zustand 5, Zod 4, `@xyflow/react` 12, Tailwind 3, `framer-motion`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge`). No test runner, no ORM, no HTTP client, no state-sync library beyond Zustand are present — adding one is an architectural decision, not a routine `npm install`.
-- **RI-3.** There is no `.git` directory in this repository as of this writing — there is no commit history to `git blame` or `git log`. Do not claim "recent changes were X" without another source; if git history is needed for a task, that is itself a finding to surface (§63).
+- **RI-3.** Git was initialized 2026-07-03 as the first step of the Engineering Roadmap (§63 debt item 2, now closed) — `git log`/`git blame` are now valid sources of history, but only from that date forward. Do not assume any history predates the baseline commit; the repository's actual age and prior authorship are not recoverable from git.
 
 **Definition of Done:** you can name the exact file(s) relevant to a request before writing any code, and you have confirmed via `ls`/`find`/`grep` — not memory of this document — that they still exist in the shape described.
 
@@ -503,18 +503,18 @@ Rule: cross-aggregate references are always by `EntityId` string, never by embed
 
 ## 19. Prompt Testing
 
-**Purpose.** State the current, stark reality and the minimum bar going forward — there is no test infrastructure in this repository today.
+**Purpose.** State the current, evolving reality and the minimum bar going forward.
 
-**Current state (verified):** zero `*.test.ts`/`*.spec.ts` files anywhere under `src/`. No test runner is installed (`package.json` has no `jest`/`vitest`/`playwright`/etc.). `npm run lint` (ESLint, `next/core-web-vitals` config only) is the only automated check that exists.
+**Current state (verified, updated 2026-07-03 — Engineering Roadmap Epic 1):** Vitest is now installed (`vitest.config.ts`, `npm test` / `npm run test:watch`), and the domain layer has unit test coverage for `shared.ts` plus the `Node`, `Edge`, `Project`, `Review`, `Run`, `Pipeline` entities (schema acceptance/rejection + factory defaults — 27 tests passing at time of writing). **Prompt-specific testing remains at zero**: the `Prompt` entity has no test file yet, and no prompt evaluation harness (§18) exists. `npm run lint` (ESLint, `next/core-web-vitals` config only) remains the only other automated check.
 
 **Mandatory minimum going forward:**
-- **PT-1.** Any new Zod schema change gets at least one test asserting the schema accepts valid input and rejects the specific invalid input the change was meant to catch — even before a full test runner is set up, write these as documented manual verification steps in the PR description if no runner exists yet, and flag the missing runner as debt (§63).
+- **PT-1.** Any new Zod schema change gets at least one test asserting the schema accepts valid input and rejects the specific invalid input the change was meant to catch — this is now enforceable in practice (a test runner exists), not just an aspiration.
 - **PT-2.** Any prompt evaluation harness built per §18 IS the regression test suite for that prompt — treat "run the harness, compare to baseline" as the test, not an afterthought.
-- **PT-3.** Do not claim "tests pass" without having actually executed something. There is currently nothing to run — say so plainly rather than fabricating a pass.
+- **PT-3.** Do not claim "tests pass" without having actually executed `npm test`. Say so plainly if something is only manually verified.
 
-**Decision rule:** the first test infrastructure investment in this repository should target the domain layer (`src/entities/*/model/schema.ts`) — it's pure, has zero dependencies, and is exactly the kind of code unit tests are cheapest and most valuable for; it should precede investing in UI or simulation-engine tests.
+**Decision rule:** the first test infrastructure investment in this repository targeted the domain layer (`src/entities/*/model/schema.ts`) — done. The next investment should be: (a) test coverage for the remaining six entities (Architecture, Framework, KnowledgeModule, Model, Product, Prompt), then (b) store-level tests (`src/shared/stores/*`, especially `pipeline-store.ts`'s undo/redo stack), before UI or simulation-engine tests.
 
-**Definition of Done for this chapter, given current state:** any claim of "tested" in a PR description is either backed by an actual runnable check, or explicitly labeled "manually verified, no automated test exists yet" — never silently implied to be automated when it isn't.
+**Definition of Done for this chapter, given current state:** any claim of "tested" in a PR description is either backed by an actual `npm test` run, or explicitly labeled "manually verified, no automated test exists yet" — never silently implied to be automated when it isn't.
 
 ---
 
@@ -1343,9 +1343,11 @@ If applicable, map to one of `orchestrator/ERROR_HANDLING.md`'s 9 error_ids (§2
 
 ## 59. Git Workflow
 
-**Purpose.** Git conventions — currently moot in the strictest sense, since **this directory is not a git repository** (`.git` absent, verified), but stated here for the moment one is initialized.
+**Purpose.** Git conventions for this repository, now that one exists.
 
-**Mandatory rule the moment git is initialized:** follow the general safety protocol already in force for this environment — new commits over amends, no force-push without explicit confirmation, no `--no-verify`, descriptive commit messages explaining *why* not just *what*, never commit `pdf-notes.txt`-like raw business/PII material without a deliberate decision (§50).
+**Current state:** git was initialized 2026-07-03 with a baseline commit capturing the pre-roadmap state, `.gitignore` covers `node_modules`, `.next`, `.npm-cache`, `.DS_Store`, build artifacts, and env files (verified: `git status` shows a clean working tree relative to these patterns). There is no remote configured yet — this is a local repository only.
+
+**Mandatory rules:** new commits over amends, no force-push without explicit confirmation, no `--no-verify`, descriptive commit messages explaining *why* not just *what*, never commit `pdf-notes.txt`-like raw business/PII material carelessly (§50) — it is already tracked as of the baseline commit because it was already sitting in the working tree; treat any *future* similar raw import the same way only after the §50 privacy review, not automatically.
 
 **Branch types** (target, from `knowledge-import/11_Version_Control.md`, generalized from artifact versioning to code): Main, Feature, Experiment, Hotfix, Release — reuse this vocabulary for git branches too, rather than inventing a separate branching taxonomy for code vs. artifacts.
 
@@ -1401,8 +1403,8 @@ If applicable, map to one of `orchestrator/ERROR_HANDLING.md`'s 9 error_ids (§2
 **Purpose.** The authoritative list of technical debt already identified in this repository through the discovery work behind this document — start here before hunting for new debt, so effort isn't duplicated.
 
 **Known technical debt (numbered for reference in future work):**
-1. **Zero automated tests** anywhere in `src/` (§19).
-2. **No CI/CD pipeline** (§58) and **no git repository at all** (§59) — blocks code review history, `git blame`, and CI gating simultaneously.
+1. **~~Zero automated tests~~ — PARTIALLY RESOLVED 2026-07-03.** Vitest is installed; domain layer (`shared.ts` + 6 of 12 entities) has test coverage (§19). Remaining: Architecture/Framework/KnowledgeModule/Model/Product/Prompt entities, all stores, all UI, the simulation engine.
+2. **~~No git repository at all~~ — RESOLVED 2026-07-03** (§59). **No CI/CD pipeline yet** — still open, tracked as the next Engineering Roadmap task.
 3. **Decorative, non-functional tabs** in `product-screen.tsx` and `architecture-screen.tsx` (§31.10) — UX docs describe interactive tabs; code renders all content statically regardless of selection.
 4. **Cascading delete gaps**: both `project-store.ts`'s `deleteProject` and `LocalStorageProjectRepository`'s `deleteProject` cascade to remove linked products/architectures/pipelines but **not** linked runs/reviews — orphaned `Run`/`Review` records can accumulate.
 5. **Two parallel, partially-overlapping mutation APIs**: the Zustand stores manipulate `RepositorySnapshot` directly via `setSnapshot`, while `LocalStorageProjectRepository` separately exposes its own `upsertX` methods that appear to be substantially unused by the stores (§8.6/§7) — needs a decision on which is canonical before either is extended further.
@@ -1557,7 +1559,7 @@ File(s)/module
 1. **This document outranks any narrower document when they genuinely conflict** — but "outranks" means "provides the tie-breaking resolution stated in §31 or demands an ADR," never "silently overrides without explanation."
 2. **Never edit `knowledge-import/`, `orchestrator/`, or `skills/*` files to make them agree with this document's resolutions.** Those files remain the historical record of what was specified; this document's canonical decisions are additive interpretation layered on top, formalized later via ADR (§41) if the underlying files themselves need to change.
 3. **`skills/*` files are live application data** (§0.2, §10 SB-3) — check `demo-data.ts` for `path:` references before ever moving, renaming, or restructuring anything under `skills/`.
-4. **The repository has no tests, no CI, and no git history.** Every claim of verification in this document assumes manual verification unless stated otherwise. Do not let the thoroughness of this document's prose imply a rigor of tooling that doesn't yet exist.
+4. **This repository has partial tests, no CI yet, and git history only from 2026-07-03 onward.** Every claim of verification in this document is backed by either an actual `npm test`/`npm run lint` run or is explicitly marked as manual. Do not let the thoroughness of this document's prose imply more automated rigor than currently exists — check §19 and §63 for the current, evolving truth.
 5. **The call-analysis business case (§3.3) is real; the AI Product OS vision (§3.1) is aspirational.** When forced to choose which to build toward with limited time, default to strengthening the real case unless explicitly told otherwise (§3.4).
 6. **When this document is wrong, fix it — but fix it with the same evidence discipline used to write it**: read the actual file, quote the actual content, state the actual line/schema, don't paraphrase from memory.
 
