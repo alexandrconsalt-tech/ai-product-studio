@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Background, Controls, MiniMap, ReactFlow, addEdge, useUpdateNodeInternals, type Connection, type Edge as FlowEdge, type Node as FlowNode, type NodeChange, type EdgeChange, applyNodeChanges, applyEdgeChanges } from "@xyflow/react";
-import { Copy, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
+import { Copy, Download, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
 import { Button, Card, EmptyState, Input, Select, Textarea, Toolbar, IconButton, Badge } from "@/shared/ui";
 import { createNode } from "@/entities/Node/model/factory";
 import type { Node, NodeType } from "@/entities/Node/model/types";
@@ -14,6 +14,8 @@ import { usePipelineStore } from "@/shared/stores/pipeline-store";
 import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
 import { buildExecutionTrace, type StageTrace } from "@/shared/runtime/execution-trace";
 import { defaultRetryPolicy } from "@/shared/runtime/retry";
+import { buildReportEnvelope } from "@/shared/evaluation/reports";
+import { downloadJson } from "@/shared/lib/download-json";
 import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
 import { getProjectBundle } from "../selectors";
 
@@ -247,6 +249,13 @@ export function PipelineScreen() {
           </IconButton>
           <IconButton aria-label="Удалить Node" variant="ghost" disabled={!selectedNode} onClick={() => selectedNode && deleteNode(pipeline.id, selectedNode.id)}>
             <Trash2 className="size-4" aria-hidden="true" />
+          </IconButton>
+          <IconButton
+            aria-label="Export Pipeline Configuration"
+            variant="ghost"
+            onClick={() => downloadJson(`pipeline-configuration-${pipeline.id}.json`, buildReportEnvelope("pipeline_configuration", pipeline))}
+          >
+            <Download className="size-4" aria-hidden="true" />
           </IconButton>
         </div>
         <span className="text-sm text-text-muted">{pipeline.nodes.length} nodes · {pipeline.edges.length} edges · Undo {pipelineHistory.past.length}</span>

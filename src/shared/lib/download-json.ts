@@ -1,0 +1,16 @@
+/**
+ * Triggers a browser download of `data` as a pretty-printed JSON file.
+ * Only ever called from a click handler in a "use client" component
+ * (never at render/SSR time), so no `typeof window` guard is needed
+ * here -- unlike the module-load-time browser-API access `NX-4`
+ * (CLAUDE.md §45) actually guards against.
+ */
+export function downloadJson(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}

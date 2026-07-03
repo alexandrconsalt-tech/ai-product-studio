@@ -1,14 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, ArrowDown, CheckCircle2, Circle, XCircle } from "lucide-react";
-import { Alert, Badge, Card, EmptyState, Page, Section, Status, Select } from "@/shared/ui";
+import { ArrowDown, CheckCircle2, Circle, Download, XCircle } from "lucide-react";
+import { Alert, Badge, Button, Card, EmptyState, Page, Section, Status, Select } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundStore } from "@/shared/stores/playground-store";
 import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
 import { buildExecutionTrace, type StageTrace, type StageTraceStatus } from "@/shared/runtime/execution-trace";
 import { assessPipelineHealth, type HealthSeverity } from "@/shared/evaluation/pipeline-health";
 import { compareRuns } from "@/shared/evaluation/compare-runs";
+import { buildReportEnvelope } from "@/shared/evaluation/reports";
+import { downloadJson } from "@/shared/lib/download-json";
 import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
 import { getProjectBundle } from "../selectors";
 
@@ -85,6 +87,14 @@ export function ExecutionInspectorScreen() {
     }
   };
 
+  const exportExecutionReport = () => {
+    const envelope = buildReportEnvelope("execution_report", { run, trace, health });
+    downloadJson(`execution-report-${run.id}.json`, envelope);
+  };
+  const exportRunReport = () => {
+    downloadJson(`run-report-${run.id}.json`, buildReportEnvelope("run_report", run));
+  };
+
   return (
     <Page className="max-w-none">
       <div className="flex items-start justify-between gap-4">
@@ -92,7 +102,17 @@ export function ExecutionInspectorScreen() {
           <h1 className="text-2xl font-semibold">Execution Inspector</h1>
           <p className="text-sm text-text-muted">Run {run.id} · Pipeline {pipeline.id}</p>
         </div>
-        <Status tone={run.status === "succeeded" ? "success" : run.status === "failed" ? "error" : "neutral"}>{run.status}</Status>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={exportRunReport}>
+            <Download className="size-4" aria-hidden="true" />
+            Run Report
+          </Button>
+          <Button variant="secondary" onClick={exportExecutionReport}>
+            <Download className="size-4" aria-hidden="true" />
+            Execution Report
+          </Button>
+          <Status tone={run.status === "succeeded" ? "success" : run.status === "failed" ? "error" : "neutral"}>{run.status}</Status>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

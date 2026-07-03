@@ -1,13 +1,22 @@
 "use client";
 
-import { CheckCircle2, XCircle } from "lucide-react";
-import { Badge, Card, EmptyState, Page, Section, Status } from "@/shared/ui";
+import * as React from "react";
+import { CheckCircle2, Download, PlayCircle, XCircle } from "lucide-react";
+import { Badge, Button, Card, EmptyState, Page, Section, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
 import { computeCostAnalytics } from "@/shared/evaluation/cost-analytics";
 import { assessProductionReadiness } from "@/shared/evaluation/production-readiness";
+import { evaluateGoldenDataset, type EvaluationReport } from "@/shared/evaluation/evaluate";
+import { ILLUSTRATIVE_CALL_ANALYSIS_DATASET } from "@/shared/evaluation/golden-dataset";
+import { buildReportEnvelope } from "@/shared/evaluation/reports";
+import { downloadJson } from "@/shared/lib/download-json";
 import { buildExecutionTrace } from "@/shared/runtime/execution-trace";
+import { realStageRegistry } from "@/shared/runtime/real-stage";
+import { defaultLLMProviderRegistry } from "@/shared/llm/provider-registry";
 import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
+import type { Pipeline } from "@/entities/Pipeline/model/types";
+import type { Model } from "@/entities/Model/model/types";
 import { getProjectBundle } from "../selectors";
 
 /**
@@ -26,24 +35,55 @@ const PIPELINE_IDS_WITH_GOLDEN_DATASET = new Set(["pipeline_demo_call_analysis"]
  */
 const REPOSITORY_TESTS_PASSING = true;
 
+/**
+ * Runs the illustrative Golden Dataset through the same real Pipeline
+ * Executor Playground uses (`realStageRegistry`, mock LLM provider by
+ * default) -- reusing the already-implemented evaluation mechanism
+ * (`evaluateGoldenDataset`, CLAUDE.md §26/§27) rather than building a
+ * second one for this screen. Against the default mock provider this
+ * honestly reports a low/zero pass rate (mock output never matches
+ * `CallAnalysisSummarySchema`) -- see `evaluate.test.ts`'s own
+ * "honestly reports failures" test; that is the correct behavior, not
+ * a bug to hide.
+ */
+async function runIllustrativeEvaluation(pipeline: Pipeline, models: readonly Model[]) {
+  const registry = realStageRegistry({ llmProviders: defaultLLMProviderRegistry, prompts: seededPromptRegistry, models });
+  return evaluateGoldenDataset(pipeline, ILLUSTRATIVE_CALL_ANALYSIS_DATASET, { executeOptions: { registry, projectId: pipeline.projectId } });
+}
+
 export function AnalyticsScreen() {
   const { snapshot, selectedProjectId } = useRepositoryStore();
   const { tracesByRunId } = useExecutionTraceStore();
   const { pipeline, runs } = getProjectBundle(snapshot, selectedProjectId);
+  const [evaluation, setEvaluation] = React.useState<EvaluationReport | null>(null);
+  const [evaluating, setEvaluating] = React.useState(false);
 
   if (!pipeline) {
     return <EmptyState>Analytics станет доступна после создания Pipeline.</EmptyState>;
   }
 
+  const goldenDatasetAvailable = PIPELINE_IDS_WITH_GOLDEN_DATASET.has(pipeline.id);
   const traces = runs.map((run) => tracesByRunId[run.id]).filter((events): events is NonNullable<typeof events> => Boolean(events)).map((events) => buildExecutionTrace(pipeline, events));
 
   const cost = computeCostAnalytics(runs, traces);
   const readiness = assessProductionReadiness(pipeline, {
     prompts: seededPromptRegistry,
     runs,
-    goldenDatasetAvailable: PIPELINE_IDS_WITH_GOLDEN_DATASET.has(pipeline.id),
+    goldenDatasetAvailable,
     testsPassing: REPOSITORY_TESTS_PASSING,
   });
+
+  const handleRunEvaluation = () => {
+    setEvaluating(true);
+    runIllustrativeEvaluation(pipeline, snapshot?.models ?? [])
+      .then(setEvaluation)
+      .finally(() => setEvaluating(false));
+  };
+
+  const exportEvaluationReport = () => {
+    if (!evaluation) return;
+    downloadJson(`evaluation-report-${pipeline.id}.json`, buildReportEnvelope("evaluation_report", evaluation));
+  };
 
   return (
     <Page className="max-w-none">
@@ -75,6 +115,46 @@ export function AnalyticsScreen() {
             </div>
           )}
         </div>
+      </Section>
+
+      <Section>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Golden Dataset Evaluation</h2>
+          {goldenDatasetAvailable ? (
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={handleRunEvaluation} disabled={evaluating}>
+                <PlayCircle className="size-4" aria-hidden="true" />
+                {evaluating ? "Evaluating…" : "Run Evaluation"}
+              </Button>
+              <Button variant="secondary" onClick={exportEvaluationReport} disabled={!evaluation}>
+                <Download className="size-4" aria-hidden="true" />
+                Evaluation Report
+              </Button>
+            </div>
+          ) : null}
+        </div>
+        {!goldenDatasetAvailable ? (
+          <EmptyState>Для этого Pipeline ещё не создан Golden Dataset (CLAUDE.md §26).</EmptyState>
+        ) : !evaluation ? (
+          <EmptyState>Нажмите &quot;Run Evaluation&quot;, чтобы прогнать {ILLUSTRATIVE_CALL_ANALYSIS_DATASET.examples.length} illustrative-примеров через реальный Pipeline Executor.</EmptyState>
+        ) : (
+          <div className="mt-2 grid gap-2">
+            <p className="text-sm text-text-muted">
+              Dataset {evaluation.datasetId} v{evaluation.datasetVersion} · {evaluation.passedExamples}/{evaluation.totalExamples} passed ({Math.round(evaluation.passRate * 100)}%)
+            </p>
+            <div className="grid gap-1">
+              {evaluation.results.map((result) => (
+                <div key={result.exampleId} className="flex items-start gap-2 rounded-md border border-border p-2 text-sm">
+                  {result.passed ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" /> : <XCircle className="mt-0.5 size-4 shrink-0 text-error" aria-hidden="true" />}
+                  <div>
+                    <p className="font-medium">{result.exampleId}</p>
+                    <p className="text-text-muted">{result.scores.map((score) => `${score.scorerName}: ${score.passed ? "OK" : score.details ?? "failed"}`).join(" · ")}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Section>
 
       <Section>
