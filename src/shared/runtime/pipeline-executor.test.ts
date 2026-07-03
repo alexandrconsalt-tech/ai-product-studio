@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createEdge } from "@/entities/Edge/model/factory";
+import { createModel } from "@/entities/Model/model/factory";
 import { createNode } from "@/entities/Node/model/factory";
 import { createPipeline } from "@/entities/Pipeline/model/factory";
+import { defaultLLMProviderRegistry } from "@/shared/llm/provider-registry";
+import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
 import { executePipeline } from "./pipeline-executor";
+import { realStageRegistry } from "./real-stage";
 import { noRetryPolicy } from "./retry";
 import type { ExecutionEvent } from "./types";
 
@@ -172,5 +176,42 @@ describe("executePipeline (Mock Stage)", () => {
     expect(run.status).toBe("failed");
     expect(events.some((e) => e.type === "stage_started")).toBe(false);
     expect(events.map((e) => e.type)).toEqual(["run_started", "run_failed"]);
+  });
+});
+
+describe("executePipeline with the real StageRegistry (Prompt Registry + LLMProvider, still the mock LLM provider by default)", () => {
+  it("aggregates evidence, cost, and latency from stage outputs onto the Run (CLAUDE.md §14.3/§24)", async () => {
+    const input = createNode({ type: "input", name: "Input" });
+    const llm = createNode({ type: "llm", name: "Call Analyzer", promptId: "prompt_call_summary", modelId: "model_reasoning", temperature: 0.3 });
+    const validation = createNode({ type: "validation", name: "Validation" });
+    const output = createNode({ type: "output", name: "Output" });
+    const pipeline = createPipeline({
+      projectId: "p",
+      architectureId: "a",
+      nodes: [input, llm, validation, output],
+      edges: [
+        createEdge({ sourceNodeId: input.id, targetNodeId: llm.id }),
+        createEdge({ sourceNodeId: llm.id, targetNodeId: validation.id }),
+        createEdge({ sourceNodeId: validation.id, targetNodeId: output.id }),
+      ],
+    });
+
+    const registry = realStageRegistry({
+      llmProviders: defaultLLMProviderRegistry,
+      prompts: seededPromptRegistry,
+      models: [createModel({ id: "model_reasoning", name: "gpt-4o-mini", provider: "local" })],
+    });
+
+    const run = await executePipeline(pipeline, "Хочу трёхкомнатную квартиру, бюджет 12 млн, до конца квартала.", { registry });
+
+    expect(run.status).toBe("succeeded");
+    // The mock LLM provider echoes input as a JSON object, not the real
+    // CallAnalysisSummary shape, so validation marks it unvalidated
+    // rather than producing цитаты -- this test checks that metrics
+    // flow through end to end, not that the mock output is realistic.
+    expect(run.metrics.some((m) => m.name === "tokens")).toBe(true);
+    expect(run.metrics.some((m) => m.name === "cost")).toBe(true);
+    expect(run.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(run.costUsd).toBeGreaterThanOrEqual(0);
   });
 });

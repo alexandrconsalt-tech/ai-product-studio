@@ -62,9 +62,22 @@ export type StageInput = Readonly<{
   context: ExecutionContext;
 }>;
 
+/**
+ * `metrics` carries numeric signals using the same names the
+ * Simulation Engine already established (`"tokens"`, `"cost"`,
+ * `"latency"`, `"confidence"`) so a Run's aggregated metrics look
+ * consistent regardless of whether Mock or real stages produced them
+ * (CLAUDE.md §24 Evidence Engine, §25 confidence scale).
+ *
+ * `evidence` carries literal excerpts/quotes a stage grounded its
+ * output in -- the citation-grounding requirement from CLAUDE.md
+ * §14.3. Not every stage produces evidence (e.g. `store`/`output`
+ * never do); it is optional and empty by default.
+ */
 export type StageOutput = Readonly<{
   payload: unknown;
   metrics?: readonly RunMetric[];
+  evidence?: readonly string[];
 }>;
 
 export type StageHandler = (input: StageInput) => Promise<StageOutput>;

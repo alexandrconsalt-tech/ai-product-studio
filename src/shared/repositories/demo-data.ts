@@ -204,6 +204,7 @@ const runs: Run[] = [
       { name: "cost", value: 0.032, unit: "usd" },
       { name: "latency", value: 1260, unit: "ms" },
     ],
+    evidence: [],
     latencyMs: 1260,
     costUsd: 0.032,
     logs: [

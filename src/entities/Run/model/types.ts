@@ -21,6 +21,7 @@ export type Run = Readonly<{
   input: unknown;
   output?: unknown;
   metrics: readonly RunMetric[];
+  evidence: readonly string[];
   latencyMs?: number;
   costUsd?: number;
   logs: readonly RunLog[];

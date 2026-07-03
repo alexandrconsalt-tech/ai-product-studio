@@ -22,6 +22,10 @@ export const RunSchema = z.object({
   input: z.unknown(),
   output: z.unknown().optional(),
   metrics: z.array(RunMetricSchema).readonly(),
+  // Literal excerpts/quotes stages grounded their output in -- the
+  // citation-grounding requirement from CLAUDE.md §14.3 / §24 Evidence
+  // Engine, aggregated here from every stage's StageOutput.evidence.
+  evidence: z.array(z.string()).readonly(),
   latencyMs: z.number().nonnegative().optional(),
   costUsd: z.number().nonnegative().optional(),
   logs: z.array(RunLogSchema).readonly(),

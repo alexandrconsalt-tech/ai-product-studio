@@ -20,6 +20,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Sums every metric with the given name (e.g. "cost", "latency") across all stages that reported one. */
+function sumMetric(metrics: readonly RunMetric[], name: string): number | undefined {
+  const matching = metrics.filter((metric) => metric.name === name);
+  if (matching.length === 0) return undefined;
+  return matching.reduce((total, metric) => total + metric.value, 0);
+}
+
 /**
  * Executes a Pipeline using Mock Stage handlers by default. This is
  * the Production Pipeline Runtime's core entry point -- it produces a
@@ -53,6 +60,7 @@ export async function executePipeline(pipeline: Pipeline, input: unknown, option
 
   const logs: RunLog[] = [];
   const metrics: RunMetric[] = [];
+  const evidence: string[] = [];
   const nodeOutputs = new Map<string, unknown>();
   const nodeStatuses = new Map<string, NodeExecutionStatus>();
 
@@ -124,6 +132,7 @@ export async function executePipeline(pipeline: Pipeline, input: unknown, option
       );
       nodeOutputs.set(node.id, result.payload);
       if (result.metrics) metrics.push(...result.metrics);
+      if (result.evidence) evidence.push(...result.evidence);
       nodeStatuses.set(node.id, "succeeded");
       emit({ type: "stage_completed", nodeId: node.id });
       log("info", `Node "${node.name}" completed.`);
@@ -156,6 +165,9 @@ export async function executePipeline(pipeline: Pipeline, input: unknown, option
     input,
     output,
     metrics,
+    evidence,
+    latencyMs: sumMetric(metrics, "latency"),
+    costUsd: sumMetric(metrics, "cost"),
     logs,
     startedAt,
     finishedAt,

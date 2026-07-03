@@ -6,6 +6,7 @@ Validation rules:
 
 - `pipelineId` обязателен;
 - `status` отражает lifecycle запуска;
-- `metrics`, `latencyMs`, `costUsd` и `logs` используются для анализа качества;
+- `metrics`, `evidence`, `latencyMs`, `costUsd` и `logs` используются для анализа качества;
+- `evidence` — дословные цитаты/фрагменты, на которые опирался результат (CLAUDE.md §14.3/§24), добавлено 2026-07-03 вместе с Production Pipeline Runtime;
 - `input` и `output` сериализуются как JSON-compatible значения на уровне persistence.
 
