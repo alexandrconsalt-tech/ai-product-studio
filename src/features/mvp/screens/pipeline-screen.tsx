@@ -6,12 +6,26 @@ import { Copy, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
 import { Button, Card, EmptyState, Input, Select, Textarea, Toolbar, IconButton } from "@/shared/ui";
 import { createNode } from "@/entities/Node/model/factory";
 import type { Node, NodeType } from "@/entities/Node/model/types";
-import type { Edge } from "@/entities/Edge/model/types";
+import type { Edge, EdgeCondition, EdgeConditionOperator } from "@/entities/Edge/model/types";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePipelineStore } from "@/shared/stores/pipeline-store";
 import { getProjectBundle } from "../selectors";
 
 const nodeTypes: readonly NodeType[] = ["input", "agent", "llm", "tool", "function", "router", "store", "validation", "human_review", "output"];
+
+const CONDITION_OPERATOR_SYMBOLS: Record<EdgeConditionOperator, string> = {
+  eq: "=",
+  neq: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+};
+
+function formatEdgeCondition(condition: EdgeCondition | undefined): string | undefined {
+  if (!condition) return undefined;
+  return `${condition.field} ${CONDITION_OPERATOR_SYMBOLS[condition.operator]} ${condition.value}`;
+}
 
 function toFlowNodes(nodes: readonly Node[]): FlowNode[] {
   return nodes.map((node) => ({
@@ -29,7 +43,7 @@ function toFlowEdges(edges: readonly Edge[]): FlowEdge[] {
     id: edge.id,
     source: edge.sourceNodeId,
     target: edge.targetNodeId,
-    label: edge.condition?.expression,
+    label: formatEdgeCondition(edge.condition),
   }));
 }
 

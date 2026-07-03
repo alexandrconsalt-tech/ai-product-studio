@@ -1,7 +1,11 @@
 import type { EntityId, Version } from "@/entities/shared";
 
+export type EdgeConditionOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+
 export type EdgeCondition = Readonly<{
-  expression: string;
+  field: string;
+  operator: EdgeConditionOperator;
+  value: number;
   description?: string;
 }>;
 

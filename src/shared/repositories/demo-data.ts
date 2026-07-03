@@ -162,8 +162,8 @@ const edges: Edge[] = [
   { id: "edge_router_llm", sourceNodeId: "node_router", targetNodeId: "node_llm", sourcePortId: "port_router_out", targetPortId: "port_llm_in", version: "1.0.0" },
   { id: "edge_tool_llm", sourceNodeId: "node_tool", targetNodeId: "node_llm", sourcePortId: "port_tool_out", targetPortId: "port_llm_in", version: "1.0.0" },
   { id: "edge_llm_validation", sourceNodeId: "node_llm", targetNodeId: "node_validation", sourcePortId: "port_llm_out", targetPortId: "port_validation_in", version: "1.0.0" },
-  { id: "edge_validation_store", sourceNodeId: "node_validation", targetNodeId: "node_store", sourcePortId: "port_validation_ok", targetPortId: "port_store_in", condition: { expression: "confidence >= 0.72" }, version: "1.0.0" },
-  { id: "edge_validation_review", sourceNodeId: "node_validation", targetNodeId: "node_review", sourcePortId: "port_validation_review", targetPortId: "port_review_in", condition: { expression: "confidence < 0.72" }, version: "1.0.0" },
+  { id: "edge_validation_store", sourceNodeId: "node_validation", targetNodeId: "node_store", sourcePortId: "port_validation_ok", targetPortId: "port_store_in", condition: { field: "confidence", operator: "gte", value: 0.72 }, version: "1.0.0" },
+  { id: "edge_validation_review", sourceNodeId: "node_validation", targetNodeId: "node_review", sourcePortId: "port_validation_review", targetPortId: "port_review_in", condition: { field: "confidence", operator: "lt", value: 0.72 }, version: "1.0.0" },
   { id: "edge_review_store", sourceNodeId: "node_review", targetNodeId: "node_store", sourcePortId: "port_review_out", targetPortId: "port_store_in", version: "1.0.0" },
   { id: "edge_store_output", sourceNodeId: "node_store", targetNodeId: "node_output", sourcePortId: "port_store_out", targetPortId: "port_output_in", version: "1.0.0" },
 ];

@@ -1,8 +1,12 @@
 import { z } from "zod";
 import { EntityIdSchema, VersionSchema } from "@/entities/shared";
 
+export const EdgeConditionOperatorSchema = z.enum(["eq", "neq", "gt", "gte", "lt", "lte"]);
+
 export const EdgeConditionSchema = z.object({
-  expression: z.string().min(1),
+  field: z.string().min(1),
+  operator: EdgeConditionOperatorSchema,
+  value: z.number(),
   description: z.string().optional(),
 });
 
