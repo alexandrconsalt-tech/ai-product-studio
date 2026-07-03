@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Background, Controls, MiniMap, ReactFlow, addEdge, type Connection, type Edge as FlowEdge, type Node as FlowNode, type NodeChange, type EdgeChange, applyNodeChanges, applyEdgeChanges } from "@xyflow/react";
+import { Background, Controls, MiniMap, ReactFlow, addEdge, useUpdateNodeInternals, type Connection, type Edge as FlowEdge, type Node as FlowNode, type NodeChange, type EdgeChange, applyNodeChanges, applyEdgeChanges } from "@xyflow/react";
 import { Copy, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
 import { Button, Card, EmptyState, Input, Select, Textarea, Toolbar, IconButton } from "@/shared/ui";
 import { createNode } from "@/entities/Node/model/factory";
@@ -25,6 +25,28 @@ const CONDITION_OPERATOR_SYMBOLS: Record<EdgeConditionOperator, string> = {
 function formatEdgeCondition(condition: EdgeCondition | undefined): string | undefined {
   if (!condition) return undefined;
   return `${condition.field} ${CONDITION_OPERATOR_SYMBOLS[condition.operator]} ${condition.value}`;
+}
+
+/**
+ * React Flow's automatic ResizeObserver-based node measurement was
+ * never completing in this app for nodes set via props after mount
+ * (as opposed to `initialNodes`) -- nodes stayed `visibility: hidden`
+ * indefinitely and, even after giving them explicit width/height,
+ * `node.internals.handleBounds` (required before any edge connected
+ * to that node will render) still never got computed. React Flow's
+ * own docs recommend calling `useUpdateNodeInternals` explicitly for
+ * nodes that appear/change after the initial render, rather than
+ * relying solely on the automatic observer. This must be a child of
+ * `<ReactFlow>` (the hook requires `ReactFlowProvider` context), which
+ * is why it is a separate component rendered inside it rather than
+ * called directly in `PipelineScreen`. See CLAUDE.md §63 debt item 12.
+ */
+function NodeInternalsSync({ nodeIds }: { nodeIds: readonly string[] }) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  React.useEffect(() => {
+    if (nodeIds.length > 0) updateNodeInternals([...nodeIds]);
+  }, [nodeIds, updateNodeInternals]);
+  return null;
 }
 
 function toFlowNodes(nodes: readonly Node[]): FlowNode[] {
@@ -81,6 +103,12 @@ export function PipelineScreen() {
   const { pipeline } = getProjectBundle(snapshot, selectedProjectId);
   const [flowNodes, setFlowNodes] = React.useState<FlowNode[]>([]);
   const [flowEdges, setFlowEdges] = React.useState<FlowEdge[]>([]);
+  // Memoized so it only changes when `flowNodes` itself actually changes
+  // (via setFlowNodes), not on every PipelineScreen re-render -- an
+  // inline `flowNodes.map(...)` in the JSX below would create a new
+  // array every render, which fed back into an update loop via
+  // NodeInternalsSync's effect.
+  const flowNodeIds = React.useMemo(() => flowNodes.map((node) => node.id), [flowNodes]);
 
   React.useEffect(() => {
     if (!pipeline) return;
@@ -192,6 +220,7 @@ export function PipelineScreen() {
             onPaneClick={() => setSelectedNodeId(null)}
             fitView
           >
+            <NodeInternalsSync nodeIds={flowNodeIds} />
             <Background />
             <Controls />
             <MiniMap />
