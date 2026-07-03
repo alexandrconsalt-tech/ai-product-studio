@@ -108,6 +108,19 @@ describe("createRealStageHandlers", () => {
     await handlers.llm({ node, payload: { transcript: "x" }, context: context() });
     expect(capturedModel).toBe("gpt-4o");
   });
+
+  it("renders the prompt correctly for genuine multi-source fan-in (array payload) -- the exact shape node_router+node_tool produce feeding the real demo pipeline's llm node, and the bug found via an actual Playground run", async () => {
+    const handlers = createRealStageHandlers(deps());
+    const node = createNode({ type: "llm", name: "Need Extractor", promptId: "prompt_call_summary", modelId: "model_reasoning", temperature: 0.3 });
+    // Mirrors what the executor passes when a node has >1 active
+    // incoming edge: an array of every upstream source's output. Here,
+    // one source (router) is a raw string (passthrough of the pipeline
+    // input) and the other (tool) is an object.
+    const fanInPayload = ["Хочу трёхкомнатную квартиру, бюджет 12 млн.", { toolResult: "no-real-tool-integration:node_tool" }];
+    const result = await handlers.llm({ node, payload: fanInPayload, context: context() });
+    expect(result.metrics?.some((m) => m.name === "tokens")).toBe(true);
+    expect(result.payload).toBeDefined();
+  });
 });
 
 describe("realStageRegistry", () => {

@@ -39,8 +39,34 @@ const COST_PER_1K_TOKENS: Record<string, number> = {
 };
 const DEFAULT_COST_PER_1K_TOKENS = 0.002;
 
+/**
+ * A node with genuine multi-source fan-in (e.g. the real demo
+ * pipeline's "Need Extractor" llm node, fed by both `node_router` and
+ * `node_tool`) receives its payload from the executor as an ARRAY of
+ * every active upstream source's output, not a single value (see
+ * pipeline-executor.ts). Merging that into one record is what makes
+ * fan-in usable for prompt rendering: a raw string source becomes
+ * `transcript` (the meaningful "content" in this domain, CLAUDE.md
+ * §3.3) the first time one is seen; object sources get their fields
+ * spread in, in edge order. Found and fixed via an actual in-browser
+ * Playground run against the real demo pipeline, not assumed correct
+ * from unit tests alone -- the original single-object-only version
+ * threw "missing required variable: transcript" the first time it ran
+ * against real fan-in data.
+ */
 function asRecord(payload: unknown): Record<string, unknown> {
-  return payload && typeof payload === "object" && !Array.isArray(payload) ? { ...(payload as Record<string, unknown>) } : { value: payload };
+  if (Array.isArray(payload)) {
+    return payload.reduce<Record<string, unknown>>((merged, item) => {
+      if (typeof item === "string") {
+        return { ...merged, transcript: merged.transcript ?? item, value: merged.value ?? item };
+      }
+      if (item && typeof item === "object") {
+        return { ...merged, ...item };
+      }
+      return merged;
+    }, {});
+  }
+  return payload && typeof payload === "object" ? { ...(payload as Record<string, unknown>) } : { value: payload };
 }
 
 /**

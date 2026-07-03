@@ -33,7 +33,9 @@ Simulation создает:
 
 Это остаётся симуляцией, а не настоящим вызовом модели — эффект детерминированный и эвристический, не основан на реальном inference.
 
-## Замена в будущем
+## Замена (2026-07-03)
 
-Настоящий Runtime должен заменить `simulatePipelineRun()` при сохранении интерфейса Playground Store и Repository.
+`playground-screen.tsx` больше не вызывает `simulatePipelineRun()` — вместо неё используется `executePipeline()` из `src/shared/runtime/pipeline-executor.ts` (Production Pipeline Runtime), с реальным исполнением графа по узлам, Stage Registry и Prompt Registry. По умолчанию используется mock LLM provider (без реального AI-вызова), но сам executor — не симуляция: настоящий обход графа, настоящие retry/ошибки, настоящие условные переходы по `Edge.condition`.
+
+`simulatePipelineRun()` и этот файл сохранены как исторический артефакт и для регрессионных тестов домена; сам модуль `src/shared/simulation/` больше не используется ни одним экраном.
 

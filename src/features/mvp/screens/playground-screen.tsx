@@ -5,7 +5,10 @@ import { Play } from "lucide-react";
 import { Button, Card, EmptyState, Page, Section, Textarea, Badge, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundStore } from "@/shared/stores/playground-store";
-import { simulatePipelineRun } from "@/shared/simulation/simulation-engine";
+import { executePipeline } from "@/shared/runtime/pipeline-executor";
+import { realStageRegistry } from "@/shared/runtime/real-stage";
+import { defaultLLMProviderRegistry } from "@/shared/llm/provider-registry";
+import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
 import { getProjectBundle } from "../selectors";
 
 function stringifyOutput(output: unknown): string {
@@ -25,26 +28,39 @@ export function PlaygroundScreen() {
 
   const handleRun = () => {
     setExecuting(true);
-    window.setTimeout(() => {
-      const result = simulatePipelineRun(pipeline, input);
-      addRun(result.run);
-      setExecuting(false);
-    }, 320);
+    // Real Production Pipeline Runtime (src/shared/runtime), replacing
+    // the Simulation Engine here per the "gradually replace" plan --
+    // this is the first (and so far only) screen wired to it. Stage
+    // handlers still use LLMProvider's default mock (see
+    // src/shared/llm/provider-registry.ts) unless OPENAI_API_KEY is
+    // configured server-side, so this remains a real executor with a
+    // fake model call by default, not a real LLM integration.
+    const registry = realStageRegistry({
+      llmProviders: defaultLLMProviderRegistry,
+      prompts: seededPromptRegistry,
+      models: snapshot?.models ?? [],
+    });
+    executePipeline(pipeline, input, { registry, projectId: pipeline.projectId })
+      .then((run) => addRun(run))
+      .finally(() => setExecuting(false));
   };
 
   const tokens = selectedRun?.metrics.find((metric) => metric.name === "tokens")?.value ?? 0;
-  const duration = selectedRun?.metrics.find((metric) => metric.name === "duration")?.value ?? 0;
+  // Derived from latencyMs rather than a separate "duration" metric --
+  // the Runtime's stage handlers only report latency once (as
+  // "latency"), not redundantly under two different metric names.
+  const duration = Math.round(((selectedRun?.latencyMs ?? 0) / 100)) / 10;
 
   return (
     <Page className="max-w-none">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Playground</h1>
-          <p className="text-sm text-text-muted">Simulation Engine выполняет Pipeline без подключения настоящего AI.</p>
+          <p className="text-sm text-text-muted">Pipeline Executor выполняет граф пайплайна по узлам; модель по умолчанию — mock LLM provider (без реального AI-вызова).</p>
         </div>
         <Button variant="primary" onClick={handleRun} disabled={executing || !input.trim()}>
           <Play className="size-4" aria-hidden="true" />
-          {executing ? "Execution" : "Run Simulation"}
+          {executing ? "Execution" : "Run Pipeline"}
         </Button>
       </div>
 
