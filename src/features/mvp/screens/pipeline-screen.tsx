@@ -164,7 +164,7 @@ export function PipelineScreen() {
         <span className="text-sm text-text-muted">{pipeline.nodes.length} nodes · {pipeline.edges.length} edges · Undo {pipelineHistory.past.length}</span>
       </Toolbar>
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[320px] flex-1">
           <ReactFlow
             nodes={flowNodes}
             edges={flowEdges}
