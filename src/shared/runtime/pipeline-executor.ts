@@ -118,7 +118,8 @@ export async function executePipeline(pipeline: Pipeline, input: unknown, option
     }
 
     nodeStatuses.set(node.id, "running");
-    emit({ type: "stage_started", nodeId: node.id });
+    emit({ type: "stage_started", nodeId: node.id, inputPayload: payload });
+    const stageStartedAtMs = Date.now();
 
     try {
       const handler = registry.get(node.type);
@@ -134,12 +135,20 @@ export async function executePipeline(pipeline: Pipeline, input: unknown, option
       if (result.metrics) metrics.push(...result.metrics);
       if (result.evidence) evidence.push(...result.evidence);
       nodeStatuses.set(node.id, "succeeded");
-      emit({ type: "stage_completed", nodeId: node.id });
+      emit({
+        type: "stage_completed",
+        nodeId: node.id,
+        inputPayload: payload,
+        payload: result.payload,
+        metrics: result.metrics,
+        evidence: result.evidence,
+        durationMs: Date.now() - stageStartedAtMs,
+      });
       log("info", `Node "${node.name}" completed.`);
     } catch (error) {
       const message = errorMessage(error);
       nodeStatuses.set(node.id, "failed");
-      emit({ type: "stage_failed", nodeId: node.id, error: message });
+      emit({ type: "stage_failed", nodeId: node.id, error: message, inputPayload: payload, durationMs: Date.now() - stageStartedAtMs });
       log("error", `Node "${node.name}" failed: ${message}`);
       runFailed = true;
       failureMessage = message;

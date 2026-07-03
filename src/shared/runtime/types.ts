@@ -19,6 +19,15 @@ export type ExecutionEventType =
   | "run_completed"
   | "run_failed";
 
+/**
+ * `payload`/`metrics`/`evidence`/`durationMs`/`inputPayload` are
+ * optional, additive fields (2026-07-03) carried on `stage_started`/
+ * `stage_completed`/`stage_failed` so a consumer (the Execution
+ * Inspector, §M.1) can reconstruct a full per-stage trace from the
+ * event stream alone, without changing what the executor actually
+ * does -- the topological order, branching, and retry logic are
+ * unchanged; this only adds detail to the events already emitted.
+ */
 export type ExecutionEvent = Readonly<{
   type: ExecutionEventType;
   timestamp: string;
@@ -27,6 +36,11 @@ export type ExecutionEvent = Readonly<{
   nodeId?: string;
   attempt?: number;
   error?: string;
+  inputPayload?: unknown;
+  payload?: unknown;
+  metrics?: readonly RunMetric[];
+  evidence?: readonly string[];
+  durationMs?: number;
 }>;
 
 export type ExecutionEventListener = (event: ExecutionEvent) => void;
