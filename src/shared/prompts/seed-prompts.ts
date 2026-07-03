@@ -53,6 +53,52 @@ Summary для проверки:
 Отклоняй (approved: false), если: отсутствует цитата хотя бы для одного ключевого поля, поле "действие" сформулировано неконкретно, или тип_контакта "contact_center" содержит данные объекта.`;
 
 /**
+ * Real template for the second demo pipeline, "Lead Qualification"
+ * (CLAUDE.md §M.8, §30 BR-4). `real-stage.ts`'s `asStringVariables`
+ * maps a plain-string upstream payload to both `transcript` and
+ * `value` -- this prompt uses `{{value}}` since "lead description" is
+ * not call-transcript-specific vocabulary the way `prompt_call_summary`
+ * is.
+ */
+const LEAD_QUALIFICATION_TEMPLATE = `Ты оцениваешь входящий лид для приоритизации в очереди Sales.
+
+Описание лида:
+{{value}}
+
+Верни строго JSON со следующими полями (без пояснений и текста вне JSON):
+{
+  "платежеспособность": "low" | "medium" | "high",
+  "срок_покупки": string,
+  "hotness": number (0-1),
+  "обоснование": string,
+  "цитаты": string[] (минимум одна дословная цитата из описания лида, обязательно)
+}
+
+Правила:
+- hotness должен явно комбинировать платежеспособность и срок покупки -- не добавляй четвёртый сигнал (BR-4).
+- Каждое ключевое утверждение должно быть подкреплено цитатой в поле "цитаты".`;
+
+/**
+ * Real template for the third demo pipeline, "Chat Classification".
+ */
+const CHAT_CLASSIFICATION_TEMPLATE = `Ты классифицируешь входящее сообщение чата поддержки.
+
+Сообщение:
+{{value}}
+
+Верни строго JSON со следующими полями (без пояснений и текста вне JSON):
+{
+  "категория": "вопрос" | "жалоба" | "похвала" | "техническая_проблема" | "другое",
+  "тональность": "positive" | "neutral" | "negative",
+  "требует_эскалации": boolean,
+  "цитаты": string[] (минимум одна дословная цитата из сообщения, обязательно)
+}
+
+Правила:
+- "требует_эскалации" = true при явном указании на критичность, срочность или повторяющуюся проблему.
+- Каждое ключевое утверждение должно быть подкреплено цитатой в поле "цитаты".`;
+
+/**
  * Fixed, matching `demo-data.ts`'s own `createdAt` constant --
  * deliberately NOT `new Date().toISOString()`. This registry is a
  * module-level singleton evaluated once on the server (SSR) and once
@@ -66,7 +112,9 @@ const SEED_TIMESTAMP = "2026-06-29T10:00:00.000Z";
 export function withSeedPrompts(registry: PromptRegistry = emptyPromptRegistry): PromptRegistry {
   return registry
     .register("prompt_call_summary", "1.0.0", CALL_SUMMARY_TEMPLATE, SEED_TIMESTAMP)
-    .register("prompt_quality_check", "1.0.0", QUALITY_CHECK_TEMPLATE, SEED_TIMESTAMP);
+    .register("prompt_quality_check", "1.0.0", QUALITY_CHECK_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_lead_qualification", "1.0.0", LEAD_QUALIFICATION_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_chat_classification", "1.0.0", CHAT_CLASSIFICATION_TEMPLATE, SEED_TIMESTAMP);
 }
 
 export const seededPromptRegistry: PromptRegistry = withSeedPrompts();

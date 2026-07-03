@@ -64,6 +64,24 @@ const prompts: Prompt[] = [
     ownerModuleId: "knowledge_architect",
     version: "1.0.0",
   },
+  {
+    id: "prompt_lead_qualification",
+    name: "Lead Qualification Behavior",
+    purpose: "extraction",
+    description: "Оценивает входящий лид по платежеспособности и сроку покупки, формирует hotness-score (CLAUDE.md §30 BR-4).",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_chat_classification",
+    name: "Chat Classification Behavior",
+    purpose: "routing",
+    description: "Классифицирует входящее сообщение чата поддержки по категории, тональности и необходимости эскалации.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
 ];
 
 const product: Product = {
@@ -181,10 +199,192 @@ const pipeline: Pipeline = {
   version: "1.0.0",
 };
 
+/**
+ * Second demo pipeline -- Lead Qualification (CLAUDE.md §3.3/§30 BR-4:
+ * "Priority/'hotness' scoring for a lead combines exactly three
+ * signals: client solvency, purchase timeline, and a system-computed
+ * hotness score"). Reuses the real business domain from the call-
+ * analysis case rather than an invented generic example, per the
+ * decision rule in §3.4. Deliberately simpler than the first pipeline
+ * (no dedicated Validation node -- `real-stage.ts`'s deterministic
+ * validation only recognizes `CallAnalysisSummarySchema`, so a
+ * `validation` node here would always show `validated: false`, which
+ * would look like a bug rather than the honest "no schema written for
+ * this domain yet" state it actually is). Branches directly on the
+ * `confidence` metric every `llm`/`agent` stage output carries
+ * (`real-stage.ts`'s `createLlmHandler`), the same universal field the
+ * first pipeline branches on.
+ */
+const productLead: Product = {
+  id: "product_demo_lead_qualification",
+  projectId: "project_demo_lead_qualification",
+  status: "ready",
+  idea: {
+    statement: "Lead Qualification автоматически приоритизирует входящие лиды по платежеспособности и сроку покупки, убирая субъективность ручной оценки.",
+    source: "pdf-notes.txt (Miro board, workstream «ИИ в заявке»)",
+  },
+  discovery: "Sales-менеджеры не успевают просматривать все входящие лиды вручную и приоритизируют их по ощущению, что приводит к потере «горячих» сделок среди менее очевидных заявок.",
+  problem: {
+    statement: "Без системной оценки платежеспособности и срока покупки часть перспективных лидов обрабатывается с задержкой или вовсе не доходит до менеджера вовремя.",
+    evidenceIds: ["evidence_demo_lead_backlog"],
+  },
+  users: [{ id: "user_sales_manager_lead", name: "Sales Manager", segment: "B2B Sales" }],
+  jtbd: [
+    {
+      statement: "Когда поступает новый лид, я хочу сразу понять, насколько он приоритетен, чтобы не терять горячие сделки в общей очереди.",
+      context: "Момент поступления лида в CRM",
+      desiredOutcome: "Приоритетные лиды обрабатываются в первую очередь",
+    },
+  ],
+  features: [{ id: "feature_hotness_score", name: "Hotness Scoring", description: "Оценка платежеспособности, срока покупки и итогового hotness-score.", priority: "high" }],
+  mvp: "Приём текстового описания лида, извлечение платежеспособности и срока покупки, расчёт hotness, human review для неуверенных случаев.",
+  metrics: [
+    { name: "Time to first contact for hot leads", target: "-40%" },
+    { name: "Scoring agreement with manager", target: ">= 80%" },
+  ],
+  prd: "Lead Qualification MVP принимает текстовое описание лида и возвращает structured оценку (платежеспособность, срок покупки, hotness, обоснование с цитатами).",
+  frameworkIds: ["framework_jtbd"],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const architectureLead: Architecture = {
+  id: "architecture_demo_lead_qualification",
+  projectId: "project_demo_lead_qualification",
+  productId: "product_demo_lead_qualification",
+  status: "ready",
+  capabilities: [
+    { id: "cap_lead_ingest", name: "Lead Ingestion", description: "Приём текстового описания лида.", required: true },
+    { id: "cap_lead_score", name: "Hotness Scoring", description: "Оценка платежеспособности, срока покупки и hotness.", required: true },
+  ],
+  aiComponents: [{ id: "component_lead_llm", name: "Lead Qualifier LLM", type: "llm", description: "Формирует structured оценку лида." }],
+  modelIds: ["model_reasoning"],
+  dataFlow: [{ id: "flow_lead_input", source: "Input", target: "Lead Qualifier LLM", dataType: "lead_description" }],
+  quality: [{ name: "Hotness grounded in quote", threshold: "100%" }],
+  evaluation: [{ metric: "Scoring agreement", method: "Manual review", threshold: ">= 0.8" }],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const nodesLead: Node[] = [
+  { id: "node_lead_input", type: "input", name: "Lead Description", description: "Текстовое описание входящего лида.", inputPorts: [], outputPorts: [{ id: "port_lead_input_out", name: "lead_description" }], tools: [], metadata: { stage: "ingest" }, position: { x: 0, y: 100 }, version: "1.0.0" },
+  { id: "node_lead_llm", type: "llm", name: "Lead Qualifier", description: "Оценивает платежеспособность, срок покупки и hotness.", inputPorts: [{ id: "port_lead_llm_in", name: "lead_description" }], outputPorts: [{ id: "port_lead_llm_out", name: "qualification" }], modelId: "model_reasoning", promptId: "prompt_lead_qualification", temperature: 0.3, tools: [], metadata: { output: "structured" }, position: { x: 280, y: 100 }, version: "1.0.0" },
+  { id: "node_lead_review", type: "human_review", name: "Human Review", description: "Проверка low-confidence оценки лида.", inputPorts: [{ id: "port_lead_review_in", name: "needs review" }], outputPorts: [{ id: "port_lead_review_out", name: "reviewed" }], tools: [], metadata: { sla: "30m" }, position: { x: 560, y: 220 }, version: "1.0.0" },
+  { id: "node_lead_store", type: "store", name: "CRM Lead Record", description: "Сохраняет оценку лида в CRM.", inputPorts: [{ id: "port_lead_store_in", name: "approved" }], outputPorts: [{ id: "port_lead_store_out", name: "stored result" }], tools: [], metadata: { retention: "365d" }, position: { x: 560, y: 20 }, version: "1.0.0" },
+  { id: "node_lead_output", type: "output", name: "Lead Qualification Output", description: "Финальная structured оценка лида.", inputPorts: [{ id: "port_lead_output_in", name: "stored result" }], outputPorts: [], tools: [], metadata: { format: "json" }, position: { x: 840, y: 100 }, version: "1.0.0" },
+];
+
+const edgesLead: Edge[] = [
+  { id: "edge_lead_input_llm", sourceNodeId: "node_lead_input", targetNodeId: "node_lead_llm", sourcePortId: "port_lead_input_out", targetPortId: "port_lead_llm_in", version: "1.0.0" },
+  { id: "edge_lead_llm_store", sourceNodeId: "node_lead_llm", targetNodeId: "node_lead_store", sourcePortId: "port_lead_llm_out", targetPortId: "port_lead_store_in", condition: { field: "confidence", operator: "gte", value: 0.72 }, version: "1.0.0" },
+  { id: "edge_lead_llm_review", sourceNodeId: "node_lead_llm", targetNodeId: "node_lead_review", sourcePortId: "port_lead_llm_out", targetPortId: "port_lead_review_in", condition: { field: "confidence", operator: "lt", value: 0.72 }, version: "1.0.0" },
+  { id: "edge_lead_review_store", sourceNodeId: "node_lead_review", targetNodeId: "node_lead_store", sourcePortId: "port_lead_review_out", targetPortId: "port_lead_store_in", version: "1.0.0" },
+  { id: "edge_lead_store_output", sourceNodeId: "node_lead_store", targetNodeId: "node_lead_output", sourcePortId: "port_lead_store_out", targetPortId: "port_lead_output_in", version: "1.0.0" },
+];
+
+const pipelineLead: Pipeline = {
+  id: "pipeline_demo_lead_qualification",
+  projectId: "project_demo_lead_qualification",
+  architectureId: "architecture_demo_lead_qualification",
+  status: "ready",
+  nodes: nodesLead,
+  edges: edgesLead,
+  layout: { viewport: { x: 0, y: 0, zoom: 0.85 } },
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+/**
+ * Third demo pipeline -- Chat Classification. Not derived from
+ * pdf-notes.txt (unlike the two above); a smaller, clearly illustrative
+ * example of the same input -> llm -> branch -> output shape applied
+ * to a different, common support-chat domain, so the pipeline library
+ * shows the pattern generalizes rather than only ever showing the
+ * call-analysis case.
+ */
+const productChat: Product = {
+  id: "product_demo_chat_classification",
+  projectId: "project_demo_chat_classification",
+  status: "ready",
+  idea: { statement: "Chat Classification автоматически определяет категорию и тональность входящих сообщений чата поддержки и помечает те, что требуют эскалации." },
+  discovery: "Support-агенты вручную сортируют входящие сообщения по срочности, что задерживает реакцию на негативные и технические обращения.",
+  problem: { statement: "Сообщения, требующие немедленной эскалации, не всегда выделяются вовремя среди общего потока чата.", evidenceIds: [] },
+  users: [{ id: "user_support_agent", name: "Support Agent", segment: "Customer Support" }],
+  jtbd: [
+    {
+      statement: "Когда приходит новое сообщение в чат, я хочу сразу видеть его категорию и требует ли оно эскалации, чтобы не пропустить срочный случай.",
+      context: "Новое сообщение в очереди поддержки",
+      desiredOutcome: "Срочные сообщения обрабатываются в первую очередь",
+    },
+  ],
+  features: [{ id: "feature_chat_triage", name: "Chat Triage", description: "Классификация по категории, тональности и признаку эскалации.", priority: "medium" }],
+  mvp: "Приём текста сообщения, классификация по категории/тональности, human review для случаев, требующих эскалации.",
+  metrics: [{ name: "Escalation detection recall", target: ">= 90%" }],
+  prd: "Chat Classification MVP принимает текст сообщения и возвращает категорию, тональность и признак необходимости эскалации.",
+  frameworkIds: [],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const architectureChat: Architecture = {
+  id: "architecture_demo_chat_classification",
+  projectId: "project_demo_chat_classification",
+  productId: "product_demo_chat_classification",
+  status: "ready",
+  capabilities: [{ id: "cap_chat_classify", name: "Message Classification", description: "Определяет категорию, тональность и эскалацию.", required: true }],
+  aiComponents: [{ id: "component_chat_llm", name: "Chat Classifier LLM", type: "llm", description: "Классифицирует входящее сообщение." }],
+  modelIds: ["model_fast"],
+  dataFlow: [{ id: "flow_chat_input", source: "Input", target: "Chat Classifier LLM", dataType: "chat_message" }],
+  quality: [{ name: "Escalation grounded in quote", threshold: "100%" }],
+  evaluation: [{ metric: "Escalation recall", method: "Manual review", threshold: ">= 0.9" }],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const nodesChat: Node[] = [
+  { id: "node_chat_input", type: "input", name: "Chat Message", description: "Текст входящего сообщения чата поддержки.", inputPorts: [], outputPorts: [{ id: "port_chat_input_out", name: "chat_message" }], tools: [], metadata: { stage: "ingest" }, position: { x: 0, y: 100 }, version: "1.0.0" },
+  { id: "node_chat_llm", type: "llm", name: "Chat Classifier", description: "Определяет категорию, тональность и необходимость эскалации.", inputPorts: [{ id: "port_chat_llm_in", name: "chat_message" }], outputPorts: [{ id: "port_chat_llm_out", name: "classification" }], modelId: "model_fast", promptId: "prompt_chat_classification", temperature: 0.2, tools: [], metadata: { output: "structured" }, position: { x: 280, y: 100 }, version: "1.0.0" },
+  { id: "node_chat_review", type: "human_review", name: "Escalation Review", description: "Проверка сообщений с низкой уверенностью классификации.", inputPorts: [{ id: "port_chat_review_in", name: "needs review" }], outputPorts: [{ id: "port_chat_review_out", name: "reviewed" }], tools: [], metadata: { sla: "10m" }, position: { x: 560, y: 220 }, version: "1.0.0" },
+  { id: "node_chat_store", type: "store", name: "Classification Log", description: "Сохраняет классификацию сообщения.", inputPorts: [{ id: "port_chat_store_in", name: "approved" }], outputPorts: [{ id: "port_chat_store_out", name: "stored result" }], tools: [], metadata: { retention: "30d" }, position: { x: 560, y: 20 }, version: "1.0.0" },
+  { id: "node_chat_output", type: "output", name: "Chat Classification Output", description: "Финальная классификация сообщения.", inputPorts: [{ id: "port_chat_output_in", name: "stored result" }], outputPorts: [], tools: [], metadata: { format: "json" }, position: { x: 840, y: 100 }, version: "1.0.0" },
+];
+
+const edgesChat: Edge[] = [
+  { id: "edge_chat_input_llm", sourceNodeId: "node_chat_input", targetNodeId: "node_chat_llm", sourcePortId: "port_chat_input_out", targetPortId: "port_chat_llm_in", version: "1.0.0" },
+  { id: "edge_chat_llm_store", sourceNodeId: "node_chat_llm", targetNodeId: "node_chat_store", sourcePortId: "port_chat_llm_out", targetPortId: "port_chat_store_in", condition: { field: "confidence", operator: "gte", value: 0.72 }, version: "1.0.0" },
+  { id: "edge_chat_llm_review", sourceNodeId: "node_chat_llm", targetNodeId: "node_chat_review", sourcePortId: "port_chat_llm_out", targetPortId: "port_chat_review_in", condition: { field: "confidence", operator: "lt", value: 0.72 }, version: "1.0.0" },
+  { id: "edge_chat_review_store", sourceNodeId: "node_chat_review", targetNodeId: "node_chat_store", sourcePortId: "port_chat_review_out", targetPortId: "port_chat_store_in", version: "1.0.0" },
+  { id: "edge_chat_store_output", sourceNodeId: "node_chat_store", targetNodeId: "node_chat_output", sourcePortId: "port_chat_store_out", targetPortId: "port_chat_output_in", version: "1.0.0" },
+];
+
+const pipelineChat: Pipeline = {
+  id: "pipeline_demo_chat_classification",
+  projectId: "project_demo_chat_classification",
+  architectureId: "architecture_demo_chat_classification",
+  status: "ready",
+  nodes: nodesChat,
+  edges: edgesChat,
+  layout: { viewport: { x: 0, y: 0, zoom: 0.85 } },
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
 const reviews: Review[] = [
   { id: "review_product_demo", targetType: "product", targetId: "product_demo_call_analysis", status: "approved", score: 91, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
   { id: "review_architecture_demo", targetType: "architecture", targetId: "architecture_demo_call_analysis", status: "approved", score: 93, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
   { id: "review_pipeline_demo", targetType: "pipeline", targetId: "pipeline_demo_call_analysis", status: "approved", score: 89, issues: [], createdAt, version: "1.0.0" },
+  { id: "review_product_lead", targetType: "product", targetId: "product_demo_lead_qualification", status: "approved", score: 88, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
+  { id: "review_architecture_lead", targetType: "architecture", targetId: "architecture_demo_lead_qualification", status: "approved", score: 90, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
+  { id: "review_pipeline_lead", targetType: "pipeline", targetId: "pipeline_demo_lead_qualification", status: "approved", score: 87, issues: [], createdAt, version: "1.0.0" },
+  { id: "review_product_chat", targetType: "product", targetId: "product_demo_chat_classification", status: "approved", score: 85, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
+  { id: "review_architecture_chat", targetType: "architecture", targetId: "architecture_demo_chat_classification", status: "approved", score: 86, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
+  { id: "review_pipeline_chat", targetType: "pipeline", targetId: "pipeline_demo_chat_classification", status: "approved", score: 84, issues: [], createdAt, version: "1.0.0" },
 ];
 
 const runs: Run[] = [
@@ -216,6 +416,65 @@ const runs: Run[] = [
     finishedAt: createdAt,
     version: "1.0.0",
   },
+  {
+    id: "run_demo_lead_seed",
+    pipelineId: "pipeline_demo_lead_qualification",
+    status: "succeeded",
+    input: "Клиент готов внести предоплату на этой неделе, интересуется тарифом Pro для команды из 20 человек.",
+    output: {
+      платежеспособность: "high",
+      срок_покупки: "эта неделя",
+      hotness: 0.88,
+      обоснование: "Клиент явно называет срок и готов к предоплате, что указывает на высокую готовность к покупке.",
+      цитаты: ["Клиент готов внести предоплату на этой неделе"],
+      confidence: 0.88,
+    },
+    metrics: [
+      { name: "tokens", value: 620, unit: "tokens" },
+      { name: "cost", value: 0.0011, unit: "usd" },
+      { name: "latency", value: 640, unit: "ms" },
+      { name: "confidence", value: 0.88 },
+    ],
+    evidence: ["Клиент готов внести предоплату на этой неделе"],
+    latencyMs: 640,
+    costUsd: 0.0011,
+    logs: [
+      { timestamp: createdAt, level: "info", message: "Pipeline run started." },
+      { timestamp: createdAt, level: "info", message: "Lead Qualifier completed structured output." },
+    ],
+    startedAt: createdAt,
+    finishedAt: createdAt,
+    version: "1.0.0",
+  },
+  {
+    id: "run_demo_chat_seed",
+    pipelineId: "pipeline_demo_chat_classification",
+    status: "succeeded",
+    input: "Ваше приложение третий день не синхронизирует данные, это уже критично для нашей команды!",
+    output: {
+      категория: "техническая_проблема",
+      тональность: "negative",
+      требует_эскалации: true,
+      цитаты: ["третий день не синхронизирует данные, это уже критично"],
+      confidence: 0.81,
+    },
+    metrics: [
+      { name: "tokens", value: 280, unit: "tokens" },
+      { name: "cost", value: 0.0004, unit: "usd" },
+      { name: "latency", value: 410, unit: "ms" },
+      { name: "confidence", value: 0.81 },
+    ],
+    evidence: ["третий день не синхронизирует данные, это уже критично"],
+    latencyMs: 410,
+    costUsd: 0.0004,
+    logs: [
+      { timestamp: createdAt, level: "info", message: "Pipeline run started." },
+      { timestamp: createdAt, level: "info", message: "Chat Classifier completed structured output." },
+    ],
+    startedAt: createdAt,
+    finishedAt: createdAt,
+    version: "1.0.0",
+  },
 ];
 
 const projects: Project[] = [
@@ -233,13 +492,41 @@ const projects: Project[] = [
     updatedAt: createdAt,
     version: "1.0.0",
   },
+  {
+    id: "project_demo_lead_qualification",
+    name: "Lead Qualification",
+    description: "Демонстрационный проект приоритизации входящих лидов по платежеспособности и сроку покупки.",
+    status: "testing",
+    productId: "product_demo_lead_qualification",
+    architectureId: "architecture_demo_lead_qualification",
+    pipelineId: "pipeline_demo_lead_qualification",
+    playgroundRunIds: ["run_demo_lead_seed"],
+    reviewIds: ["review_product_lead", "review_architecture_lead", "review_pipeline_lead"],
+    createdAt,
+    updatedAt: createdAt,
+    version: "1.0.0",
+  },
+  {
+    id: "project_demo_chat_classification",
+    name: "Chat Classification",
+    description: "Демонстрационный проект классификации сообщений чата поддержки.",
+    status: "testing",
+    productId: "product_demo_chat_classification",
+    architectureId: "architecture_demo_chat_classification",
+    pipelineId: "pipeline_demo_chat_classification",
+    playgroundRunIds: ["run_demo_chat_seed"],
+    reviewIds: ["review_product_chat", "review_architecture_chat", "review_pipeline_chat"],
+    createdAt,
+    updatedAt: createdAt,
+    version: "1.0.0",
+  },
 ];
 
 export const demoSnapshot: RepositorySnapshot = {
   projects,
-  products: [product],
-  architectures: [architecture],
-  pipelines: [pipeline],
+  products: [product, productLead, productChat],
+  architectures: [architecture, architectureLead, architectureChat],
+  pipelines: [pipeline, pipelineLead, pipelineChat],
   runs,
   reviews,
   frameworks,
