@@ -28,6 +28,14 @@ draft -> in_progress -> review -> ready -> completed -> archived
 draft -> in_progress -> review -> ready -> completed -> archived
 ```
 
+## Prompt
+
+```text
+draft -> in_progress -> review -> ready -> completed -> archived
+```
+
+Добавлено 2026-07-03 (закрывает gap, зафиксированный в CLAUDE.md §16/§63 пункт 7): раньше Prompt не имел lifecycle-статуса вовсе, из-за чего ни один prompt, подключённый к non-draft Pipeline через `Node.promptId`, не мог быть формально прогейчен. Переиспользует `LifecycleStatusSchema`, как Product/Architecture/Pipeline — новой отдельной схемы не заводилось.
+
 ## Run
 
 ```text

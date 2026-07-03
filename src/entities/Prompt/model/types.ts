@@ -1,4 +1,4 @@
-import type { EntityId, Version } from "@/entities/shared";
+import type { EntityId, LifecycleStatus, Version } from "@/entities/shared";
 
 export type PromptPurpose = "instruction" | "evaluation" | "routing" | "extraction" | "generation" | "review";
 
@@ -7,6 +7,7 @@ export type Prompt = Readonly<{
   name: string;
   purpose: PromptPurpose;
   description: string;
+  status: LifecycleStatus;
   ownerModuleId?: EntityId;
   version: Version;
 }>;

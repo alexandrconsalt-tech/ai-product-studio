@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EntityIdSchema, VersionSchema } from "@/entities/shared";
+import { EntityIdSchema, LifecycleStatusSchema, VersionSchema } from "@/entities/shared";
 
 export const PromptPurposeSchema = z.enum(["instruction", "evaluation", "routing", "extraction", "generation", "review"]);
 
@@ -8,6 +8,7 @@ export const PromptSchema = z.object({
   name: z.string().min(1),
   purpose: PromptPurposeSchema,
   description: z.string().min(1),
+  status: LifecycleStatusSchema,
   ownerModuleId: EntityIdSchema.optional(),
   version: VersionSchema,
 });

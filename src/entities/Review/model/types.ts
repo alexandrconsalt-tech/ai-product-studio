@@ -1,6 +1,6 @@
 import type { EntityId, IsoDateTime, ReviewStatus, Version } from "@/entities/shared";
 
-export type ReviewTargetType = "product" | "architecture" | "pipeline" | "run" | "project";
+export type ReviewTargetType = "product" | "architecture" | "pipeline" | "run" | "project" | "prompt";
 
 export type ReviewIssue = Readonly<{
   id: EntityId;

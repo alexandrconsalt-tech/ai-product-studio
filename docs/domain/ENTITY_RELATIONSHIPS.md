@@ -33,7 +33,7 @@ Run
   └── pipelineId -> Pipeline
 
 Review
-  ├── targetId -> Product | Architecture | Pipeline | Run | Project
+  ├── targetId -> Product | Architecture | Pipeline | Run | Project | Prompt
   └── reviewerModuleId -> KnowledgeModule
 
 Prompt

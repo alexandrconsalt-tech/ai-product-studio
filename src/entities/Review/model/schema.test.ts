@@ -14,8 +14,12 @@ describe("Review", () => {
     expect(ReviewSchema.safeParse(review).success).toBe(false);
   });
 
-  it("does not yet accept 'prompt' as a target type (documented gap, CLAUDE.md §16/§63 item 7)", () => {
-    expect(ReviewTargetTypeSchema.safeParse("prompt").success).toBe(false);
+  it("accepts 'prompt' as a target type (gap closed 2026-07-03, CLAUDE.md §16/§63 item 7)", () => {
+    expect(ReviewTargetTypeSchema.safeParse("prompt").success).toBe(true);
+  });
+
+  it("still rejects an undocumented target type", () => {
+    expect(ReviewTargetTypeSchema.safeParse("dataset").success).toBe(false);
   });
 
   it("createReviewIssue generates a prefixed id", () => {

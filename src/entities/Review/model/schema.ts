@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { EntityIdSchema, IsoDateTimeSchema, ReviewStatusSchema, VersionSchema } from "@/entities/shared";
 
-export const ReviewTargetTypeSchema = z.enum(["product", "architecture", "pipeline", "run", "project"]);
+export const ReviewTargetTypeSchema = z.enum(["product", "architecture", "pipeline", "run", "project", "prompt"]);
 
 export const ReviewIssueSchema = z.object({
   id: EntityIdSchema,
