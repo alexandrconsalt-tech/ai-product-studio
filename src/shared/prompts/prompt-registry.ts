@@ -37,16 +37,27 @@ export type PromptVersionEntry = Readonly<{
 export type PromptTemplateVariables = Readonly<Record<string, string>>;
 
 export type PromptRegistry = Readonly<{
-  register(promptId: string, version: string, template: string): PromptRegistry;
+  /**
+   * `registeredAt` defaults to `new Date().toISOString()` when
+   * omitted. Callers that seed a module-level singleton registry at
+   * import time (e.g. `seed-prompts.ts`) MUST pass an explicit, fixed
+   * value instead of relying on the default -- `new Date()` evaluated
+   * once at module load produces a different timestamp on the server
+   * (SSR) than on the client (hydration), causing a React hydration
+   * mismatch. Found via an actual in-browser check (Next.js's own
+   * hydration-error overlay), not assumed.
+   */
+  register(promptId: string, version: string, template: string, registeredAt?: string): PromptRegistry;
   versions(promptId: string): readonly PromptVersionEntry[];
   resolve(promptId: string, version?: string): PromptVersionEntry;
   render(promptId: string, variables: PromptTemplateVariables, version?: string): string;
+  promptIds(): readonly string[];
 }>;
 
 const VARIABLE_PATTERN = /\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g;
 
-function extractVariableNames(template: string): string[] {
-  return [...template.matchAll(VARIABLE_PATTERN)].map((match) => match[1]);
+export function extractVariableNames(template: string): string[] {
+  return [...new Set([...template.matchAll(VARIABLE_PATTERN)].map((match) => match[1]))];
 }
 
 function renderTemplate(promptId: string, template: string, variables: PromptTemplateVariables): string {
@@ -60,13 +71,13 @@ function renderTemplate(promptId: string, template: string, variables: PromptTem
 
 function createRegistry(entries: ReadonlyMap<string, readonly PromptVersionEntry[]>): PromptRegistry {
   return {
-    register(promptId, version, template) {
+    register(promptId, version, template, registeredAt) {
       const existing = entries.get(promptId) ?? [];
       if (existing.some((entry) => entry.version === version)) {
         throw new Error(`Prompt "${promptId}" version "${version}" is already registered (versions are immutable, CLAUDE.md §17 PV-2).`);
       }
       const next = new Map(entries);
-      next.set(promptId, [...existing, { version, template, registeredAt: new Date().toISOString() }]);
+      next.set(promptId, [...existing, { version, template, registeredAt: registeredAt ?? new Date().toISOString() }]);
       return createRegistry(next);
     },
     versions(promptId) {
@@ -83,6 +94,9 @@ function createRegistry(entries: ReadonlyMap<string, readonly PromptVersionEntry
     render(promptId, variables, version) {
       const entry = this.resolve(promptId, version);
       return renderTemplate(promptId, entry.template, variables);
+    },
+    promptIds() {
+      return [...entries.keys()];
     },
   };
 }

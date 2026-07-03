@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FolderKanban, Moon, PanelLeft, Play, Settings, Sun } from "lucide-react";
+import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FolderKanban, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
@@ -13,6 +13,9 @@ import { ProductScreen } from "./screens/product-screen";
 import { ArchitectureScreen } from "./screens/architecture-screen";
 import { PipelineScreen } from "./screens/pipeline-screen";
 import { PlaygroundScreen } from "./screens/playground-screen";
+import { ExecutionInspectorScreen } from "./screens/execution-inspector-screen";
+import { PromptInspectorScreen } from "./screens/prompt-inspector-screen";
+import { AnalyticsScreen } from "./screens/analytics-screen";
 
 const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNode }> = [
   { id: "projects", label: "Projects", icon: <FolderKanban className="size-4" aria-hidden="true" /> },
@@ -20,6 +23,9 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
   { id: "architecture", label: "Architecture", icon: <BrainCircuit className="size-4" aria-hidden="true" /> },
   { id: "pipeline", label: "Pipeline", icon: <Bot className="size-4" aria-hidden="true" /> },
   { id: "playground", label: "Playground", icon: <Play className="size-4" aria-hidden="true" /> },
+  { id: "inspector", label: "Inspector", icon: <Microscope className="size-4" aria-hidden="true" /> },
+  { id: "prompts", label: "Prompts", icon: <ScrollText className="size-4" aria-hidden="true" /> },
+  { id: "analytics", label: "Analytics", icon: <LineChart className="size-4" aria-hidden="true" /> },
   { id: "settings", label: "Settings", icon: <Settings className="size-4" aria-hidden="true" /> },
 ];
 
@@ -29,11 +35,24 @@ const viewTitles: Record<MvpView, string> = {
   architecture: "Architecture",
   pipeline: "Pipeline",
   playground: "Playground",
+  inspector: "Execution Inspector",
+  prompts: "Prompt Inspector",
+  analytics: "Analytics",
   settings: "Settings",
 };
 
 function isMvpView(value: string | null): value is MvpView {
-  return value === "projects" || value === "product" || value === "architecture" || value === "pipeline" || value === "playground" || value === "settings";
+  return (
+    value === "projects" ||
+    value === "product" ||
+    value === "architecture" ||
+    value === "pipeline" ||
+    value === "playground" ||
+    value === "inspector" ||
+    value === "prompts" ||
+    value === "analytics" ||
+    value === "settings"
+  );
 }
 
 export function MvpShell() {
@@ -101,6 +120,9 @@ export function MvpShell() {
             {view === "architecture" ? <ArchitectureScreen /> : null}
             {view === "pipeline" ? <PipelineScreen /> : null}
             {view === "playground" ? <PlaygroundScreen /> : null}
+            {view === "inspector" ? <ExecutionInspectorScreen /> : null}
+            {view === "prompts" ? <PromptInspectorScreen /> : null}
+            {view === "analytics" ? <AnalyticsScreen /> : null}
             {view === "settings" ? <SettingsScreen /> : null}
           </Workspace>
           {assistantOpen ? (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyPromptRegistry, PromptNotFoundError, PromptRenderError } from "./prompt-registry";
+import { emptyPromptRegistry, extractVariableNames, PromptNotFoundError, PromptRenderError } from "./prompt-registry";
 
 describe("PromptRegistry", () => {
   it("registers and resolves the latest version by default", () => {
@@ -50,5 +50,24 @@ describe("PromptRegistry", () => {
     const registry = emptyPromptRegistry.register("p", "1.0.0", "old {{x}}").register("p", "2.0.0", "new {{x}}");
     expect(registry.render("p", { x: "1" }, "1.0.0")).toBe("old 1");
     expect(registry.render("p", { x: "1" })).toBe("new 1");
+  });
+
+  it("promptIds lists every registered prompt id (for the Prompt Inspector)", () => {
+    const registry = emptyPromptRegistry.register("a", "1.0.0", "x").register("b", "1.0.0", "y");
+    expect(registry.promptIds()).toEqual(["a", "b"]);
+  });
+
+  it("promptIds is empty for the empty registry", () => {
+    expect(emptyPromptRegistry.promptIds()).toEqual([]);
+  });
+});
+
+describe("extractVariableNames", () => {
+  it("extracts every unique {{snake_case}} variable", () => {
+    expect(extractVariableNames("Hello {{name}}, order {{order_id}} for {{name}} again")).toEqual(["name", "order_id"]);
+  });
+
+  it("returns an empty array for a template with no variables", () => {
+    expect(extractVariableNames("Static text only.")).toEqual([]);
   });
 });

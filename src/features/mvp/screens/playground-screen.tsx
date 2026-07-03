@@ -1,14 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { Play } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Play, Microscope } from "lucide-react";
 import { Button, Card, EmptyState, Page, Section, Textarea, Badge, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundStore } from "@/shared/stores/playground-store";
+import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
 import { executePipeline } from "@/shared/runtime/pipeline-executor";
 import { realStageRegistry } from "@/shared/runtime/real-stage";
 import { defaultLLMProviderRegistry } from "@/shared/llm/provider-registry";
 import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
+import type { ExecutionEvent } from "@/shared/runtime/types";
 import { getProjectBundle } from "../selectors";
 
 function stringifyOutput(output: unknown): string {
@@ -16,8 +19,10 @@ function stringifyOutput(output: unknown): string {
 }
 
 export function PlaygroundScreen() {
+  const router = useRouter();
   const { snapshot, selectedProjectId } = useRepositoryStore();
   const { input, setInput, selectedRunId, selectRun, addRun } = usePlaygroundStore();
+  const { recordTrace, getTrace } = useExecutionTraceStore();
   const { pipeline, runs } = getProjectBundle(snapshot, selectedProjectId);
   const [executing, setExecuting] = React.useState(false);
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null;
@@ -40,9 +45,17 @@ export function PlaygroundScreen() {
       prompts: seededPromptRegistry,
       models: snapshot?.models ?? [],
     });
-    executePipeline(pipeline, input, { registry, projectId: pipeline.projectId })
-      .then((run) => addRun(run))
+    const events: ExecutionEvent[] = [];
+    executePipeline(pipeline, input, { registry, projectId: pipeline.projectId, onEvent: (event) => events.push(event) })
+      .then((run) => {
+        addRun(run);
+        recordTrace(run.id, events);
+      })
       .finally(() => setExecuting(false));
+  };
+
+  const openInspector = () => {
+    if (selectedRun) router.push(`/?view=inspector`);
   };
 
   const tokens = selectedRun?.metrics.find((metric) => metric.name === "tokens")?.value ?? 0;
@@ -58,10 +71,16 @@ export function PlaygroundScreen() {
           <h1 className="text-2xl font-semibold">Playground</h1>
           <p className="text-sm text-text-muted">Pipeline Executor выполняет граф пайплайна по узлам; модель по умолчанию — mock LLM provider (без реального AI-вызова).</p>
         </div>
-        <Button variant="primary" onClick={handleRun} disabled={executing || !input.trim()}>
-          <Play className="size-4" aria-hidden="true" />
-          {executing ? "Execution" : "Run Pipeline"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={openInspector} disabled={!selectedRun || !getTrace(selectedRun.id)}>
+            <Microscope className="size-4" aria-hidden="true" />
+            Execution Inspector
+          </Button>
+          <Button variant="primary" onClick={handleRun} disabled={executing || !input.trim()}>
+            <Play className="size-4" aria-hidden="true" />
+            {executing ? "Execution" : "Run Pipeline"}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">

@@ -52,8 +52,21 @@ Summary для проверки:
 
 Отклоняй (approved: false), если: отсутствует цитата хотя бы для одного ключевого поля, поле "действие" сформулировано неконкретно, или тип_контакта "contact_center" содержит данные объекта.`;
 
+/**
+ * Fixed, matching `demo-data.ts`'s own `createdAt` constant --
+ * deliberately NOT `new Date().toISOString()`. This registry is a
+ * module-level singleton evaluated once on the server (SSR) and once
+ * again on the client (hydration); a "now" timestamp would differ
+ * between the two evaluations and cause a React hydration mismatch
+ * wherever a registered version's `registeredAt` is rendered (found
+ * via an actual in-browser check against the Prompt Inspector screen).
+ */
+const SEED_TIMESTAMP = "2026-06-29T10:00:00.000Z";
+
 export function withSeedPrompts(registry: PromptRegistry = emptyPromptRegistry): PromptRegistry {
-  return registry.register("prompt_call_summary", "1.0.0", CALL_SUMMARY_TEMPLATE).register("prompt_quality_check", "1.0.0", QUALITY_CHECK_TEMPLATE);
+  return registry
+    .register("prompt_call_summary", "1.0.0", CALL_SUMMARY_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_quality_check", "1.0.0", QUALITY_CHECK_TEMPLATE, SEED_TIMESTAMP);
 }
 
 export const seededPromptRegistry: PromptRegistry = withSeedPrompts();
