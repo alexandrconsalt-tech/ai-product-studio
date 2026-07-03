@@ -1,10 +1,10 @@
 # DEC-003. Product Review vs. Architecture Review gate threshold asymmetry
 
 ## Status
-Proposed — requires product owner ratification before being treated as binding.
+Accepted (Option A)
 
 ## Date
-2026-07-03
+Proposed 2026-07-03. Ratified 2026-07-03 — product owner explicitly delegated the decision back to the document's author ("Прими решение сам, продолжай") rather than picking a option personally. Recorded here as the actual authorization for this ADR's Decision section below, not as this document unilaterally overriding §69's Working Agreement.
 
 ## Context
 `orchestrator/QUALITY_GATES.md`, `orchestrator/DECISION_ENGINE.md` (D-001, D-003), `orchestrator/MODULES.md`, and `orchestrator/WORKFLOW.md` all require **Product Review score >= 85** to pass `gate_product_complete`, but **Architecture Review score >= 90** to pass `gate_architecture_complete`.
@@ -28,8 +28,8 @@ architecture / release gate policy
 | **B. Lower `gate_architecture_complete` to >= 85**, matching Product's leniency | Speeds up the pipeline; treats "minor recommendations" as acceptable everywhere | Architecture mistakes are typically more expensive to unwind once a Pipeline is generated from them (§13); this repository's own architect skill weighs AI Quality/Reliability/Security higher than the PM skill weighs Problem Clarity, suggesting architecture correctness may deserve *more*, not equal, rigor | Medium — could let under-specified architectures reach Pipeline Generation |
 | **C. Keep the asymmetry, but document an explicit rationale** (e.g., "Product Review at 85 is intentionally lenient because architecture review is a second checkpoint that will catch downstream product gaps; tightening both would slow discovery without proportional benefit") | No workflow change; formalizes the status quo | Requires someone to actually construct and stand behind that rationale — right now no such rationale exists anywhere in the repository, so this option amounts to *retroactively justifying* an accident unless the product owner genuinely holds this view | Low technically, but epistemically risky (retrofitting a reason after the fact per CLAUDE.md §2 principle 4, evidence over assumption) |
 
-## Recommendation
-This document's author recommends **Option A** (raise Product to >= 90) on the grounds that: (1) it's the simplest fix — one number change, no architecture skill or orchestrator restructuring; (2) it removes the only place in the whole orchestrator spec where a "recommendations pending" review state is allowed to gate a forward transition; (3) `skills/senior-product-manager/REVIEW.md`'s own blocking-issue list already includes things like "PRD создан без discovery rationale" and "AI feature без AI justification" — treating 85–89 as sufficient to proceed contradicts the spirit of a skill document that clearly wants issues resolved, not merely noted, before moving on. However, this is explicitly a product-risk-tolerance call (how much do we value discovery speed vs. gate rigor), which is why it is not ratified unilaterally.
+## Rationale
+Originally recorded as a recommendation prior to ratification; now the accepted rationale for Option A: (1) it's the simplest fix — one number change, no architecture skill or orchestrator restructuring; (2) it removes the only place in the whole orchestrator spec where a "recommendations pending" review state was allowed to gate a forward transition; (3) `skills/senior-product-manager/REVIEW.md`'s own blocking-issue list already includes things like "PRD создан без discovery rationale" and "AI feature без AI justification" — treating 85–89 as sufficient to proceed contradicted the spirit of a skill document that clearly wants issues resolved, not merely noted, before moving on.
 
 ## Evidence
 | Evidence ID | Grade | Summary | Linked Claim |
@@ -44,16 +44,18 @@ This document's author recommends **Option A** (raise Product to >= 90) on the g
 | The orchestrator's gate logic will actually be implemented in code at some point, making this threshold operationally meaningful rather than purely documentary | Medium | Track against Engineering Roadmap Epic progress toward orchestrator implementation | Untested — until then, this ADR is a documentation-correctness fix with no runtime effect |
 
 ## Decision
-**Not yet made.** Recorded here as Proposed with a recommendation (Option A) for the product owner to accept, modify, or reject.
+**Option A is accepted: `gate_product_complete` requires Product Review score >= 90, matching `gate_architecture_complete`'s existing >= 90.** Both gates now hold structurally parallel review checkpoints to the same rigor.
 
 ## Trade-offs
-See Options table above.
+Accepted trade-off: early-stage product work that would previously have advanced at a Review score of 85-89 ("approved with minor recommendations") must now either resolve those recommendations or the product owner must explicitly accept the risk on a per-project basis outside this default gate. This is a deliberate fail-safe choice (see Rationale) over Option B's alternative of loosening Architecture's rigor to match.
 
 ## Consequences
-Until ratified, `orchestrator/QUALITY_GATES.md` and the two `REVIEW.md` files are **not edited** — the asymmetry remains live in the specification, and CLAUDE.md §23.4/§66 continue to flag it explicitly rather than presenting either threshold as uncontested.
+- **Specification files are intentionally NOT edited.** Per CLAUDE.md §71 rule 2, `orchestrator/QUALITY_GATES.md`, `orchestrator/DECISION_ENGINE.md` (D-001, D-003), `orchestrator/MODULES.md`, `orchestrator/WORKFLOW.md`, and both `REVIEW.md` files remain as originally written (Product Review literal text still says ">= 85" in those files) — they are the historical specification record, not the operative contract. **This ADR is the higher-authority interpretation**: any future orchestrator implementation MUST use `>= 90` for `gate_product_complete`, not the `>= 85` literally written in `orchestrator/QUALITY_GATES.md`.
+- CLAUDE.md §23.3's gate reference table, §23.4, §31.5, and §66's consolidated gate table are updated by this same change to state `>= 90` for `gate_product_complete` and to mark this ADR Accepted rather than Proposed.
+- No runtime code is affected today, since the orchestrator's gate logic is not yet implemented (§23.7) — this decision takes effect the moment that implementation begins.
 
 ## What Would Change This Decision
-Product owner input on acceptable risk tolerance for early-stage (Product) vs. mid-stage (Architecture) gate rigor; alternatively, real usage data once the orchestrator is implemented showing how often 85–89-scored products cause downstream architecture rework.
+Real usage data once the orchestrator is implemented showing that a `>= 90` Product gate materially slows discovery without a measurable reduction in downstream architecture rework — at which point a new ADR (not an edit to this one) should reconsider Option B or C with that evidence in hand (Grade A/B per §24, not the Grade C judgment call this ADR was made on).
 
 ## Review
-**Action required:** product owner to review this proposal and record a decision (Accept Option A / Accept Option B / Accept Option C with stated rationale / reject all three with an alternative). Until then, CLAUDE.md continues to treat this as an open, flagged inconsistency rather than resolved.
+Ratified 2026-07-03. Superseding ADR would be required to change this — see "What Would Change This Decision."

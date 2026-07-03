@@ -610,13 +610,13 @@ Response: `{ status, confidence, evidence, artifacts, recommendations }`.
 **23.3 Quality Gates** (`QUALITY_GATES.md`, 5 gates) — the concrete pass/fail criteria:
 | Gate | Before | Key criterion |
 |---|---|---|
-| `gate_product_complete` | Architecture Design | PRD + Product Analysis exist; **Product Review score >= 85**; AI Readiness not Low if AI required |
+| `gate_product_complete` | Architecture Design | PRD + Product Analysis exist; **Product Review score >= 90** (raised from the spec's literal `>= 85` by DEC-003, Accepted 2026-07-03 — see §23.4); AI Readiness not Low if AI required |
 | `gate_architecture_complete` | Pipeline Generation | AI Necessity Decision fixed; **Architecture Review score >= 90**; Model Selection + Data Architecture + Evaluation Strategy exist if AI used |
 | `gate_pipeline_complete` | Playground | all nodes have I/O contracts; no orphan nodes; AI nodes have validation+evaluation link; retry/fallback defined |
 | `gate_ready_for_testing` | Playground run | Pipeline Complete passed; test scenarios exist; cost/latency limits defined |
 | `gate_ready_for_production` | Completed | Playground results exist; Final Review exists; no unresolved blocking issues |
 
-**23.4 [FLAGGED INCONSISTENCY — Proposed ADR filed, awaiting product owner ratification: `docs/decisions/DEC-003-review-gate-threshold-asymmetry.md`].** The Product Review threshold (`>= 85`) required to pass `gate_product_complete` corresponds to the PM skill's own `REVIEW.md` band "75-89: approved with minor recommendations" — **not** its "90-100: approved" band. Meanwhile the Architecture Review threshold (`>= 90`) exactly matches the architect skill's own "90-100: approved" band. This means the orchestrator holds Architecture to a stricter internal bar than Product, for what are structurally parallel gates. DEC-003 proposes raising Product's bar to 90 to match Architecture's rigor, with a stated recommendation and rationale, but is **not yet Accepted** — it requires product-risk-tolerance judgment that this document does not have the authority to make unilaterally. Until it is ratified, implementers must not "fix" this by editing either skill file or the orchestrator spec — the asymmetry remains live and flagged.
+**23.4 [RESOLVED via `docs/decisions/DEC-003-review-gate-threshold-asymmetry.md`, Accepted 2026-07-03].** `orchestrator/QUALITY_GATES.md`'s literal text still requires only **Product Review score >= 85** to pass `gate_product_complete`, corresponding to the PM skill's own `REVIEW.md` band "75-89: approved with minor recommendations" — **not** its "90-100: approved" band — while the Architecture Review threshold (`>= 90`) exactly matches the architect skill's own "90-100: approved" band. The product owner delegated the decision on 2026-07-03 ("Прими решение сам, продолжай"); DEC-003 Option A was accepted: **`gate_product_complete` now requires Product Review score >= 90**, matching Architecture's rigor. Per CLAUDE.md §71 rule 2, `orchestrator/QUALITY_GATES.md` and the two `REVIEW.md` files are deliberately **not edited** to reflect this — they remain the historical spec record. **DEC-003, not the literal `>= 85` text in `orchestrator/QUALITY_GATES.md`, is the operative threshold** for any future orchestrator implementation.
 
 **23.5 Decision Engine core rules** (`orchestrator/DECISION_ENGINE.md`, own D-001…D-008 — **do not confuse with the architect skill's own D-001…D-007, a completely different rule set under colliding IDs**, §31.6): D-001 Product Review Threshold (return to `product_design` if score < 85; to `discovery` if the issue is evidence-related), D-002 AI Readiness gate before architecture, D-003 Architecture Review Threshold (< 90 returns to `architecture_design`, or to `product_design` if the issue is a PRD contradiction), D-004 Pipeline Validation return rules, D-005 Mandatory User Question over guessing, D-006 No Forward Skip (cannot reach Architecture without Product Complete, Pipeline without Architecture Complete, Playground without Pipeline Complete), D-007 No Knowledge Duplication (route to the specialist module, don't decide domain content in the orchestrator), D-008 Return Loop Limit (more than two returns between the same two states for the same reason forces `blocked`).
 
@@ -771,7 +771,7 @@ Response: `{ status, confidence, evidence, artifacts, recommendations }`.
 - PM `MATURITY_MODEL.md`: a 7-level (0–6) maturity ladder, independent of both of the above.
 - **Resolution:** do not attempt to force these into one enum. Treat `STATE_MACHINE.md`'s 17 states as the implementation target for any code `status` field (it's the most granular and machine-shaped), `WORKFLOW.md`'s stages as the human-facing UI labels (with the explicit `playground`↔`testing` mapping noted), the PM `PROCESS.md` stages as *sub-steps that occur within* the orchestrator's `discovery`/`product-design` stages (not parallel top-level states), and the Maturity Model as an orthogonal, continuously-recomputed readiness score that doesn't gate transitions by itself.
 
-**31.5 Product Review vs. Architecture Review threshold asymmetry** — see §23.4. Flagged; DEC-003 (Proposed) recommends a fix; awaiting product owner ratification.
+**31.5 Product Review vs. Architecture Review threshold asymmetry** — see §23.4. **RESOLVED**: DEC-003 (Accepted 2026-07-03) raises `gate_product_complete` to Product Review >= 90, matching Architecture. The underlying spec files (`orchestrator/QUALITY_GATES.md` etc.) still literally say `>= 85` and are not edited — DEC-003 is the higher-authority interpretation.
 
 **31.6 D-XXX rule ID collisions.** `orchestrator/DECISION_ENGINE.md` (D-001…D-008) and `skills/senior-ai-solution-architect/DECISION_ENGINE.md` (D-001…D-007) use the same ID scheme for entirely different rules; `skills/senior-product-manager/DECISION_ENGINE.md` uses no D-IDs at all (tables instead). **Resolution:** `D-XXX` IDs are **file-scoped, never global** — always cite them as `orchestrator/DECISION_ENGINE.md#D-001` or `skills/senior-ai-solution-architect/DECISION_ENGINE.md#D-001` in full, never bare "D-001."
 
@@ -1046,7 +1046,7 @@ problem | opportunity | prioritization | scope | ai-feasibility | model-selectio
 ## Review
 ```
 
-**Mandatory rule:** store ADRs under `docs/decisions/`. As of 2026-07-03 it holds `DEC-001` (product naming, Accepted), `DEC-002` (confidence scale, Accepted), and `DEC-003` (Product/Architecture review threshold asymmetry, **Proposed** — awaiting product owner ratification) — the three decisions already identified during full-repository discovery. Add new ADRs here as they arise; do not invent a second location for decisions.
+**Mandatory rule:** store ADRs under `docs/decisions/`. As of 2026-07-03 it holds `DEC-001` (product naming, Accepted), `DEC-002` (confidence scale, Accepted), and `DEC-003` (Product/Architecture review threshold asymmetry, **Accepted** — product owner delegated the decision, Option A ratified: `gate_product_complete` raised to >= 90) — the three decisions already identified during full-repository discovery, all now ratified. Add new ADRs here as they arise; do not invent a second location for decisions.
 
 **Definition of Done:** a significant decision has a `DEC-NNN` file in `docs/decisions/` before or immediately after it's acted on — never only living in a chat transcript or PR description.
 
@@ -1476,7 +1476,7 @@ File(s)/module
 
 | Gate | Threshold/Criterion | Source |
 |---|---|---|
-| `gate_product_complete` | Product Review score ≥ 85 | §23.3 |
+| `gate_product_complete` | Product Review score ≥ 90 (per DEC-003, Accepted; spec text still literally says ≥ 85) | §23.3, §23.4 |
 | `gate_architecture_complete` | Architecture Review score ≥ 90 | §23.3 |
 | `gate_pipeline_complete` | All nodes have I/O contracts, no orphans, retry/fallback defined | §23.3 |
 | `gate_ready_for_testing` | Pipeline Complete passed + test scenarios exist | §23.3 |
@@ -1487,7 +1487,7 @@ File(s)/module
 | PM Review bands | 90–100 approved / 75–89 approved w/ minor recs / 60–74 revise / 0–59 rejected | §35, `skills/senior-product-manager/REVIEW.md` |
 | Architect Review bands | Same numeric bands, different weighted criteria | `skills/senior-ai-solution-architect/REVIEW.md` |
 
-**Known asymmetry, restated for visibility:** the orchestrator's Product gate (§23.3) accepts the PM's "approved with minor recommendations" band (85–89), while its Architecture gate demands the architect's full "approved" band (90+) — flagged in §23.4, DEC-003 Proposed (not yet Accepted).
+**Former asymmetry, now resolved:** the orchestrator spec's literal text allowed the Product gate to pass on the PM's "approved with minor recommendations" band (85–89) while the Architecture gate demanded the architect's full "approved" band (90+). DEC-003 (Accepted 2026-07-03) closed this gap by raising the Product gate to 90 — both gates now require the same rigor.
 
 **Definition of Done:** any gate check in code or process cites the exact threshold from this table, never a paraphrase like "pretty good score."
 
