@@ -29,5 +29,11 @@
 
 - Добавлен Vitest (`vitest.config.ts`, `npm test` / `npm run test:watch`).
 - Domain-слой (`src/entities/**`) покрыт unit-тестами для shared-примитивов и сущностей Node, Edge, Project, Review, Run, Pipeline: фабрики дают валидный по Zod-схеме объект, схемы отклоняют задокументированные невалидные значения.
+- `LocalStorageProjectRepository.deleteProject` покрыт тестами на каскадное удаление Run/Review (см. ниже).
 - Остальные сущности (Architecture, Framework, KnowledgeModule, Model, Product, Prompt) пока без тестов — следующий кандидат при продолжении Epic 1.
 - UI/stores/simulation остаются непокрытыми тестами — это осознанный выбор по CLAUDE.md §19 (decision rule: начинать с domain-слоя, т.к. он чистый и не имеет зависимостей).
+
+## Исправлено в рамках Engineering Roadmap
+
+- **Живые табы**: `product-screen.tsx` и `architecture-screen.tsx` раньше рендерили декоративные табы (клик не переключал контент). Теперь табы управляют активной секцией.
+- **Каскадное удаление**: удаление Project теперь удаляет также связанные Run и Review, а не только Product/Architecture/Pipeline — иначе оставались осиротевшие записи.

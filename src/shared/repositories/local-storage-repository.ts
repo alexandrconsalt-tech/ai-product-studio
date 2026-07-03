@@ -70,12 +70,30 @@ export class LocalStorageProjectRepository implements ProjectRepository {
   }
 
   deleteProject(snapshot: RepositorySnapshot, projectId: string): RepositorySnapshot {
+    const removedProducts = snapshot.products.filter((product) => product.projectId === projectId);
+    const removedArchitectures = snapshot.architectures.filter((architecture) => architecture.projectId === projectId);
+    const removedPipelines = snapshot.pipelines.filter((pipeline) => pipeline.projectId === projectId);
+    const removedPipelineIds = new Set(removedPipelines.map((pipeline) => pipeline.id));
+    const removedRuns = snapshot.runs.filter((run) => removedPipelineIds.has(run.pipelineId));
+
+    // See src/shared/stores/project-store.ts deleteProject for the same cascade rule
+    // (CLAUDE.md §63 debt item 4) — kept in sync deliberately.
+    const removedTargetIds = new Set<string>([
+      projectId,
+      ...removedProducts.map((product) => product.id),
+      ...removedArchitectures.map((architecture) => architecture.id),
+      ...removedPipelines.map((pipeline) => pipeline.id),
+      ...removedRuns.map((run) => run.id),
+    ]);
+
     return {
       ...snapshot,
       projects: snapshot.projects.filter((project) => project.id !== projectId),
       products: snapshot.products.filter((product) => product.projectId !== projectId),
       architectures: snapshot.architectures.filter((architecture) => architecture.projectId !== projectId),
       pipelines: snapshot.pipelines.filter((pipeline) => pipeline.projectId !== projectId),
+      runs: snapshot.runs.filter((run) => !removedPipelineIds.has(run.pipelineId)),
+      reviews: snapshot.reviews.filter((review) => !removedTargetIds.has(review.targetId)),
     };
   }
 

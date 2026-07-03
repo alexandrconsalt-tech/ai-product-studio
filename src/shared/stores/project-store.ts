@@ -40,12 +40,32 @@ export const useProjectStore = create<ProjectStore>(() => ({
     const repository = useRepositoryStore.getState();
     const snapshot = repository.snapshot;
     if (!snapshot) return;
+
+    const removedProducts = snapshot.products.filter((product) => product.projectId === projectId);
+    const removedArchitectures = snapshot.architectures.filter((architecture) => architecture.projectId === projectId);
+    const removedPipelines = snapshot.pipelines.filter((pipeline) => pipeline.projectId === projectId);
+    const removedPipelineIds = new Set(removedPipelines.map((pipeline) => pipeline.id));
+    const removedRuns = snapshot.runs.filter((run) => removedPipelineIds.has(run.pipelineId));
+
+    // Every id that no longer has an owning aggregate once the project is deleted.
+    // Reviews target one of these via `targetId` (§9.3 ENTITY_RELATIONSHIPS) and must be
+    // removed alongside them, otherwise they become orphaned records (CLAUDE.md §63 debt item 4).
+    const removedTargetIds = new Set<string>([
+      projectId,
+      ...removedProducts.map((product) => product.id),
+      ...removedArchitectures.map((architecture) => architecture.id),
+      ...removedPipelines.map((pipeline) => pipeline.id),
+      ...removedRuns.map((run) => run.id),
+    ]);
+
     repository.setSnapshot({
       ...snapshot,
       projects: snapshot.projects.filter((project) => project.id !== projectId),
       products: snapshot.products.filter((product) => product.projectId !== projectId),
       architectures: snapshot.architectures.filter((architecture) => architecture.projectId !== projectId),
       pipelines: snapshot.pipelines.filter((pipeline) => pipeline.projectId !== projectId),
+      runs: snapshot.runs.filter((run) => !removedPipelineIds.has(run.pipelineId)),
+      reviews: snapshot.reviews.filter((review) => !removedTargetIds.has(review.targetId)),
     });
   },
   duplicateProject: (projectId, input) => {

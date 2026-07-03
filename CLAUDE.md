@@ -236,7 +236,7 @@ src/
 
 **8.5 State management.** Seven Zustand stores under `src/shared/stores/`, all plain `create<T>()` with no middleware (no `persist`/`immer`/`devtools`):
 - `repository-store.ts` — holds the loaded `RepositorySnapshot | null` and `selectedProjectId`; persists only the selected-project id to `localStorage` under key `"ai-product-studio.selected-project-id.v1"`.
-- `project-store.ts` — `createProject` (also auto-creates a companion `Product` and links it), `updateProjectDetails`, `deleteProject` (cascades to remove linked products/architectures/pipelines, but **not** runs/reviews — a known gap, §63), `duplicateProject` (name suffixed "Copy", status forced to `draft`, does not duplicate product/architecture/pipeline).
+- `project-store.ts` — `createProject` (also auto-creates a companion `Product` and links it), `updateProjectDetails`, `deleteProject` (cascades to remove linked products/architectures/pipelines/runs/reviews — fixed 2026-07-03, §63 debt item 4), `duplicateProject` (name suffixed "Copy", status forced to `draft`, does not duplicate product/architecture/pipeline).
 - `product-store.ts`, `architecture-store.ts` — thin `updateX(entity)` writers into the snapshot, bumping `updatedAt`.
 - `pipeline-store.ts` — the most complex store: real undo/redo history per pipeline capped at 50 entries (`.slice(-50)`), `addNode`/`deleteNode` (cascades to remove connected edges)/`duplicateNode` (offsets position `+40,+40`, appends " Copy"), `setNodesAndEdges`.
 - `playground-store.ts` — `input` (seeded with a sample Russian CRM-integration transcript), `selectedRunId`, `addRun` (prepends to both the snapshot's `runs` and the project's `playgroundRunIds`).
@@ -1406,7 +1406,7 @@ If applicable, map to one of `orchestrator/ERROR_HANDLING.md`'s 9 error_ids (§2
 1. **~~Zero automated tests~~ — PARTIALLY RESOLVED 2026-07-03.** Vitest is installed; domain layer (`shared.ts` + 6 of 12 entities) has test coverage (§19). Remaining: Architecture/Framework/KnowledgeModule/Model/Product/Prompt entities, all stores, all UI, the simulation engine.
 2. **~~No git repository at all~~ — RESOLVED 2026-07-03** (§59). **~~No CI/CD pipeline~~ — PARTIALLY RESOLVED 2026-07-03**: `.github/workflows/ci.yml` exists and runs lint+test, but is dormant until a GitHub remote is configured (§58) — closing this fully requires a decision to actually push this repository somewhere, which is a product-owner-level call (where does this code live) outside this document's authority to decide unilaterally.
 3. **~~Decorative, non-functional tabs~~ — RESOLVED 2026-07-03** in `product-screen.tsx` and `architecture-screen.tsx` (§31.10) — tabs now gate content, verified in-browser.
-4. **Cascading delete gaps**: both `project-store.ts`'s `deleteProject` and `LocalStorageProjectRepository`'s `deleteProject` cascade to remove linked products/architectures/pipelines but **not** linked runs/reviews — orphaned `Run`/`Review` records can accumulate.
+4. **~~Cascading delete gaps~~ — RESOLVED 2026-07-03**: both `project-store.ts`'s `deleteProject` and `LocalStorageProjectRepository`'s `deleteProject` now also remove `Run`s belonging to a deleted pipeline and `Review`s targeting the project or any of its removed product/architecture/pipeline/run ids. Covered by tests in `local-storage-repository.test.ts`.
 5. **Two parallel, partially-overlapping mutation APIs**: the Zustand stores manipulate `RepositorySnapshot` directly via `setSnapshot`, while `LocalStorageProjectRepository` separately exposes its own `upsertX` methods that appear to be substantially unused by the stores (§8.6/§7) — needs a decision on which is canonical before either is extended further.
 6. **`Edge.condition.expression` and `Node.metadata` are untyped strings** with no parser/evaluator anywhere (§14.1) — looks like a DSL, isn't one yet.
 7. **`Prompt` has no lifecycle status and `ReviewTargetType` doesn't include `"prompt"`** (§16) — no code-level gate prevents an unreviewed prompt from reaching a production pipeline.
@@ -1442,7 +1442,7 @@ File(s)/module
 - Does a new/changed entity have all three `model/` files and its `README.md` in sync (§9.1)?
 - Does a new document use qualified IDs, not bare `D-XXX`/`AP-XXX` (§31.6/§31.7)?
 - Does a UI change wire up any interactive element it visually implies (checking specifically for the §31.10 "decorative tabs" failure mode)?
-- Does a change touching `LocalStorageProjectRepository` or a store handle the cascading-delete gap consistently (§63 item 4), or at least not worsen it silently?
+- Does a change touching `LocalStorageProjectRepository` or a store keep the `deleteProject` cascade (products/architectures/pipelines/runs/reviews, §63 item 4, resolved 2026-07-03) consistent between both implementations, or at least not regress it silently?
 - Does a claim of "tested" or "evaluated" in the PR description point to something real (§19, §24) rather than an unverified assertion?
 - Is new technical debt logged (§63) rather than silently introduced?
 
