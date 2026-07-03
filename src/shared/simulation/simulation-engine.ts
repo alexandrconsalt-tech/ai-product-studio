@@ -4,6 +4,7 @@ import type { Run, RunLog, RunMetric } from "@/entities/Run/model/types";
 import { createRun } from "@/entities/Run/model/factory";
 import { createTimestamp } from "@/entities/shared";
 import { CallAnalysisSummarySchema, type CallAnalysisSummary } from "@/shared/model/call-analysis-summary";
+import { confidenceFromTemperature } from "@/shared/model/confidence";
 
 export type SimulationResult = Readonly<{
   run: Run;
@@ -35,20 +36,6 @@ const estimateTokens = (input: string, nodeCount: number): number => Math.max(42
 
 function findSummaryNode(pipeline: Pipeline): Node | undefined {
   return pipeline.nodes.find((node) => node.type === "llm" && node.promptId === CALL_SUMMARY_PROMPT_ID);
-}
-
-/**
- * Higher temperature simulates a more variable, less deterministic
- * model call, so confidence drops as temperature rises. This is a
- * simulation heuristic, not a real calibration -- but it replaces the
- * previous hardcoded `confidence: 0.86` with a value that actually
- * responds to `Node.temperature` (CLAUDE.md §63 debt item 11, §25
- * confidence scale is 0-1 float per DEC-002).
- */
-function confidenceFromTemperature(temperature: number | undefined): number {
-  const effective = temperature ?? 0.3;
-  const bounded = Math.max(0, Math.min(2, effective));
-  return Math.round(Math.max(0.5, Math.min(0.95, 0.95 - bounded * 0.15)) * 100) / 100;
 }
 
 function firstSentence(input: string): string {
