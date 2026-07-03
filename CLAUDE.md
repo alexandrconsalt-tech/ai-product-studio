@@ -1331,7 +1331,7 @@ If applicable, map to one of `orchestrator/ERROR_HANDLING.md`'s 9 error_ids (§2
 
 **Purpose.** How a change moves from "done" to "in the version the user experiences," given this is a Local-Storage-only app with no deployment pipeline today.
 
-**Current reality:** no CI/CD configuration exists anywhere in this repository (no `.github/workflows/`, no other CI config found). `package.json` scripts are `dev`, `build`, `start`, `lint` only. "Releasing" today means running `npm run build` locally; there is no automated deploy target.
+**Current reality:** a CI workflow exists (`.github/workflows/ci.yml`, added 2026-07-03 — runs `npm run lint` and `npm test` on push/PR to `main`), but there is **no remote git host configured yet** (§59), so this workflow does not actually execute anywhere until the repository is pushed to a GitHub remote — treat it as "ready, not yet running," not as "CI is enforcing quality today." `package.json` scripts are `dev`, `build`, `start`, `lint`, `test`, `test:watch`. "Releasing" still means running `npm run build` locally; there is no automated deploy target.
 
 **Target release model** (`knowledge-import/16_Development_Roadmap.md`, aspirational): release channels Internal Alpha → Private Beta → Public Beta → GA → Enterprise LTS, gated by the Production Readiness minimums in `knowledge-import/17_Acceptance_Criteria.md` (Product Readiness ≥ 90, Regression Success = 100%, Security Review passed, Documentation complete, Monitoring enabled, Rollback available).
 
@@ -1404,7 +1404,7 @@ If applicable, map to one of `orchestrator/ERROR_HANDLING.md`'s 9 error_ids (§2
 
 **Known technical debt (numbered for reference in future work):**
 1. **~~Zero automated tests~~ — PARTIALLY RESOLVED 2026-07-03.** Vitest is installed; domain layer (`shared.ts` + 6 of 12 entities) has test coverage (§19). Remaining: Architecture/Framework/KnowledgeModule/Model/Product/Prompt entities, all stores, all UI, the simulation engine.
-2. **~~No git repository at all~~ — RESOLVED 2026-07-03** (§59). **No CI/CD pipeline yet** — still open, tracked as the next Engineering Roadmap task.
+2. **~~No git repository at all~~ — RESOLVED 2026-07-03** (§59). **~~No CI/CD pipeline~~ — PARTIALLY RESOLVED 2026-07-03**: `.github/workflows/ci.yml` exists and runs lint+test, but is dormant until a GitHub remote is configured (§58) — closing this fully requires a decision to actually push this repository somewhere, which is a product-owner-level call (where does this code live) outside this document's authority to decide unilaterally.
 3. **Decorative, non-functional tabs** in `product-screen.tsx` and `architecture-screen.tsx` (§31.10) — UX docs describe interactive tabs; code renders all content statically regardless of selection.
 4. **Cascading delete gaps**: both `project-store.ts`'s `deleteProject` and `LocalStorageProjectRepository`'s `deleteProject` cascade to remove linked products/architectures/pipelines but **not** linked runs/reviews — orphaned `Run`/`Review` records can accumulate.
 5. **Two parallel, partially-overlapping mutation APIs**: the Zustand stores manipulate `RepositorySnapshot` directly via `setSnapshot`, while `LocalStorageProjectRepository` separately exposes its own `upsertX` methods that appear to be substantially unused by the stores (§8.6/§7) — needs a decision on which is canonical before either is extended further.
