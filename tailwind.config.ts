@@ -1,0 +1,70 @@
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  darkMode: "class",
+  content: ["./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        border: "hsl(var(--border))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        surface: "hsl(var(--surface))",
+        "surface-elevated": "hsl(var(--surface-elevated))",
+        muted: "hsl(var(--muted))",
+        "muted-foreground": "hsl(var(--muted-foreground))",
+        panel: "hsl(var(--panel))",
+        primary: "hsl(var(--primary))",
+        "primary-foreground": "hsl(var(--primary-foreground))",
+        secondary: "hsl(var(--secondary))",
+        "secondary-foreground": "hsl(var(--secondary-foreground))",
+        text: "hsl(var(--text))",
+        "text-muted": "hsl(var(--text-muted))",
+        accent: "hsl(var(--accent))",
+        success: "hsl(var(--success))",
+        positive: "hsl(var(--success))",
+        warning: "hsl(var(--warning))",
+        error: "hsl(var(--error))",
+        info: "hsl(var(--info))",
+        hover: "hsl(var(--hover))",
+        selected: "hsl(var(--selected))",
+        focus: "hsl(var(--focus))",
+        disabled: "hsl(var(--disabled))",
+      },
+      borderRadius: {
+        sm: "4px",
+        md: "6px",
+        lg: "var(--radius)",
+        xl: "12px",
+      },
+      boxShadow: {
+        sm: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
+        glow: "0 0 0 1px hsl(var(--border)), 0 18px 55px rgba(0,0,0,.24)",
+      },
+      spacing: {
+        1: "4px",
+        2: "8px",
+        3: "12px",
+        4: "16px",
+        5: "20px",
+        6: "24px",
+        8: "32px",
+        10: "40px",
+        12: "48px",
+        16: "64px",
+        20: "80px",
+        24: "96px",
+      },
+      transitionDuration: {
+        fast: "120ms",
+        base: "180ms",
+        slow: "240ms",
+      },
+    },
+  },
+  plugins: [],
+};
+
+export default config;

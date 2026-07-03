@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@import "@xyflow/react/dist/style.css";
+
+:root {
+  --background: 0 0% 99%;
+  --foreground: 222 22% 8%;
+  --surface: 0 0% 100%;
+  --surface-elevated: 0 0% 100%;
+  --panel: 0 0% 100%;
+  --primary: 222 22% 8%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 14% 94%;
+  --secondary-foreground: 222 22% 12%;
+  --muted: 210 14% 94%;
+  --muted-foreground: 215 12% 42%;
+  --border: 214 16% 86%;
+  --text: 222 22% 8%;
+  --text-muted: 215 12% 42%;
+  --success: 145 55% 38%;
+  --warning: 38 92% 45%;
+  --error: 0 72% 48%;
+  --info: 210 90% 45%;
+  --hover: 210 16% 92%;
+  --selected: 210 18% 90%;
+  --focus: 217 91% 60%;
+  --disabled: 214 14% 78%;
+  --accent: 189 94% 43%;
+  --radius: 8px;
+  --shadow-sm: 0 1px 2px hsl(222 22% 8% / 0.06);
+  --shadow-md: 0 8px 24px hsl(222 22% 8% / 0.08);
+  --shadow-lg: 0 18px 48px hsl(222 22% 8% / 0.12);
+}
+
+.dark {
+  --background: 222 22% 7%;
+  --foreground: 210 18% 96%;
+  --surface: 222 20% 9%;
+  --surface-elevated: 222 18% 11%;
+  --panel: 222 20% 9%;
+  --primary: 210 18% 96%;
+  --primary-foreground: 222 22% 8%;
+  --secondary: 220 14% 15%;
+  --secondary-foreground: 210 18% 96%;
+  --muted: 220 14% 15%;
+  --muted-foreground: 218 11% 68%;
+  --border: 220 13% 20%;
+  --text: 210 18% 96%;
+  --text-muted: 218 11% 68%;
+  --success: 145 58% 48%;
+  --warning: 40 93% 58%;
+  --error: 0 72% 62%;
+  --info: 210 90% 62%;
+  --hover: 220 14% 16%;
+  --selected: 220 14% 19%;
+  --focus: 217 91% 65%;
+  --disabled: 220 10% 34%;
+  --accent: 189 94% 50%;
+  --shadow-sm: 0 1px 2px hsl(0 0% 0% / 0.24);
+  --shadow-md: 0 8px 24px hsl(0 0% 0% / 0.28);
+  --shadow-lg: 0 18px 48px hsl(0 0% 0% / 0.34);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: Arial, Helvetica, sans-serif;
+  letter-spacing: 0;
+}
+
+:focus-visible {
+  outline: 2px solid hsl(var(--focus));
+  outline-offset: 2px;
+}

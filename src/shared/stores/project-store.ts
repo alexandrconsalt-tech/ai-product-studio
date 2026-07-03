@@ -1,0 +1,61 @@
+"use client";
+
+import { create } from "zustand";
+import { createProject } from "@/entities/Project/model/factory";
+import type { Project } from "@/entities/Project/model/types";
+import { createProduct } from "@/entities/Product/model/factory";
+import { createTimestamp } from "@/entities/shared";
+import { useRepositoryStore } from "./repository-store";
+
+type ProjectStore = Readonly<{
+  createProject: (name: string, description?: string) => Project;
+  updateProjectDetails: (projectId: string, input: Readonly<{ name: string; description?: string }>) => void;
+  deleteProject: (projectId: string) => void;
+  duplicateProject: (projectId: string, input?: Readonly<{ name?: string; description?: string }>) => Project | null;
+}>;
+
+export const useProjectStore = create<ProjectStore>(() => ({
+  createProject: (name, description) => {
+    const repository = useRepositoryStore.getState();
+    const snapshot = repository.snapshot ?? { projects: [], products: [], architectures: [], pipelines: [], runs: [], reviews: [], frameworks: [], knowledgeModules: [], models: [], prompts: [] };
+    const project = createProject({ name, description });
+    const product = createProduct({ projectId: project.id, idea: description ? { statement: description, source: "Project description" } : undefined });
+    const nextProject: Project = { ...project, productId: product.id };
+    repository.setSnapshot({ ...snapshot, projects: [nextProject, ...snapshot.projects], products: [product, ...snapshot.products] });
+    repository.selectProject(nextProject.id);
+    return nextProject;
+  },
+  updateProjectDetails: (projectId, input) => {
+    const repository = useRepositoryStore.getState();
+    const snapshot = repository.snapshot;
+    if (!snapshot) return;
+    repository.setSnapshot({
+      ...snapshot,
+      projects: snapshot.projects.map((project) =>
+        project.id === projectId ? { ...project, name: input.name, description: input.description, updatedAt: createTimestamp() } : project,
+      ),
+    });
+  },
+  deleteProject: (projectId) => {
+    const repository = useRepositoryStore.getState();
+    const snapshot = repository.snapshot;
+    if (!snapshot) return;
+    repository.setSnapshot({
+      ...snapshot,
+      projects: snapshot.projects.filter((project) => project.id !== projectId),
+      products: snapshot.products.filter((product) => product.projectId !== projectId),
+      architectures: snapshot.architectures.filter((architecture) => architecture.projectId !== projectId),
+      pipelines: snapshot.pipelines.filter((pipeline) => pipeline.projectId !== projectId),
+    });
+  },
+  duplicateProject: (projectId, input) => {
+    const repository = useRepositoryStore.getState();
+    const snapshot = repository.snapshot;
+    const source = snapshot?.projects.find((project) => project.id === projectId);
+    if (!snapshot || !source) return null;
+    const duplicate = createProject({ name: input?.name ?? `${source.name} Copy`, description: input?.description ?? source.description, status: "draft" });
+    repository.setSnapshot({ ...snapshot, projects: [duplicate, ...snapshot.projects] });
+    repository.selectProject(duplicate.id);
+    return duplicate;
+  },
+}));
