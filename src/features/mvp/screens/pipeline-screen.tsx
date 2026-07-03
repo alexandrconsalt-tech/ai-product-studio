@@ -32,6 +32,14 @@ function toFlowNodes(nodes: readonly Node[]): FlowNode[] {
     id: node.id,
     type: "default",
     position: node.position ?? { x: 0, y: 0 },
+    // Explicit width/height lets React Flow compute handle positions and
+    // edge anchors immediately instead of waiting on its internal
+    // ResizeObserver-based auto-measurement pass, which was never
+    // completing in this app (nodes stayed permanently `visibility:
+    // hidden`, 0 edges ever rendered -- see CLAUDE.md §63 debt item 12,
+    // Cause B). Values are a reasonable fixed default node size.
+    width: 180,
+    height: 40,
     data: {
       label: `${node.name} · ${node.type}`,
     },
@@ -78,7 +86,16 @@ export function PipelineScreen() {
     if (!pipeline) return;
     setFlowNodes(toFlowNodes(pipeline.nodes));
     setFlowEdges(toFlowEdges(pipeline.edges));
-  }, [pipeline?.id, pipeline?.nodes, pipeline?.edges, pipeline]);
+    // Deliberately depend only on pipeline.id/nodes/edges, NOT the whole
+    // `pipeline` object: `getProjectBundle` returns a fresh object every
+    // render, so including it here caused this effect to re-run on every
+    // render forever, continuously replacing flowNodes/flowEdges with new
+    // array instances. That render loop was the actual root cause of
+    // React Flow never finishing its node-measurement pass (nodes stayed
+    // `visibility: hidden`, and 0 edges ever rendered) -- see CLAUDE.md
+    // §63 debt item 12, Cause B.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline?.id, pipeline?.nodes, pipeline?.edges]);
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -164,7 +181,7 @@ export function PipelineScreen() {
         <span className="text-sm text-text-muted">{pipeline.nodes.length} nodes · {pipeline.edges.length} edges · Undo {pipelineHistory.past.length}</span>
       </Toolbar>
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-[320px] flex-1">
+        <div className="h-full min-w-[320px] flex-1">
           <ReactFlow
             nodes={flowNodes}
             edges={flowEdges}
