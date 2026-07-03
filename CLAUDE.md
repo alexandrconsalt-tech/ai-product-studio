@@ -30,11 +30,11 @@ This document sits above all of them: where they agree, it cites them; where the
 
 This repository is building **AI Product Studio** (`package.json` name: `ai-product-studio`; page title: "AI Product Studio"; folder name on disk: "AI Communication Studio") — a professional IDE-like environment in which a Product Manager collaborates with AI specialist roles to take an idea through Product Discovery, PRD, AI Architecture, Pipeline design, and Playground validation, ending in a production-ready AI pipeline.
 
-**[CANONICAL DECISION — naming].** The repository is referred to by three different names across its own documents: "AI Product OS" (`knowledge-import/`), "AI Communication Platform" (`knowledge-import/CLAUDE.md`), and "AI Communication Studio" / "AI Product Studio" (the actual folder, `package.json`, and rendered UI). Going forward:
+**[RATIFIED — naming, see `docs/decisions/DEC-001-canonical-product-naming.md`].** The repository is referred to by three different names across its own documents: "AI Product OS" (`knowledge-import/`), "AI Communication Platform" (`knowledge-import/CLAUDE.md`), and "AI Communication Studio" / "AI Product Studio" (the actual folder, `package.json`, and rendered UI). Going forward:
 - **"AI Product Studio"** is the product name for the *application implemented in `src/`* — use it in code, UI strings, and this document.
 - **"AI Product OS"** is the name for the *long-term platform vision* described in `knowledge-import/` — use it only when specifically discussing that aspirational SRS.
 - **"AI Communication Platform/Studio"** is the *umbrella/stakeholder-facing term* used loosely for the whole initiative; do not use it in code or schemas.
-Any new document, commit message, or UI string SHOULD use "AI Product Studio" unless it is specifically about the `knowledge-import/` vision. This decision should be ratified via ADR before being treated as immutable (§41).
+Any new document, commit message, or UI string SHOULD use "AI Product Studio" unless it is specifically about the `knowledge-import/` vision. This decision is formally ratified as DEC-001 (Accepted, 2026-07-03, §41).
 
 **Mission statement** (adapted from `knowledge-import/01_Vision_and_Product_Philosophy.md` and `knowledge-import/README.md`, scoped to what this repo actually builds): reduce the time and specialist headcount required to take an AI product idea to a validated, evaluable pipeline, by having AI specialist roles (Product Manager, Solution Architect, Prompt Engineer, Reviewer) do most of the discovery, architecture, and prompt-engineering work, with the human Product Manager acting as reviewer and decision-maker rather than primary author.
 
@@ -167,7 +167,7 @@ Nothing in the repository explicitly connects §3.1 and §3.3. This document mak
 | Find the platform-scale vision | `knowledge-import/*.md` |
 
 **Mandatory rules:**
-- **RI-1.** Before creating any new file, run a search for an existing equivalent. This repo has empty scaffold directories (`framework-library/*`, `templates/*`, `skills/ai-engineering/`, `skills/evaluation/`, `skills/product-management/`, `docs/architecture/`, `docs/decisions/`, `docs/product/`, `src/widgets/`) that look like they contain something but don't (all `.gitkeep` only, verified). Do not assume a populated directory exists just because its name suggests it should.
+- **RI-1.** Before creating any new file, run a search for an existing equivalent. This repo has empty scaffold directories (`framework-library/*`, `templates/*`, `skills/ai-engineering/`, `skills/evaluation/`, `skills/product-management/`, `docs/architecture/`, `docs/product/`, `src/widgets/`) that look like they contain something but don't (all `.gitkeep` only, verified). `docs/decisions/` is the one exception — it now holds DEC-001/002/003 (§41) as of 2026-07-03. Do not assume any *other* directory in this list is populated just because its name suggests it should.
 - **RI-2.** Before adding a dependency, check `package.json` — the dependency set is deliberately small (React 19, Next 15, Zustand 5, Zod 4, `@xyflow/react` 12, Tailwind 3, `framer-motion`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge`). No test runner, no ORM, no HTTP client, no state-sync library beyond Zustand are present — adding one is an architectural decision, not a routine `npm install`.
 - **RI-3.** Git was initialized 2026-07-03 as the first step of the Engineering Roadmap (§63 debt item 2, now closed) — `git log`/`git blame` are now valid sources of history, but only from that date forward. Do not assume any history predates the baseline commit; the repository's actual age and prior authorship are not recoverable from git.
 
@@ -615,7 +615,7 @@ Response: `{ status, confidence, evidence, artifacts, recommendations }`.
 | `gate_ready_for_testing` | Playground run | Pipeline Complete passed; test scenarios exist; cost/latency limits defined |
 | `gate_ready_for_production` | Completed | Playground results exist; Final Review exists; no unresolved blocking issues |
 
-**23.4 [FLAGGED INCONSISTENCY — do not silently resolve, ratify via ADR].** The Product Review threshold (`>= 85`) required to pass `gate_product_complete` corresponds to the PM skill's own `REVIEW.md` band "75-89: approved with minor recommendations" — **not** its "90-100: approved" band. Meanwhile the Architecture Review threshold (`>= 90`) exactly matches the architect skill's own "90-100: approved" band. This means the orchestrator holds Architecture to a stricter internal bar than Product, for what are structurally parallel gates. Until an ADR resolves this deliberately (either lowering Architecture's bar to match Product's asymmetry, or raising Product's bar to 90 to match Architecture's rigor), implementers must not "fix" this unilaterally by editing either skill file or the orchestrator spec — surface it as a decision to make, not a bug to silently patch.
+**23.4 [FLAGGED INCONSISTENCY — Proposed ADR filed, awaiting product owner ratification: `docs/decisions/DEC-003-review-gate-threshold-asymmetry.md`].** The Product Review threshold (`>= 85`) required to pass `gate_product_complete` corresponds to the PM skill's own `REVIEW.md` band "75-89: approved with minor recommendations" — **not** its "90-100: approved" band. Meanwhile the Architecture Review threshold (`>= 90`) exactly matches the architect skill's own "90-100: approved" band. This means the orchestrator holds Architecture to a stricter internal bar than Product, for what are structurally parallel gates. DEC-003 proposes raising Product's bar to 90 to match Architecture's rigor, with a stated recommendation and rationale, but is **not yet Accepted** — it requires product-risk-tolerance judgment that this document does not have the authority to make unilaterally. Until it is ratified, implementers must not "fix" this by editing either skill file or the orchestrator spec — the asymmetry remains live and flagged.
 
 **23.5 Decision Engine core rules** (`orchestrator/DECISION_ENGINE.md`, own D-001…D-008 — **do not confuse with the architect skill's own D-001…D-007, a completely different rule set under colliding IDs**, §31.6): D-001 Product Review Threshold (return to `product_design` if score < 85; to `discovery` if the issue is evidence-related), D-002 AI Readiness gate before architecture, D-003 Architecture Review Threshold (< 90 returns to `architecture_design`, or to `product_design` if the issue is a PRD contradiction), D-004 Pipeline Validation return rules, D-005 Mandatory User Question over guessing, D-006 No Forward Skip (cannot reach Architecture without Product Complete, Pipeline without Architecture Complete, Playground without Pipeline Complete), D-007 No Knowledge Duplication (route to the specialist module, don't decide domain content in the orchestrator), D-008 Return Loop Limit (more than two returns between the same two states for the same reason forces `blocked`).
 
@@ -659,7 +659,7 @@ Response: `{ status, confidence, evidence, artifacts, recommendations }`.
 | 60–79 | Human review required |
 | < 60 | Insufficient information |
 
-**Simplified boolean form used at the pipeline level:** the demo pipeline's validation node routes on a single threshold, `confidence >= 0.72 → store`, `confidence < 0.72 → human_review` (`demo-data.ts` edge conditions). Note the scale mismatch: `03_Product_Studio.md` uses a 0–100 integer scale, while the pipeline's `metadata.threshold` uses a 0–1 float (`"0.72"`). **[CANONICAL DECISION]:** standardize all future confidence values on the 0–1 float scale used by the actual `Node.metadata.threshold` and `Run` semantics (it's what's implemented), and treat the 0–100 scale in `knowledge-import/03_Product_Studio.md` as needing conversion (`score / 100`) wherever it's cited going forward, rather than maintaining two live scales.
+**Simplified boolean form used at the pipeline level:** the demo pipeline's validation node routes on a single threshold, `confidence >= 0.72 → store`, `confidence < 0.72 → human_review` (`demo-data.ts` edge conditions). Note the scale mismatch: `03_Product_Studio.md` uses a 0–100 integer scale, while the pipeline's `metadata.threshold` uses a 0–1 float (`"0.72"`). **[RATIFIED, see `docs/decisions/DEC-002-confidence-scale.md`]:** standardize all future confidence values on the 0–1 float scale used by the actual `Node.metadata.threshold` and `Run` semantics (it's what's implemented), and treat the 0–100 scale in `knowledge-import/03_Product_Studio.md` as needing conversion (`score / 100`) wherever it's cited going forward, rather than maintaining two live scales.
 
 **Mandatory rule:** `Simulation Engine`'s hardcoded `confidence: 0.86` (§12.4) must never be presented as a real confidence score in any UI copy or documentation — it is a placeholder. When a real confidence-producing step is built, it must derive its number from an actual evaluation signal (§18), never a constant.
 
@@ -770,7 +770,7 @@ Response: `{ status, confidence, evidence, artifacts, recommendations }`.
 - PM `MATURITY_MODEL.md`: a 7-level (0–6) maturity ladder, independent of both of the above.
 - **Resolution:** do not attempt to force these into one enum. Treat `STATE_MACHINE.md`'s 17 states as the implementation target for any code `status` field (it's the most granular and machine-shaped), `WORKFLOW.md`'s stages as the human-facing UI labels (with the explicit `playground`↔`testing` mapping noted), the PM `PROCESS.md` stages as *sub-steps that occur within* the orchestrator's `discovery`/`product-design` stages (not parallel top-level states), and the Maturity Model as an orthogonal, continuously-recomputed readiness score that doesn't gate transitions by itself.
 
-**31.5 Product Review vs. Architecture Review threshold asymmetry** — see §23.4. Flagged, not resolved; ADR owed.
+**31.5 Product Review vs. Architecture Review threshold asymmetry** — see §23.4. Flagged; DEC-003 (Proposed) recommends a fix; awaiting product owner ratification.
 
 **31.6 D-XXX rule ID collisions.** `orchestrator/DECISION_ENGINE.md` (D-001…D-008) and `skills/senior-ai-solution-architect/DECISION_ENGINE.md` (D-001…D-007) use the same ID scheme for entirely different rules; `skills/senior-product-manager/DECISION_ENGINE.md` uses no D-IDs at all (tables instead). **Resolution:** `D-XXX` IDs are **file-scoped, never global** — always cite them as `orchestrator/DECISION_ENGINE.md#D-001` or `skills/senior-ai-solution-architect/DECISION_ENGINE.md#D-001` in full, never bare "D-001."
 
@@ -1045,7 +1045,7 @@ problem | opportunity | prioritization | scope | ai-feasibility | model-selectio
 ## Review
 ```
 
-**Mandatory rule:** store ADRs under `docs/decisions/` (currently empty except `.gitkeep`, §5 RI-1) — this is the one empty scaffold directory in the repository that has an unambiguous, immediate, correct use: start filling it with the pending decisions already identified in this document (§1 naming, §23.4 threshold asymmetry, §25 confidence scale) before inventing new process for where decisions live.
+**Mandatory rule:** store ADRs under `docs/decisions/`. As of 2026-07-03 it holds `DEC-001` (product naming, Accepted), `DEC-002` (confidence scale, Accepted), and `DEC-003` (Product/Architecture review threshold asymmetry, **Proposed** — awaiting product owner ratification) — the three decisions already identified during full-repository discovery. Add new ADRs here as they arise; do not invent a second location for decisions.
 
 **Definition of Done:** a significant decision has a `DEC-NNN` file in `docs/decisions/` before or immediately after it's acted on — never only living in a chat transcript or PR description.
 
@@ -1411,7 +1411,7 @@ If applicable, map to one of `orchestrator/ERROR_HANDLING.md`'s 9 error_ids (§2
 6. **`Edge.condition.expression` and `Node.metadata` are untyped strings** with no parser/evaluator anywhere (§14.1) — looks like a DSL, isn't one yet.
 7. **`Prompt` has no lifecycle status and `ReviewTargetType` doesn't include `"prompt"`** (§16) — no code-level gate prevents an unreviewed prompt from reaching a production pipeline.
 8. **`pdf-notes.txt` sits unstructured at the repository root**, referencing two nonexistent paths (`reference/miro-as-is/`, `research/…`) and containing un-scrubbed real business/PII-adjacent data (§3.3, §50) — needs restructuring and a privacy review, not just a file move.
-9. **`docs/architecture/`, `docs/decisions/`, `docs/product/` are empty** despite ample source material to populate them (§7, §41).
+9. **`docs/architecture/`, `docs/product/` are still empty** despite ample source material to populate them (§7). **`docs/decisions/` — RESOLVED 2026-07-03**, now holds DEC-001/002/003 (§41).
 10. **Orchestrator/skills internal inconsistencies** cataloged exhaustively in §31 — none block current MVP operation (since none of that logic is implemented in code yet) but will block real orchestrator implementation if not resolved via ADR first.
 11. **Simulation Engine ignores `Node.promptId`/`modelId`/`temperature` entirely** (§12.4) — configuring a pipeline node currently has zero effect on Playground output, which will surprise anyone who assumes otherwise.
 
@@ -1482,7 +1482,7 @@ File(s)/module
 | PM Review bands | 90–100 approved / 75–89 approved w/ minor recs / 60–74 revise / 0–59 rejected | §35, `skills/senior-product-manager/REVIEW.md` |
 | Architect Review bands | Same numeric bands, different weighted criteria | `skills/senior-ai-solution-architect/REVIEW.md` |
 
-**Known asymmetry, restated for visibility:** the orchestrator's Product gate (§23.3) accepts the PM's "approved with minor recommendations" band (85–89), while its Architecture gate demands the architect's full "approved" band (90+) — flagged in §23.4, unresolved, ADR owed.
+**Known asymmetry, restated for visibility:** the orchestrator's Product gate (§23.3) accepts the PM's "approved with minor recommendations" band (85–89), while its Architecture gate demands the architect's full "approved" band (90+) — flagged in §23.4, DEC-003 Proposed (not yet Accepted).
 
 **Definition of Done:** any gate check in code or process cites the exact threshold from this table, never a paraphrase like "pretty good score."
 
