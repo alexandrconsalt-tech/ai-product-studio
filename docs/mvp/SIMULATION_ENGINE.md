@@ -23,6 +23,16 @@ Simulation создает:
 - latency;
 - duration.
 
+## Учёт конфигурации Node (добавлено 2026-07-03)
+
+Раньше Simulation Engine полностью игнорировал `Node.promptId`/`modelId`/`temperature` (см. CLAUDE.md §63 пункт 11). Теперь:
+
+- если в Pipeline есть `llm`-node с `promptId === "prompt_call_summary"`, output формируется по структурной схеме `CallAnalysisSummarySchema` (`src/shared/model/call-analysis-summary.ts`, CLAUDE.md §14.3), а не по generic-объекту `{summary, needs, risks, nextAction}`;
+- `confidence` больше не hardcoded `0.86` — вычисляется из `temperature` этого node (выше temperature → ниже confidence);
+- `modelId` этого node влияет на симулируемые cost/latency через простой multiplier (`model_fast` дешевле/быстрее `model_reasoning`).
+
+Это остаётся симуляцией, а не настоящим вызовом модели — эффект детерминированный и эвристический, не основан на реальном inference.
+
 ## Замена в будущем
 
 Настоящий Runtime должен заменить `simulatePipelineRun()` при сохранении интерфейса Playground Store и Repository.

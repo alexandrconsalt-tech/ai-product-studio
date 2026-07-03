@@ -1,31 +1,118 @@
+import type { Node } from "@/entities/Node/model/types";
 import type { Pipeline } from "@/entities/Pipeline/model/types";
 import type { Run, RunLog, RunMetric } from "@/entities/Run/model/types";
 import { createRun } from "@/entities/Run/model/factory";
 import { createTimestamp } from "@/entities/shared";
+import { CallAnalysisSummarySchema, type CallAnalysisSummary } from "@/shared/model/call-analysis-summary";
 
 export type SimulationResult = Readonly<{
   run: Run;
 }>;
 
+/**
+ * Prompt id used by the demo pipeline's structured-summary step
+ * (`demo-data.ts`'s `node_llm`). Recognizing it lets the simulator
+ * produce the real CallAnalysisSummary shape (CLAUDE.md §14.3)
+ * instead of a generic placeholder, without the domain model or the
+ * pipeline entity needing to know anything about "call analysis"
+ * specifically -- this stays a simulation-layer concern.
+ */
+const CALL_SUMMARY_PROMPT_ID = "prompt_call_summary";
+
+/**
+ * Rough per-model cost/latency multiplier, keyed by the demo Model
+ * ids. Unknown model ids default to 1 (neutral). This is still a
+ * simulation -- it does not call any real provider -- but it makes
+ * `Node.modelId` visibly affect the result, which it did not before
+ * (CLAUDE.md §63 debt item 11).
+ */
+const MODEL_COST_MULTIPLIER: Record<string, number> = {
+  model_fast: 0.35,
+  model_reasoning: 1,
+};
+
 const estimateTokens = (input: string, nodeCount: number): number => Math.max(420, Math.round(input.length * 2.8 + nodeCount * 180));
 
-export function simulatePipelineRun(pipeline: Pipeline, input: string): SimulationResult {
-  const startedAt = createTimestamp();
-  const tokens = estimateTokens(input, pipeline.nodes.length);
-  const latencyMs = Math.round(620 + pipeline.nodes.length * 115 + input.length * 1.4);
-  const costUsd = Number((tokens * 0.000018).toFixed(4));
-  const needs = input.toLowerCase().includes("crm") ? ["CRM integration", "implementation timeline", "summary accuracy"] : ["customer context", "follow-up clarity"];
-  const risks = input.toLowerCase().includes("стоим") || input.toLowerCase().includes("cost") ? ["cost sensitivity"] : ["confidence requires validation"];
-  const output = {
+function findSummaryNode(pipeline: Pipeline): Node | undefined {
+  return pipeline.nodes.find((node) => node.type === "llm" && node.promptId === CALL_SUMMARY_PROMPT_ID);
+}
+
+/**
+ * Higher temperature simulates a more variable, less deterministic
+ * model call, so confidence drops as temperature rises. This is a
+ * simulation heuristic, not a real calibration -- but it replaces the
+ * previous hardcoded `confidence: 0.86` with a value that actually
+ * responds to `Node.temperature` (CLAUDE.md §63 debt item 11, §25
+ * confidence scale is 0-1 float per DEC-002).
+ */
+function confidenceFromTemperature(temperature: number | undefined): number {
+  const effective = temperature ?? 0.3;
+  const bounded = Math.max(0, Math.min(2, effective));
+  return Math.round(Math.max(0.5, Math.min(0.95, 0.95 - bounded * 0.15)) * 100) / 100;
+}
+
+function firstSentence(input: string): string {
+  const sentence = input
+    .split(/[.!?\n]/)
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  return sentence ?? input.trim();
+}
+
+function buildCallAnalysisSummary(input: string, confidence: number): CallAnalysisSummary {
+  const lower = input.toLowerCase();
+  const excerpt = firstSentence(input) || "Transcript пуст.";
+
+  const summary: CallAnalysisSummary = {
+    кто: "Клиент (роль не диаризована в Simulation Engine)",
+    тип_контакта: lower.includes("кц") || lower.includes("контакт-центр") ? "contact_center" : "agent",
+    потребность: excerpt,
+    вопросы: lower.includes("?") ? ["Transcript содержит вопрос клиента — см. цитату."] : [],
+    статус: confidence < 0.72 ? "thinking" : "in_progress",
+    действие: confidence < 0.72 ? "Направить на Human Review (confidence ниже 0.72)." : "Обновить сделку и запланировать follow-up.",
+    цитаты: [excerpt],
+  };
+
+  return CallAnalysisSummarySchema.parse(summary);
+}
+
+function buildGenericOutput(input: string, confidence: number) {
+  const lower = input.toLowerCase();
+  const needs = lower.includes("crm") ? ["CRM integration", "implementation timeline", "summary accuracy"] : ["customer context", "follow-up clarity"];
+  const risks = lower.includes("стоим") || lower.includes("cost") ? ["cost sensitivity"] : ["confidence requires validation"];
+  return {
     summary: "Simulation Engine обработал transcript и сформировал structured call analysis.",
     needs,
     risks,
     nextAction: "Подготовить demo сценарий, показать validation и согласовать evaluation thresholds.",
-    confidence: 0.86,
+    confidence,
   };
+}
+
+export function simulatePipelineRun(pipeline: Pipeline, input: string): SimulationResult {
+  const startedAt = createTimestamp();
+  const summaryNode = findSummaryNode(pipeline);
+  const modelMultiplier = summaryNode?.modelId ? (MODEL_COST_MULTIPLIER[summaryNode.modelId] ?? 1) : 1;
+
+  const tokens = estimateTokens(input, pipeline.nodes.length);
+  const latencyMs = Math.round((620 + pipeline.nodes.length * 115 + input.length * 1.4) * modelMultiplier);
+  const costUsd = Number((tokens * 0.000018 * modelMultiplier).toFixed(4));
+  const confidence = confidenceFromTemperature(summaryNode?.temperature);
+
+  const output = summaryNode ? { ...buildCallAnalysisSummary(input, confidence), confidence } : buildGenericOutput(input, confidence);
+
   const logs: RunLog[] = [
     { timestamp: startedAt, level: "info", message: "Simulation run started." },
     ...pipeline.nodes.map((node) => ({ timestamp: createTimestamp(), level: "info" as const, message: `${node.name} completed.` })),
+    ...(summaryNode
+      ? [
+          {
+            timestamp: createTimestamp(),
+            level: "info" as const,
+            message: `Summary node "${summaryNode.name}" used model=${summaryNode.modelId ?? "unset"} prompt=${summaryNode.promptId ?? "unset"} temperature=${summaryNode.temperature ?? "unset"}.`,
+          },
+        ]
+      : []),
     { timestamp: createTimestamp(), level: "info", message: "Simulation output generated." },
   ];
   const metrics: RunMetric[] = [
@@ -50,4 +137,3 @@ export function simulatePipelineRun(pipeline: Pipeline, input: string): Simulati
     }),
   };
 }
-
