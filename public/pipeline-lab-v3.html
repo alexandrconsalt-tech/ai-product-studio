@@ -377,19 +377,19 @@ function defaultPipeline(){
       id:s(), enabled:true, type:'llm', name:'Генерация саммари',
       model:'gpt-5-mini', outKey:'summary',
       prompt:
-`Ты — Summary Agent. Составь саммари звонка для карточки в CRM.
-Используй ТОЛЬКО факты из данных ниже. Ничего не добавляй от себя.
+`Ты — Summary Agent. Составь ОДНО короткое саммари звонка (1-2 предложения, деловой тон) для карточки в CRM.
+Саммари передаёт ТОЛЬКО суть и результат разговора (что решили / какой следующий шаг).
+НЕ пересказывай и не перечисляй данные, которые уже показаны в отдельных карточках CRM: характеристики объекта (площадь, этаж, локацию), способ оплаты, источник средств, документы (собственники, обременения) и потребности клиента — их повторение в саммари ЗАПРЕЩЕНО, даже если они есть в данных ниже.
 ЗАПРЕЩЕНО упоминать: номера телефонов, точные адреса, цены и суммы бюджета —
 они уже есть в структурированных полях карточки CRM.
-Максимум 3 предложения, деловой тон. Верни СТРОГО валидный JSON без markdown:
+Верни СТРОГО валидный JSON без markdown (без поля highlights — краткие пункты не нужны, только один текст):
 {
-  "summary": <текст саммари>,
-  "highlights": [<2-4 ключевых факта строками, без сумм и телефонов>]
+  "summary": <1-2 предложения: результат звонка и следующий шаг, без повторения структурированных фактов и потребностей>
 }
 
-Факты: {{ctx.facts}}
-Потребности: {{ctx.needs}}
-Результат звонка: {{ctx.outcome}}`
+Результат звонка: {{ctx.outcome}}
+Потребности (только для контекста, не пересказывать): {{ctx.needs}}
+Факты (только для контекста, не пересказывать): {{ctx.facts}}`
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка саммари',
@@ -860,18 +860,17 @@ function fmtNeed(v){
 function renderFinal(totalTokens, totalCost){
   const sm=ctx.summary, gate=ctx.gate, crm=ctx.crm, n=ctx.needs||{};
   const summary = (sm&&sm.summary) || '—';
-  const highlights = (sm&&sm.highlights)||[];
   const el=document.createElement('div'); el.className='final';
   const decision = gate? gate.decision : '—';
   const c = gate? (gate.confidence||0) : 0;
   const saved = crm? (crm.saved?'сохранена':'на ручной проверке') : '—';
 
-  // «Итоговое саммари»: текст саммари + потребности клиента (из
-  // «Определение потребностей» / ctx.needs) -- всё в одной карточке.
+  // «Итоговое саммари»: текст саммари (только суть/результат звонка,
+  // без пересказа фактов/потребностей -- см. промт Summary Agent) +
+  // потребности клиента (из «Определение потребностей» / ctx.needs).
   el.innerHTML=
     '<p class="fl">🎯 Итоговое саммари</p>'
     +'<p class="fs">'+escapeHtml(summary)+'</p>'
-    +(highlights.length?'<ul class="chklist" style="margin-bottom:14px">'+highlights.map(h=>'<li class="pass"><span class="ic">•</span><span>'+escapeHtml(h)+'</span></li>').join('')+'</ul>':'')
     +'<p class="fl" style="margin-top:4px">П Потребности клиента</p>'
     +'<div class="fmeta">'
     +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
