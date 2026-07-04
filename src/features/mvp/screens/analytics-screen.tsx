@@ -8,6 +8,7 @@ import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
 import { computeCostAnalytics } from "@/shared/evaluation/cost-analytics";
 import { assessProductionReadiness } from "@/shared/evaluation/production-readiness";
 import { evaluateGoldenDataset, type EvaluationReport } from "@/shared/evaluation/evaluate";
+import { runBenchmark, withNodeModel, type BenchmarkReport } from "@/shared/evaluation/benchmark";
 import { ILLUSTRATIVE_CALL_ANALYSIS_DATASET } from "@/shared/evaluation/golden-dataset";
 import { buildReportEnvelope } from "@/shared/evaluation/reports";
 import { downloadJson } from "@/shared/lib/download-json";
@@ -36,6 +37,30 @@ const PIPELINE_IDS_WITH_GOLDEN_DATASET = new Set(["pipeline_demo_call_analysis"]
 const REPOSITORY_TESTS_PASSING = true;
 
 /**
+ * The one node/model pair this repository has a real comparison to
+ * make (CLAUDE.md §28, `pdf-notes.txt` Этап 4: "benchmark 1-2
+ * cheaper/local models against the current baseline on simple
+ * steps"): the demo pipeline's summary node ("Need Extractor",
+ * `node_llm`) defaults to `model_reasoning` -- compare it against the
+ * cheaper `model_fast` on the same Golden Dataset. Scoped narrowly
+ * (one node, two named models) rather than a general "pick any
+ * node/model" UI, since this is the only pairing with a real dataset
+ * and a real cost story behind it today.
+ */
+const BENCHMARK_NODE_ID = "node_llm";
+const BENCHMARK_MODEL_IDS = ["model_reasoning", "model_fast"] as const;
+
+async function runModelComparisonBenchmark(pipeline: Pipeline, models: readonly Model[]) {
+  const registry = realStageRegistry({ llmProviders: defaultLLMProviderRegistry, prompts: seededPromptRegistry, models });
+  const variants = BENCHMARK_MODEL_IDS.map((modelId) => ({
+    id: modelId,
+    label: models.find((m) => m.id === modelId)?.name ?? modelId,
+    pipeline: withNodeModel(pipeline, BENCHMARK_NODE_ID, modelId),
+  }));
+  return runBenchmark(variants, ILLUSTRATIVE_CALL_ANALYSIS_DATASET, { executeOptions: { registry, projectId: pipeline.projectId } });
+}
+
+/**
  * Runs the illustrative Golden Dataset through the same real Pipeline
  * Executor Playground uses (`realStageRegistry`, mock LLM provider by
  * default) -- reusing the already-implemented evaluation mechanism
@@ -57,12 +82,15 @@ export function AnalyticsScreen() {
   const { pipeline, runs } = getProjectBundle(snapshot, selectedProjectId);
   const [evaluation, setEvaluation] = React.useState<EvaluationReport | null>(null);
   const [evaluating, setEvaluating] = React.useState(false);
+  const [benchmark, setBenchmark] = React.useState<BenchmarkReport | null>(null);
+  const [benchmarking, setBenchmarking] = React.useState(false);
 
   if (!pipeline) {
     return <EmptyState>Analytics станет доступна после создания Pipeline.</EmptyState>;
   }
 
   const goldenDatasetAvailable = PIPELINE_IDS_WITH_GOLDEN_DATASET.has(pipeline.id);
+  const benchmarkAvailable = goldenDatasetAvailable && pipeline.nodes.some((node) => node.id === BENCHMARK_NODE_ID);
   const traces = runs.map((run) => tracesByRunId[run.id]).filter((events): events is NonNullable<typeof events> => Boolean(events)).map((events) => buildExecutionTrace(pipeline, events));
 
   const cost = computeCostAnalytics(runs, traces);
@@ -83,6 +111,18 @@ export function AnalyticsScreen() {
   const exportEvaluationReport = () => {
     if (!evaluation) return;
     downloadJson(`evaluation-report-${pipeline.id}.json`, buildReportEnvelope("evaluation_report", evaluation));
+  };
+
+  const handleRunBenchmark = () => {
+    setBenchmarking(true);
+    runModelComparisonBenchmark(pipeline, snapshot?.models ?? [])
+      .then(setBenchmark)
+      .finally(() => setBenchmarking(false));
+  };
+
+  const exportBenchmarkReport = () => {
+    if (!benchmark) return;
+    downloadJson(`benchmark-report-${pipeline.id}.json`, buildReportEnvelope("benchmark_report", benchmark));
   };
 
   return (
@@ -153,6 +193,52 @@ export function AnalyticsScreen() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+      </Section>
+
+      <Section>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Benchmark: Model Comparison</h2>
+          {benchmarkAvailable ? (
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={handleRunBenchmark} disabled={benchmarking}>
+                <PlayCircle className="size-4" aria-hidden="true" />
+                {benchmarking ? "Benchmarking…" : "Run Benchmark"}
+              </Button>
+              <Button variant="secondary" onClick={exportBenchmarkReport} disabled={!benchmark}>
+                <Download className="size-4" aria-hidden="true" />
+                Benchmark Report
+              </Button>
+            </div>
+          ) : null}
+        </div>
+        {!benchmarkAvailable ? (
+          <EmptyState>Для этого Pipeline нет заданной пары моделей для сравнения (CLAUDE.md §28).</EmptyState>
+        ) : !benchmark ? (
+          <EmptyState>
+            Нажмите &quot;Run Benchmark&quot;, чтобы сравнить {BENCHMARK_MODEL_IDS.length} модели узла &quot;Need Extractor&quot; на одном Golden Dataset (CLAUDE.md §28 -- сравнение версий, а не проверка одной версии).
+          </EmptyState>
+        ) : (
+          <div className="mt-2 grid gap-3 md:grid-cols-2">
+            {benchmark.results.map((variantResult) => (
+              <Card key={variantResult.variantId} className="grid gap-2">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium">{variantResult.variantLabel}</p>
+                  <Badge tone={variantResult.evaluation.passRate > 0 ? "success" : "neutral"}>
+                    {variantResult.evaluation.passedExamples}/{variantResult.evaluation.totalExamples} passed ({Math.round(variantResult.evaluation.passRate * 100)}%)
+                  </Badge>
+                </div>
+                <div className="grid gap-1">
+                  {variantResult.evaluation.results.map((result) => (
+                    <div key={result.exampleId} className="flex items-start gap-2 rounded-md border border-border p-2 text-xs">
+                      {result.passed ? <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-success" aria-hidden="true" /> : <XCircle className="mt-0.5 size-3 shrink-0 text-error" aria-hidden="true" />}
+                      <span>{result.exampleId}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ))}
           </div>
         )}
       </Section>
