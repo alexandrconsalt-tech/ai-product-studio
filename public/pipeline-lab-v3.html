@@ -163,20 +163,32 @@
   </header>
 
   <div class="card" style="margin-bottom:16px">
-    <div class="card-h"><span class="n">🔑</span> API-ключ Anthropic</div>
+    <div class="card-h"><span class="n">🔑</span> API-ключи</div>
     <div class="card-b">
-      <label class="fld">Ключ (sk-ant-…)</label>
+      <label class="fld">Anthropic (для шагов с моделью «Claude Sonnet 4.6», sk-ant-…)</label>
       <div class="row">
         <input type="password" id="apiKey" placeholder="sk-ant-api03-..." style="flex:1;min-width:220px" autocomplete="off">
         <button class="btn ghost sm" id="saveKeyBtn">Сохранить</button>
         <button class="btn ghost sm" id="clearKeyBtn">Удалить</button>
       </div>
       <div class="hintbar" id="keyStatus"></div>
+
+      <label class="fld" style="margin-top:14px">OpenAI (для шагов с моделью «GPT-5 mini», sk-…)</label>
+      <div class="row">
+        <input type="password" id="openaiKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off">
+        <button class="btn ghost sm" id="saveOpenaiKeyBtn">Сохранить</button>
+        <button class="btn ghost sm" id="clearOpenaiKeyBtn">Удалить</button>
+      </div>
+      <div class="hintbar" id="openaiKeyStatus"></div>
+
       <details class="help">
-        <summary>Где взять ключ и куда он уходит</summary>
+        <summary>Где взять ключи и куда они уходят</summary>
         <div class="hc">
-          Ключ создаётся в <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:var(--svc)">console.anthropic.com/settings/keys</a>.<br>
-          Хранится ТОЛЬКО в localStorage этого браузера (ключ <code class="inl">pipelineLabV3.anthropicApiKey</code>) и отправляется напрямую в <code class="inl">api.anthropic.com</code> при каждом LLM/Проверщик-шаге — никуда больше, ни на какой другой сервер. Никогда не публикуйте эту страницу с сохранённым ключом посторонним и не заходите с чужого компьютера, не удалив ключ после теста (кнопка «Удалить»).
+          Anthropic-ключ создаётся в <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:var(--svc)">console.anthropic.com/settings/keys</a>,
+          OpenAI-ключ — в <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style="color:var(--svc)">platform.openai.com/api-keys</a>.<br>
+          Каждый ключ используется только для шагов со своим вендором (см. поле «Модель» у шага) и хранится ТОЛЬКО в localStorage этого браузера
+          (<code class="inl">pipelineLabV3.anthropicApiKey</code>, <code class="inl">pipelineLabV3.openaiApiKey</code>) — отправляется напрямую в <code class="inl">api.anthropic.com</code> / <code class="inl">api.openai.com</code> соответственно, никуда больше.
+          Никогда не публикуйте эту страницу с сохранёнными ключами посторонним и не заходите с чужого компьютера, не удалив ключи после теста.
         </div>
       </details>
     </div>
@@ -255,11 +267,12 @@ const TYPE_META = {
   code: {label:'Код',       c:'var(--code)',   bg:'rgba(245,158,11,.12)',  l:'rgba(245,158,11,.4)'},
   store:{label:'Хранилище', c:'var(--gate)',   bg:'rgba(251,113,133,.12)', l:'rgba(251,113,133,.4)'},
 };
-// В песочнице реально доступен только Claude. В проде — маппинг на реального вендора.
-const SANDBOX_MODEL = 'claude-sonnet-4-6';
+// Каждая модель вызывает своего реального вендора напрямую из браузера
+// (см. callModel) -- используется свой сохранённый API-ключ на модель.
+const MODEL_VENDOR = { 'gpt-5-mini':'openai', 'claude-sonnet-4-6':'anthropic' };
 const MODEL_OPTIONS = [
-  {v:'gpt-5-mini',        t:'GPT-5 mini (прод) → Claude в песочнице'},
-  {v:'claude-sonnet-4-6', t:'Claude Sonnet 4.6'},
+  {v:'gpt-5-mini',        t:'GPT-5 mini (OpenAI)'},
+  {v:'claude-sonnet-4-6', t:'Claude Sonnet 4.6 (Anthropic)'},
 ];
 const CODE_FN_LIST = ['stt','validate','store','gate','crm'];
 
@@ -606,21 +619,28 @@ function tmpl(str, ctx){
   });
 }
 
-// ── API-ключ: хранится только в localStorage этого браузера ────────────────
+// ── API-ключи: хранятся только в localStorage этого браузера ────────────────
 const API_KEY_STORAGE='pipelineLabV3.anthropicApiKey';
+const OPENAI_KEY_STORAGE='pipelineLabV3.openaiApiKey';
 function loadApiKey(){ return localStorage.getItem(API_KEY_STORAGE)||''; }
+function loadOpenaiKey(){ return localStorage.getItem(OPENAI_KEY_STORAGE)||''; }
 function maskKey(k){ return k.length>10? k.slice(0,10)+'…'+k.slice(-4) : k; }
 function updateKeyStatus(){
   const k=loadApiKey();
   const el=document.getElementById('keyStatus');
-  el.textContent = k? ('Ключ сохранён: '+maskKey(k)) : 'Ключ не задан — LLM- и Проверщик-шаги не смогут вызвать модель.';
+  el.textContent = k? ('Ключ сохранён: '+maskKey(k)) : 'Ключ не задан — шаги с моделью «Claude Sonnet 4.6» не смогут вызвать модель.';
+  el.style.color = k? 'var(--ok)' : 'var(--dim)';
+}
+function updateOpenaiKeyStatus(){
+  const k=loadOpenaiKey();
+  const el=document.getElementById('openaiKeyStatus');
+  el.textContent = k? ('Ключ сохранён: '+maskKey(k)) : 'Ключ не задан — шаги с моделью «GPT-5 mini» не смогут вызвать модель.';
   el.style.color = k? 'var(--ok)' : 'var(--dim)';
 }
 
-async function callModel(prompt, model){
-  const useModel = SANDBOX_MODEL; // в песочнице только Claude
+async function callAnthropic(prompt, model){
   const apiKey = loadApiKey();
-  if(!apiKey) throw new Error('Не задан API-ключ Anthropic — введите его в карточке «API-ключ Anthropic» вверху страницы.');
+  if(!apiKey) throw new Error('Не задан API-ключ Anthropic — введите его в карточке «API-ключи» вверху страницы.');
   const res = await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",
     headers:{
@@ -629,17 +649,44 @@ async function callModel(prompt, model){
       "anthropic-version":"2023-06-01",
       "anthropic-dangerous-direct-browser-access":"true"
     },
-    body:JSON.stringify({ model:useModel, max_tokens:1500,
+    body:JSON.stringify({ model, max_tokens:1500,
       messages:[{role:"user",content:prompt}] })
   });
   if(!res.ok){
     let detail='';
     try{ const errBody=await res.json(); detail=(errBody&&errBody.error&&errBody.error.message)||''; }catch(e){}
-    throw new Error('API '+res.status+(detail?': '+detail:''));
+    throw new Error('Anthropic API '+res.status+(detail?': '+detail:''));
   }
   const data=await res.json();
-  const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
-  return text;
+  return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+}
+
+// OpenAI's API does not send CORS headers for browser origins, so a
+// direct fetch() to api.openai.com from this page fails at the network
+// level (confirmed live: "Failed to fetch", not an OpenAI error
+// response). Routed through this app's own /api/openai-proxy instead --
+// a stateless relay that makes the same request server-to-server. The
+// key still comes from this browser's localStorage and is sent only in
+// this one request body; the proxy does not store or log it.
+async function callOpenAI(prompt, model){
+  const apiKey = loadOpenaiKey();
+  if(!apiKey) throw new Error('Не задан API-ключ OpenAI — введите его в карточке «API-ключи» вверху страницы.');
+  const res = await fetch("/api/openai-proxy",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ apiKey, model, prompt })
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok){
+    const detail=(data&&data.error&&data.error.message)||'';
+    throw new Error('OpenAI API '+res.status+(detail?': '+detail:''));
+  }
+  return (data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+}
+
+async function callModel(prompt, model){
+  const vendor = MODEL_VENDOR[model] || 'anthropic';
+  return vendor==='openai' ? callOpenAI(prompt, model) : callAnthropic(prompt, model);
 }
 function parseJSON(text){
   let t=text.trim().replace(/```json/gi,'').replace(/```/g,'').trim();
@@ -665,7 +712,7 @@ async function runStage(stage, ctx){
     const ms=Math.round(performance.now()-t0);
     return { output: parsed || {raw}, raw, parseErr, ms,
       status: parseErr?'warn':'ok',
-      metrics:[['Модель',stage.model&&stage.model.includes('gpt')?'GPT-5 mini*':'Claude'],['Время',ms+' мс'],
+      metrics:[['Модель',stage.model&&stage.model.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude'],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
   }
 }
@@ -684,8 +731,11 @@ async function runPipeline(){
   if(!transcript){ toast('Загрузите транскрипцию'); return; }
   const active=pipeline.filter(s=>s.enabled);
   if(!active.length){ toast('Нет активных шагов'); return; }
-  const needsModel = active.some(s=>s.type==='llm'||s.type==='check');
-  if(needsModel && !loadApiKey()){ toast('Задайте API-ключ Anthropic вверху страницы'); return; }
+  const modelSteps = active.filter(s=>s.type==='llm'||s.type==='check');
+  const needsAnthropic = modelSteps.some(s=>(MODEL_VENDOR[s.model]||'anthropic')==='anthropic');
+  const needsOpenai = modelSteps.some(s=>MODEL_VENDOR[s.model]==='openai');
+  if(needsAnthropic && !loadApiKey()){ toast('Задайте API-ключ Anthropic вверху страницы (нужен для шагов с Claude)'); return; }
+  if(needsOpenai && !loadOpenaiKey()){ toast('Задайте API-ключ OpenAI вверху страницы (нужен для шагов с GPT-5 mini)'); return; }
 
   ctx={ __transcript:transcript };
   reportsEl.innerHTML=''; emptyState.style.display='none';
@@ -718,7 +768,7 @@ function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='bad'?'bad':
 function badgeText(st){return st==='ok'?'OK':st==='warn'?'Внимание':st==='bad'?'Ошибка':'…';}
 function whoLabel(stage){
   if(stage.vendor) return stage.vendor;
-  if(stage.model) return stage.model.includes('gpt')?'GPT-5 mini* → Claude':'Claude Sonnet 4.6';
+  if(stage.model) return stage.model.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)';
   return '';
 }
 
@@ -964,8 +1014,24 @@ document.getElementById('clearKeyBtn').addEventListener('click',()=>{
   toast('Ключ удалён');
 });
 
+const openaiKeyInput=document.getElementById('openaiKey');
+openaiKeyInput.value=loadOpenaiKey();
+document.getElementById('saveOpenaiKeyBtn').addEventListener('click',()=>{
+  const v=openaiKeyInput.value.trim();
+  if(!v){ toast('Введите ключ перед сохранением'); return; }
+  localStorage.setItem(OPENAI_KEY_STORAGE,v);
+  updateOpenaiKeyStatus();
+  toast('Ключ OpenAI сохранён в этом браузере');
+});
+document.getElementById('clearOpenaiKeyBtn').addEventListener('click',()=>{
+  localStorage.removeItem(OPENAI_KEY_STORAGE);
+  openaiKeyInput.value='';
+  updateOpenaiKeyStatus();
+  toast('Ключ OpenAI удалён');
+});
+
 // инициализация
-renderStages(); updateCount(); updateKeyStatus();
+renderStages(); updateCount(); updateKeyStatus(); updateOpenaiKeyStatus();
 </script>
 </body>
 </html>
