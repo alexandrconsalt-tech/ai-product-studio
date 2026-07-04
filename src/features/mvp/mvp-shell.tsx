@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FolderKanban, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation } from "@/shared/ui";
+import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation, Card } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { getProjectBundle } from "./selectors";
@@ -148,6 +148,19 @@ function SettingsScreen() {
       <h1 className="text-2xl font-semibold">Settings</h1>
       <p className="max-w-2xl text-sm text-text-muted">MVP использует Local Storage Repository. Можно сбросить данные к Demo Project.</p>
       <Button className="w-fit" onClick={reset}>Сбросить Demo Repository</Button>
+
+      <Card className="grid max-w-2xl gap-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Runtime</h2>
+          <Badge tone="neutral">Mock LLM Provider</Badge>
+        </div>
+        <p className="text-sm text-text-muted">
+          Playground, Golden Dataset Evaluation и Benchmark всегда выполняются реальным Pipeline Executor, но LLM-вызовы сейчас идут через Mock LLM Provider (без сети, без реальной модели) — поэтому оценки в Analytics честно показывают низкий pass rate.
+        </p>
+        <p className="text-sm text-text-muted">
+          Это не переключается конфигурацией в UI: `configureFromEnv()` (`src/shared/llm/provider-registry.ts`) умеет собрать реальный `OpenAiCompatibleProvider` из `OPENAI_API_KEY`, но каждый экран, вызывающий Runtime (Playground, Analytics), — клиентский компонент, а Next.js не пробрасывает серверные переменные окружения (без префикса `NEXT_PUBLIC_`) в клиентский бандл. Включить реальный provider сегодня означало бы либо публично раскрыть API-ключ в браузере (нарушает CLAUDE.md §49 SEC-1), либо перенести LLM-вызовы за серверный API route — этого пока нет в репозитории (§10 SB-1).
+        </p>
+      </Card>
     </div>
   );
 }

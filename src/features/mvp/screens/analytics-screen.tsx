@@ -50,6 +50,18 @@ const REPOSITORY_TESTS_PASSING = true;
 const BENCHMARK_NODE_ID = "node_llm";
 const BENCHMARK_MODEL_IDS = ["model_reasoning", "model_fast"] as const;
 
+/**
+ * Shown whenever a pass rate is 0% -- clarifies that this is expected
+ * under the default Mock LLM Provider (its output never matches
+ * `CallAnalysisSummarySchema`, so every schema-dependent scorer fails
+ * by design, see `evaluate.test.ts`) rather than implying the
+ * pipeline/prompt itself is broken. See Settings for why a real
+ * provider can't be toggled on from this client-only app today.
+ */
+function MockProviderNote() {
+  return <p className="text-xs text-text-muted">0% ожидаемо при Mock LLM Provider — см. Settings → Runtime.</p>;
+}
+
 async function runModelComparisonBenchmark(pipeline: Pipeline, models: readonly Model[]) {
   const registry = realStageRegistry({ llmProviders: defaultLLMProviderRegistry, prompts: seededPromptRegistry, models });
   const variants = BENCHMARK_MODEL_IDS.map((modelId) => ({
@@ -182,6 +194,7 @@ export function AnalyticsScreen() {
             <p className="text-sm text-text-muted">
               Dataset {evaluation.datasetId} v{evaluation.datasetVersion} · {evaluation.passedExamples}/{evaluation.totalExamples} passed ({Math.round(evaluation.passRate * 100)}%)
             </p>
+            {evaluation.passRate === 0 ? <MockProviderNote /> : null}
             <div className="grid gap-1">
               {evaluation.results.map((result) => (
                 <div key={result.exampleId} className="flex items-start gap-2 rounded-md border border-border p-2 text-sm">
@@ -229,6 +242,7 @@ export function AnalyticsScreen() {
                     {variantResult.evaluation.passedExamples}/{variantResult.evaluation.totalExamples} passed ({Math.round(variantResult.evaluation.passRate * 100)}%)
                   </Badge>
                 </div>
+                {variantResult.evaluation.passRate === 0 ? <MockProviderNote /> : null}
                 <div className="grid gap-1">
                   {variantResult.evaluation.results.map((result) => (
                     <div key={result.exampleId} className="flex items-start gap-2 rounded-md border border-border p-2 text-xs">
