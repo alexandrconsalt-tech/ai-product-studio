@@ -424,7 +424,27 @@ function defaultPipeline(){
 }
 let idc = 0; function s(){ return 'st'+(++idc); }
 
-let pipeline = defaultPipeline();
+// ── сохранённая пользователем конфигурация пайплайна ────────────────────
+// Хранится ТОЛЬКО в localStorage этого браузера. Каждый блок шага имеет
+// свою кнопку «Сохранить», но грануляр хранения -- весь пайплайн целиком
+// (так же, как раньше работал экспорт/импорт): при нажатии сохраняются
+// все текущие изменения по всем шагам разом, включая ещё не сохранённые
+// правки в других блоках.
+const PIPELINE_CONFIG_STORAGE='pipelineLabV3.pipelineConfig';
+function savePipelineConfig(){
+  localStorage.setItem(PIPELINE_CONFIG_STORAGE, JSON.stringify(pipeline.map(sanitize)));
+}
+function loadPipelineConfig(){
+  try{
+    const raw=localStorage.getItem(PIPELINE_CONFIG_STORAGE);
+    if(!raw) return null;
+    const arr=JSON.parse(raw);
+    if(!Array.isArray(arr) || !arr.length) return null;
+    return arr.map(x=>({id:s(), ...x}));
+  }catch(e){ return null; }
+}
+
+let pipeline = loadPipelineConfig() || defaultPipeline();
 let ctx = {};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -965,6 +985,7 @@ function renderStages(){
       +'<div class="stage-actions" style="margin-top:10px">'
       +'<button class="btn ghost sm" data-up '+(i===0?'disabled':'')+'>↑</button>'
       +'<button class="btn ghost sm" data-down '+(i===pipeline.length-1?'disabled':'')+'>↓</button>'
+      +'<button class="btn sm" data-save>💾 Сохранить</button>'
       +'<div class="spacer"></div>'
       +'<button class="btn ghost sm" data-del style="color:var(--bad)">Удалить</button>'
       +'</div>'
@@ -989,6 +1010,10 @@ function renderStages(){
     el.querySelector('[data-up]').addEventListener('click',()=>{if(i>0){[pipeline[i-1],pipeline[i]]=[pipeline[i],pipeline[i-1]];renderStages();}});
     el.querySelector('[data-down]').addEventListener('click',()=>{if(i<pipeline.length-1){[pipeline[i+1],pipeline[i]]=[pipeline[i],pipeline[i+1]];renderStages();}});
     el.querySelector('[data-del]').addEventListener('click',()=>{pipeline.splice(i,1);renderStages();});
+    el.querySelector('[data-save]').addEventListener('click',()=>{
+      savePipelineConfig();
+      toast('Шаг «'+stage.name+'» сохранён — будет использоваться в следующих запусках');
+    });
 
     stagesEl.appendChild(el);
   });
