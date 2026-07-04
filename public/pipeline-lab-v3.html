@@ -39,7 +39,7 @@
 
   label.fld{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
     font-weight:700;margin:0 0 6px}
-  textarea,input[type=text],select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  textarea,input[type=text],input[type=password],select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
     color:var(--ink);font-family:inherit;font-size:13px;padding:10px 12px;resize:vertical}
   textarea{min-height:120px;line-height:1.55}
   textarea.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px}
@@ -161,6 +161,26 @@
       <label class="btn ghost sm" style="margin:0">↑ Импорт<input type="file" id="importFile" accept=".json" style="display:none"></label>
     </div>
   </header>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-h"><span class="n">🔑</span> API-ключ Anthropic</div>
+    <div class="card-b">
+      <label class="fld">Ключ (sk-ant-…)</label>
+      <div class="row">
+        <input type="password" id="apiKey" placeholder="sk-ant-api03-..." style="flex:1;min-width:220px" autocomplete="off">
+        <button class="btn ghost sm" id="saveKeyBtn">Сохранить</button>
+        <button class="btn ghost sm" id="clearKeyBtn">Удалить</button>
+      </div>
+      <div class="hintbar" id="keyStatus"></div>
+      <details class="help">
+        <summary>Где взять ключ и куда он уходит</summary>
+        <div class="hc">
+          Ключ создаётся в <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:var(--svc)">console.anthropic.com/settings/keys</a>.<br>
+          Хранится ТОЛЬКО в localStorage этого браузера (ключ <code class="inl">pipelineLabV3.anthropicApiKey</code>) и отправляется напрямую в <code class="inl">api.anthropic.com</code> при каждом LLM/Проверщик-шаге — никуда больше, ни на какой другой сервер. Никогда не публикуйте эту страницу с сохранённым ключом посторонним и не заходите с чужого компьютера, не удалив ключ после теста (кнопка «Удалить»).
+        </div>
+      </details>
+    </div>
+  </div>
 
   <div class="grid">
     <!-- СЛЕВА: вход + конфигурация пайплайна -->
@@ -586,14 +606,37 @@ function tmpl(str, ctx){
   });
 }
 
+// ── API-ключ: хранится только в localStorage этого браузера ────────────────
+const API_KEY_STORAGE='pipelineLabV3.anthropicApiKey';
+function loadApiKey(){ return localStorage.getItem(API_KEY_STORAGE)||''; }
+function maskKey(k){ return k.length>10? k.slice(0,10)+'…'+k.slice(-4) : k; }
+function updateKeyStatus(){
+  const k=loadApiKey();
+  const el=document.getElementById('keyStatus');
+  el.textContent = k? ('Ключ сохранён: '+maskKey(k)) : 'Ключ не задан — LLM- и Проверщик-шаги не смогут вызвать модель.';
+  el.style.color = k? 'var(--ok)' : 'var(--dim)';
+}
+
 async function callModel(prompt, model){
   const useModel = SANDBOX_MODEL; // в песочнице только Claude
+  const apiKey = loadApiKey();
+  if(!apiKey) throw new Error('Не задан API-ключ Anthropic — введите его в карточке «API-ключ Anthropic» вверху страницы.');
   const res = await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST", headers:{"Content-Type":"application/json"},
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key": apiKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true"
+    },
     body:JSON.stringify({ model:useModel, max_tokens:1500,
       messages:[{role:"user",content:prompt}] })
   });
-  if(!res.ok) throw new Error('API '+res.status);
+  if(!res.ok){
+    let detail='';
+    try{ const errBody=await res.json(); detail=(errBody&&errBody.error&&errBody.error.message)||''; }catch(e){}
+    throw new Error('API '+res.status+(detail?': '+detail:''));
+  }
   const data=await res.json();
   const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
   return text;
@@ -641,6 +684,8 @@ async function runPipeline(){
   if(!transcript){ toast('Загрузите транскрипцию'); return; }
   const active=pipeline.filter(s=>s.enabled);
   if(!active.length){ toast('Нет активных шагов'); return; }
+  const needsModel = active.some(s=>s.type==='llm'||s.type==='check');
+  if(needsModel && !loadApiKey()){ toast('Задайте API-ключ Anthropic вверху страницы'); return; }
 
   ctx={ __transcript:transcript };
   reportsEl.innerHTML=''; emptyState.style.display='none';
@@ -902,8 +947,25 @@ document.getElementById('sampleBtn').addEventListener('click',()=>{
   updateCount(); toast('Пример вставлен');
 });
 
+// ── ключ API: wiring ──────────────────────────────────────────────────────
+const apiKeyInput=document.getElementById('apiKey');
+apiKeyInput.value=loadApiKey();
+document.getElementById('saveKeyBtn').addEventListener('click',()=>{
+  const v=apiKeyInput.value.trim();
+  if(!v){ toast('Введите ключ перед сохранением'); return; }
+  localStorage.setItem(API_KEY_STORAGE,v);
+  updateKeyStatus();
+  toast('Ключ сохранён в этом браузере');
+});
+document.getElementById('clearKeyBtn').addEventListener('click',()=>{
+  localStorage.removeItem(API_KEY_STORAGE);
+  apiKeyInput.value='';
+  updateKeyStatus();
+  toast('Ключ удалён');
+});
+
 // инициализация
-renderStages(); updateCount();
+renderStages(); updateCount(); updateKeyStatus();
 </script>
 </body>
 </html>
