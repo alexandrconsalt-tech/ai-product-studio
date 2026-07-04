@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline Lab — тестовый стенд AI-пайплайнов</title>
+<style>
+  :root{
+    --bg:#0a0e17; --panel:#111827; --panel2:#161f30; --panel3:#1c2740;
+    --line:#26324d; --line2:#324063;
+    --ink:#e9eef8; --muted:#8b98b6; --dim:#5a6788;
+    --svc:#38bdf8; --code:#f59e0b; --gpt:#34d399; --claude:#a78bfa; --gate:#fb7185;
+    --ok:#34d399; --warn:#fbbf24; --bad:#fb7185;
+    --okbg:rgba(52,211,153,.12); --warnbg:rgba(251,191,36,.12); --badbg:rgba(251,113,133,.12);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:
+      radial-gradient(1100px 500px at 10% -10%,rgba(56,189,248,.06),transparent 60%),
+      radial-gradient(900px 450px at 110% 5%,rgba(167,139,250,.06),transparent 55%),var(--bg);
+    color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;
+    line-height:1.5;font-size:14px}
+  .app{max-width:1340px;margin:0 auto;padding:22px 20px 80px}
+
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+  .eyebrow{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);font-weight:700;margin:0 0 6px}
+  h1{font-size:24px;margin:0;letter-spacing:-.02em;font-weight:800}
+  h1 .g{background:linear-gradient(90deg,#38bdf8,#a78bfa 55%,#34d399);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{color:var(--muted);font-size:13px;margin:4px 0 0;max-width:640px}
+
+  .grid{display:grid;grid-template-columns:400px 1fr;gap:18px;align-items:start}
+  @media (max-width:980px){.grid{grid-template-columns:1fr}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .card-h{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;
+    font-weight:700;font-size:13px;letter-spacing:.02em}
+  .card-h .n{width:22px;height:22px;border-radius:6px;background:var(--panel3);display:flex;align-items:center;
+    justify-content:center;font-size:12px;color:var(--muted)}
+  .card-b{padding:14px 16px}
+
+  label.fld{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+    font-weight:700;margin:0 0 6px}
+  textarea,input[type=text],select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    color:var(--ink);font-family:inherit;font-size:13px;padding:10px 12px;resize:vertical}
+  textarea{min-height:120px;line-height:1.55}
+  textarea.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  select{cursor:pointer}
+  input[type=file]{font-size:12px;color:var(--muted)}
+  ::placeholder{color:var(--dim)}
+
+  .btn{background:var(--panel3);border:1px solid var(--line2);color:var(--ink);border-radius:9px;
+    padding:9px 15px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+  .btn:hover{border-color:var(--svc);color:#fff}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(90deg,rgba(56,189,248,.22),rgba(167,139,250,.22));border-color:var(--svc)}
+  .btn.sm{padding:5px 10px;font-size:12px}
+  .btn.ghost{background:transparent}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .spacer{flex:1}
+
+  /* конфигурация пайплайна */
+  .stage{background:var(--panel2);border:1px solid var(--line);border-radius:11px;margin-bottom:9px;overflow:hidden;
+    transition:border-color .15s}
+  .stage.disabled{opacity:.5}
+  .stage-h{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer}
+  .stage-h .bar{width:4px;align-self:stretch;border-radius:3px;background:var(--sc,var(--line))}
+  .stage-h .st-idx{width:24px;height:24px;border-radius:7px;background:var(--panel3);color:var(--sc);
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex:0 0 auto}
+  .stage-h .st-name{font-weight:700;font-size:13px;flex:1;min-width:0}
+  .stage-h .st-type{font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;text-transform:uppercase;
+    letter-spacing:.05em;background:var(--scbg);color:var(--sc);border:1px solid var(--scl)}
+  .stage-h .chev{color:var(--dim);transition:transform .2s;font-size:12px}
+  .stage.open .chev{transform:rotate(90deg)}
+  .stage-body{display:none;padding:0 12px 12px;border-top:1px solid var(--line)}
+  .stage.open .stage-body{display:block}
+  .stage-body .mini{display:flex;gap:8px;margin:10px 0}
+  .stage-body .mini > div{flex:1}
+  .toggle{position:relative;width:34px;height:20px;flex:0 0 auto}
+  .toggle input{opacity:0;width:0;height:0}
+  .toggle .sl{position:absolute;inset:0;background:var(--line2);border-radius:20px;cursor:pointer;transition:.2s}
+  .toggle .sl::before{content:"";position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;
+    border-radius:50%;transition:.2s}
+  .toggle input:checked + .sl{background:var(--gpt)}
+  .toggle input:checked + .sl::before{transform:translateX(14px)}
+  .stage-actions{display:flex;gap:5px}
+
+  /* панель прогона */
+  .runbar{display:flex;gap:10px;align-items:center;padding:12px 16px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;margin-bottom:14px;position:sticky;top:10px;z-index:20;
+    backdrop-filter:blur(8px)}
+  .prog{flex:1;height:6px;background:var(--panel3);border-radius:6px;overflow:hidden}
+  .prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--svc),var(--claude));
+    border-radius:6px;transition:width .4s}
+  .status{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  /* отчёты */
+  .report{background:var(--panel);border:1px solid var(--line);border-radius:13px;margin-bottom:12px;overflow:hidden;
+    animation:slidein .35s cubic-bezier(.2,.8,.2,1)}
+  @keyframes slidein{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  .rep-h{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line)}
+  .rep-h .ri{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:14px;flex:0 0 auto}
+  .rep-h .rt{flex:1;min-width:0}
+  .rep-h .rt .rn{font-weight:700;font-size:14px}
+  .rep-h .rt .rm{font-size:11.5px;color:var(--dim)}
+  .rep-h .badge{font-size:11px;font-weight:800;padding:4px 10px;border-radius:7px;text-transform:uppercase;letter-spacing:.04em}
+  .badge.ok{background:var(--okbg);color:var(--ok)} .badge.warn{background:var(--warnbg);color:var(--warn)}
+  .badge.bad{background:var(--badbg);color:var(--bad)} .badge.run{background:rgba(56,189,248,.14);color:var(--svc)}
+  .rep-b{padding:14px 16px}
+  .metrics{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .metric{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:96px}
+  .metric .ml{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}
+  .metric .mv{font-size:17px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
+  .metric .mv.ok{color:var(--ok)} .metric .mv.warn{color:var(--warn)} .metric .mv.bad{color:var(--bad)}
+  .kvlist{font-size:12.5px}
+  .kvlist .k{color:var(--muted);display:inline-block;min-width:150px}
+  .kvlist > div{padding:4px 0;border-bottom:1px solid var(--line)}
+  .kvlist > div:last-child{border:none}
+  .out{background:#080c14;border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin-top:10px;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#c6d2ea;
+    white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;line-height:1.55}
+  .chklist{list-style:none;margin:0;padding:0}
+  .chklist li{display:flex;gap:8px;padding:5px 0;font-size:12.5px;align-items:baseline}
+  .chklist li .ic{font-weight:800;flex:0 0 auto}
+  .chklist li.pass .ic{color:var(--ok)} .chklist li.fail .ic{color:var(--bad)} .chklist li.warnli .ic{color:var(--warn)}
+
+  /* итоговое саммари */
+  .final{background:linear-gradient(160deg,rgba(52,211,153,.08),var(--panel));border:1px solid var(--gpt);
+    border-radius:14px;padding:20px 22px;margin-bottom:14px}
+  .final .fl{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--gpt);font-weight:800;margin:0 0 10px}
+  .final .fs{font-size:16px;line-height:1.6;margin:0 0 14px}
+  .final .fmeta{display:flex;gap:10px;flex-wrap:wrap}
+  .final .fmeta .fm{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12px}
+  .final .fmeta .fm b{color:var(--ink)}
+
+  .empty{text-align:center;color:var(--dim);padding:50px 20px;font-size:13px}
+  .empty .big{font-size:34px;margin-bottom:10px;opacity:.5}
+
+  .hintbar{font-size:11.5px;color:var(--dim);margin-top:8px}
+  .tag{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;
+    background:var(--panel3);color:var(--muted);margin-left:6px}
+  details.help{margin-top:10px}
+  details.help summary{cursor:pointer;font-size:12px;color:var(--muted);font-weight:600}
+  details.help .hc{font-size:12px;color:var(--muted);padding:8px 0;line-height:1.6}
+  code.inl{background:var(--panel3);padding:1px 6px;border-radius:5px;font-family:ui-monospace,monospace;font-size:11.5px;color:#c9d4e8}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel3);
+    border:1px solid var(--line2);border-radius:10px;padding:10px 18px;font-size:13px;z-index:100;
+    opacity:0;transition:opacity .3s;pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <p class="eyebrow">AI Pipeline Lab · Платформа VT</p>
+      <h1>Тестовый стенд <span class="g">AI-пайплайнов</span></h1>
+      <p class="lede">Полный пайплайн из десяти этапов: Nexara (STT) → валидация кодом → извлечение фактов → единое хранилище → потребности → результат звонка → саммари → проверка Claude → Quality Gate → сохранение в CRM. В песочнице сервисные этапы (Nexara, CRM) симулируются кодом, LLM-этапы вызывают реальную модель.</p>
+    </div>
+    <div class="row">
+      <button class="btn ghost sm" id="exportBtn">↓ Экспорт пайплайна</button>
+      <label class="btn ghost sm" style="margin:0">↑ Импорт<input type="file" id="importFile" accept=".json" style="display:none"></label>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- СЛЕВА: вход + конфигурация пайплайна -->
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-h"><span class="n">ВХ</span> Вход · улучшенная транскрипция</div>
+        <div class="card-b">
+          <label class="fld">Текст транскрипции (роли: Агент / Оператор / Клиент)</label>
+          <textarea id="transcript" placeholder="Клиент: Здравствуйте, интересует квартира...&#10;Агент: Добрый день! Да, конечно...&#10;Клиент: Рассматриваю до восьми миллионов, ипотека в процессе...&#10;Агент: Отлично, давайте назначим показ на пятницу 15-го в 14:00..."></textarea>
+          <div class="row" style="margin-top:8px">
+            <label class="btn ghost sm" style="margin:0">Загрузить .txt<input type="file" id="txtFile" accept=".txt,.md" style="display:none"></label>
+            <button class="btn ghost sm" id="sampleBtn">Вставить пример</button>
+            <div class="spacer"></div>
+            <span class="status" id="charCount">0 символов</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h">
+          <span class="n">П</span> Пайплайн
+          <div class="spacer"></div>
+          <select id="preset" style="width:auto;padding:5px 10px;font-size:12px">
+            <option value="default">Полный пайплайн VT</option>
+            <option value="blank">Пустой (свой продукт)</option>
+          </select>
+        </div>
+        <div class="card-b">
+          <div id="stages"></div>
+          <button class="btn ghost sm" id="addStage" style="width:100%;margin-top:6px">+ Добавить шаг</button>
+          <details class="help">
+            <summary>Переменные в промтах</summary>
+            <div class="hc">
+              <code class="inl">{{transcript}}</code> — текст транскрипции<br>
+              <code class="inl">{{ctx.КЛЮЧ}}</code> — результат шага с этим ключом (JSON)<br>
+              <code class="inl">{{ctx.facts.budget}}</code> — путь внутри результата<br>
+              Сервисные и код-шаги (<code class="inl">stt</code>, <code class="inl">validate</code>, <code class="inl">store</code>, <code class="inl">gate</code>, <code class="inl">crm</code>) выполняются детерминированно, без модели.
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- СПРАВА: прогон + отчёты -->
+    <div>
+      <div class="runbar">
+        <button class="btn primary" id="runBtn">▶ Прогнать пайплайн</button>
+        <button class="btn ghost sm" id="clearBtn">Очистить</button>
+        <div class="prog"><i id="progBar"></i></div>
+        <span class="status" id="runStatus">готов</span>
+      </div>
+      <div id="reports">
+        <div class="empty" id="emptyState">
+          <div class="big">⚙️</div>
+          Загрузите транскрипцию и нажмите «Прогнать пайплайн».<br>
+          После каждого этапа появится мини-отчёт, в конце — итоговое саммари.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  МОДЕЛИ / ТИПЫ ШАГОВ
+// ═══════════════════════════════════════════════════════════════════════════
+const TYPE_META = {
+  svc:  {label:'Сервис',    c:'var(--svc)',    bg:'rgba(56,189,248,.12)',  l:'rgba(56,189,248,.4)'},
+  llm:  {label:'LLM-агент', c:'var(--gpt)',    bg:'rgba(52,211,153,.12)',  l:'rgba(52,211,153,.4)'},
+  check:{label:'Проверщик', c:'var(--claude)', bg:'rgba(167,139,250,.12)', l:'rgba(167,139,250,.4)'},
+  code: {label:'Код',       c:'var(--code)',   bg:'rgba(245,158,11,.12)',  l:'rgba(245,158,11,.4)'},
+  store:{label:'Хранилище', c:'var(--gate)',   bg:'rgba(251,113,133,.12)', l:'rgba(251,113,133,.4)'},
+};
+// В песочнице реально доступен только Claude. В проде — маппинг на реального вендора.
+const SANDBOX_MODEL = 'claude-sonnet-4-6';
+const MODEL_OPTIONS = [
+  {v:'gpt-5-mini',        t:'GPT-5 mini (прод) → Claude в песочнице'},
+  {v:'claude-sonnet-4-6', t:'Claude Sonnet 4.6'},
+];
+const CODE_FN_LIST = ['stt','validate','store','gate','crm'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ДЕФОЛТНЫЙ ПАЙПЛАЙН — ДЕСЯТЬ ЭТАПОВ
+//  Nexara → Валидация → Факты → Хранилище → Потребности → Результат →
+//  Саммари → Проверка → Quality Gate → CRM
+// ═══════════════════════════════════════════════════════════════════════════
+function defaultPipeline(){
+  return [
+    {
+      id:s(), enabled:true, type:'svc', vendor:'Nexara',
+      name:'STT + улучшение транскрипции',
+      codeFn:'stt', outKey:'stt', prompt:''
+    },
+    {
+      id:s(), enabled:true, type:'code', vendor:'Code',
+      name:'Валидация транскрипции',
+      codeFn:'validate', outKey:'validation', prompt:''
+    },
+    {
+      id:s(), enabled:true, type:'llm', name:'Извлечение фактов',
+      model:'gpt-5-mini', outKey:'facts',
+      prompt:
+`Ты — Fact Agent пайплайна анализа звонков по недвижимости.
+Извлеки ФАКТЫ из транскрипции. Верни СТРОГО валидный JSON без markdown и пояснений.
+Если факт не прозвучал — ставь null. Отсутствие данных — это нормально, ничего не выдумывай.
+Для каждого факта, где возможно, приведи ДОСЛОВНУЮ цитату из транскрипции.
+
+Схема:
+{
+  "client_name": <имя клиента или null>,
+  "budget": <число в рублях или null>,
+  "budget_citation": <дословная цитата или null>,
+  "source_of_funds": [<массив из: "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено">],
+  "city_or_district": <город/район или null>,
+  "phone_mentioned": <true/false — звучал ли номер телефона>
+}
+
+Транскрипция:
+{{transcript}}`
+    },
+    {
+      id:s(), enabled:true, type:'store', vendor:'JSON Store',
+      name:'Единое хранилище',
+      codeFn:'store', outKey:'store',
+      required:['client_name'],
+      citationFields:[['budget','budget_citation']],
+      prompt:''
+    },
+    {
+      id:s(), enabled:true, type:'llm', name:'Определение потребностей',
+      model:'gpt-5-mini', outKey:'needs',
+      prompt:
+`Ты — Need Agent пайплайна анализа звонков по недвижимости.
+Определи ПОТРЕБНОСТИ клиента из транскрипции. Верни СТРОГО валидный JSON без markdown.
+Если потребность не обсуждалась — null или "не определено". Ничего не выдумывай.
+
+Схема:
+{
+  "interested_in": [<из: "Новостройки","Вторичка","Ипотека","Строительство","Аренда">],
+  "property_requirements": <краткое описание требований к объекту или null>,
+  "timeline": <из: "до 1 месяца","2-3 месяца","3-6 месяцев","более 6 месяцев","не определено">,
+  "timeline_citation": <дословная цитата или null>
+}
+
+Транскрипция:
+{{transcript}}`
+    },
+    {
+      id:s(), enabled:true, type:'llm', name:'Результат звонка',
+      model:'gpt-5-mini', outKey:'outcome',
+      prompt:
+`Ты — Outcome Agent пайплайна анализа звонков по недвижимости.
+Определи РЕЗУЛЬТАТ звонка. Верни СТРОГО валидный JSON без markdown.
+Для следующего шага приведи ДОСЛОВНУЮ цитату из транскрипции, если она есть.
+
+Схема:
+{
+  "call_result": <из: "назначен показ","назначен повторный звонок","клиент думает","отказ","нецелевой звонок">,
+  "next_step": <конкретный следующий шаг или null>,
+  "next_step_citation": <дословная цитата или null>,
+  "agreements": [<достигнутые договорённости строками>]
+}
+
+Транскрипция:
+{{transcript}}`
+    },
+    {
+      id:s(), enabled:true, type:'llm', name:'Генерация саммари',
+      model:'gpt-5-mini', outKey:'summary',
+      prompt:
+`Ты — Summary Agent. Составь саммари звонка для карточки в CRM.
+Используй ТОЛЬКО факты из данных ниже. Ничего не добавляй от себя.
+ЗАПРЕЩЕНО упоминать: номера телефонов, точные адреса, цены и суммы бюджета —
+они уже есть в структурированных полях карточки CRM.
+Максимум 3 предложения, деловой тон. Верни СТРОГО валидный JSON без markdown:
+{
+  "summary": <текст саммари>,
+  "highlights": [<2-4 ключевых факта строками, без сумм и телефонов>]
+}
+
+Факты: {{ctx.facts}}
+Потребности: {{ctx.needs}}
+Результат звонка: {{ctx.outcome}}`
+    },
+    {
+      id:s(), enabled:true, type:'check', name:'Проверка саммари',
+      model:'claude-sonnet-4-6', outKey:'summary_check',
+      prompt:
+`Ты — независимый Check Agent (кросс-вендорная проверка).
+Сверь саммари с данными хранилища и транскрипцией. Верни СТРОГО валидный JSON без markdown:
+{
+  "score": <0-100, точность и полнота саммари>,
+  "hallucinations": [<утверждения саммари, которых НЕТ в данных или транскрипции>],
+  "pii_found": [<телефоны, точные адреса или суммы, просочившиеся в саммари>],
+  "issues": [<прочие проблемы строками>]
+}
+
+Саммари: {{ctx.summary}}
+Данные хранилища: {{ctx.store}}
+
+Транскрипция:
+{{transcript}}`
+    },
+    {
+      id:s(), enabled:true, type:'code', vendor:'Code',
+      name:'Quality Gate',
+      codeFn:'gate', outKey:'gate', prompt:''
+    },
+    {
+      id:s(), enabled:true, type:'svc', vendor:'CRM',
+      name:'Сохранение в CRM',
+      codeFn:'crm', outKey:'crm', prompt:''
+    },
+  ];
+}
+let idc = 0; function s(){ return 'st'+(++idc); }
+
+let pipeline = defaultPipeline();
+let ctx = {};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ДЕТЕРМИНИРОВАННЫЕ ФУНКЦИИ (сервисы и код-шаги)
+// ═══════════════════════════════════════════════════════════════════════════
+function norm(str){ return (str||'').toLowerCase().replace(/[«»"'`.,!?—–-]/g,' ').replace(/\s+/g,' ').trim(); }
+
+function levenshtein(a,b){
+  const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
+  let prev=Array.from({length:n+1},(_,i)=>i),cur=new Array(n+1);
+  for(let i=1;i<=m;i++){cur[0]=i;
+    for(let j=1;j<=n;j++){const c=a[i-1]===b[j-1]?0:1;
+      cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+c);}
+    [prev,cur]=[cur,prev];}
+  return prev[n];
+}
+// поиск цитаты в тексте: точное вхождение → иначе fuzzy по окну слов
+function findCitation(citation, transcript){
+  if(!citation) return {found:false,ratio:0,method:'нет цитаты'};
+  const c=norm(citation), t=norm(transcript);
+  if(!c) return {found:false,ratio:0,method:'пустая цитата'};
+  if(t.includes(c)) return {found:true,ratio:1,method:'точное совпадение'};
+  const words=t.split(' '), cw=c.split(' ').length;
+  let best=0;
+  for(let i=0;i+cw<=words.length;i++){
+    const win=words.slice(i,i+cw).join(' ');
+    const d=levenshtein(win,c);
+    const r=1-d/Math.max(win.length,c.length);
+    if(r>best)best=r;
+  }
+  const found=best>=0.85;
+  return {found, ratio:+best.toFixed(2), method: found?'fuzzy-совпадение':'не найдено'};
+}
+
+const ENUMS = {
+  source_of_funds:['наличные','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено'],
+  timeline:['до 1 месяца','2-3 месяца','3-6 месяцев','более 6 месяцев','не определено'],
+  call_result:['назначен показ','назначен повторный звонок','клиент думает','отказ','нецелевой звонок'],
+};
+const ROLE_RX=['Агент','Клиент','Оператор','Менеджер'];
+
+const CODE_FUNCS = {
+  // ── этап Nexara: в Lab транскрипция уже улучшена, сервис симулируется ────
+  stt(stage,ctx){
+    const t=ctx.__transcript||'';
+    const lines=t.split('\n').filter(x=>x.trim()).length;
+    const roles=ROLE_RX.filter(r=>new RegExp('(^|\\n)\\s*'+r+'\\s*:','i').test(t));
+    return {output:{chars:t.length, lines, roles},
+      metrics:[['Символов',t.length],['Реплик',lines],['Ролей',roles.length]],
+      status: t.length>0?'ok':'bad',
+      checks:[{label:'В Lab подаётся уже улучшенная транскрипция — этап Nexara симулируется (в проде: аудио → STT → улучшение)', pass:true}]};
+  },
+
+  // ── валидация транскрипции детерминированным кодом ───────────────────────
+  validate(stage,ctx){
+    const t=ctx.__transcript||'';
+    const roles=ROLE_RX.filter(r=>new RegExp('(^|\\n)\\s*'+r+'\\s*:','i').test(t));
+    const turns=(t.match(/(^|\n)\s*[А-ЯЁA-Z][а-яёa-z]+\s*:/g)||[]).length;
+    const checks=[
+      {label:'Длина ≥ 200 символов', pass:t.length>=200},
+      {label:'Определены роли (минимум две)', pass:roles.length>=2},
+      {label:'Реплик не меньше четырёх', pass:turns>=4},
+      {label:'Есть реплики клиента', pass:/(^|\n)\s*клиент\s*:/i.test(t)},
+      {label:'Нет обрыва в конце (текст завершён)', pass:!/[а-яёa-z],\s*$/i.test(t.trim()), warn:true},
+    ];
+    const passed=checks.filter(c=>c.pass).length;
+    const score=checks.length? passed/checks.length : 1;
+    return {output:{valid: checks.every(c=>c.pass||c.warn), score:+score.toFixed(2), roles, turns},
+      metrics:[['Проверок',checks.length],['Прошло',passed],['Оценка',(score*100).toFixed(0)+'%']],
+      status: score>=0.8?'ok':(score>=0.6?'warn':'bad'),
+      checks};
+  },
+
+  // ── единое хранилище: схема + справочники + нормализация + цитаты ────────
+  store(stage,ctx){
+    const f={...(ctx.facts||{})};
+    const checks=[];
+    // обязательные поля: отсутствие — WARN, не ошибка (принцип «UNKNOWN — валидный статус»)
+    (stage.required||[]).forEach(field=>{
+      const ok = f[field]!==undefined && f[field]!==null && f[field]!=='';
+      checks.push({label:'Поле «'+field+'» заполнено', pass:ok, warn:!ok});
+    });
+    // справочники (source_of_funds — массив)
+    if(Array.isArray(f.source_of_funds)){
+      const bad=f.source_of_funds.filter(v=>!ENUMS.source_of_funds.includes(v));
+      checks.push({label:'«source_of_funds» из справочника', pass:bad.length===0, warn:bad.length>0});
+    } else if(f.source_of_funds!=null){
+      checks.push({label:'«source_of_funds» должен быть массивом', pass:false, warn:true});
+      f.source_of_funds=[String(f.source_of_funds)];
+    }
+    // бизнес-нормализация бюджета (детерминированно, кодом)
+    if(typeof f.budget==='number' && f.budget>0){
+      const cit=(f.budget_citation||'').toLowerCase();
+      let note='не требуется';
+      if(f.budget<1000 && /миллион|млн/.test(cit)){ f.budget_normalized=f.budget*1000000; note='×1 000 000 (в цитате «миллион»)'; }
+      else if(f.budget>=1000 && f.budget<100000){ f.budget_normalized=f.budget*1000; note='×1000 (сумма без единиц)'; }
+      else { f.budget_normalized=f.budget; }
+      checks.push({label:'Нормализация бюджета: '+note+' → '+f.budget_normalized.toLocaleString('ru-RU')+' ₽', pass:true});
+    }
+    // бизнес-правило: ипотека → бюджет указан
+    if(Array.isArray(f.source_of_funds) && f.source_of_funds.some(v=>/ипотека/.test(v))){
+      checks.push({label:'Ипотека → бюджет указан', pass:!!f.budget, warn:!f.budget});
+    }
+    // проверка цитат кодом (verify-before-store)
+    let verified=0,total=0;
+    (stage.citationFields||[]).forEach(([factF,citF])=>{
+      if(f[factF]!==undefined && f[factF]!==null && f[factF]!==''){
+        total++;
+        const res=findCitation(f[citF], ctx.__transcript);
+        if(res.found)verified++;
+        checks.push({label:'Цитата «'+factF+'»: '+res.method+' ('+(res.ratio*100).toFixed(0)+'%)', pass:res.found, warn:!res.found});
+      }
+    });
+    const evRatio= total? verified/total : 1;
+    const failed=checks.filter(c=>!c.pass&&!c.warn).length;
+    const passed=checks.filter(c=>c.pass).length;
+    const score=checks.length? passed/checks.length : 1;
+    return {output:{record:f, evidence:{verified,total,ratio:+evRatio.toFixed(2)}, schema_ok:failed===0, score:+score.toFixed(2)},
+      metrics:[['Проверок',checks.length],['Цитаты',verified+'/'+total],['Оценка',(score*100).toFixed(0)+'%']],
+      status: failed>0?'bad':(checks.some(c=>c.warn&&!c.pass)?'warn':'ok'),
+      checks};
+  },
+
+  // ── Quality Gate: уверенность системы + решение — детерминированно ───────
+  gate(stage,ctx){
+    const W={evidence:.25, validation:.15, schema:.15, fields:.15, check:.30};
+    const st=ctx.store||{}, f=(st.record||ctx.facts||{}), n=ctx.needs||{}, o=ctx.outcome||{}, sm=ctx.summary||{}, chk=ctx.summary_check||{};
+    // цитаты: из хранилища + доп. проверка кодом для потребностей и результата
+    const extra=[[n.timeline!=='не определено'?n.timeline:null, n.timeline_citation],[o.next_step,o.next_step_citation]];
+    let ev=st.evidence? st.evidence.verified:0, et=st.evidence? st.evidence.total:0;
+    const extraChecks=[];
+    extra.forEach(([fact,cit])=>{
+      if(fact!==undefined && fact!==null && fact!==''){
+        et++;
+        const r=findCitation(cit, ctx.__transcript);
+        if(r.found)ev++;
+        extraChecks.push({label:'Цитата: '+r.method+' ('+(r.ratio*100).toFixed(0)+'%)', pass:r.found, warn:!r.found});
+      }
+    });
+    const evidence= et? ev/et : 1;
+    const validation= ctx.validation? ctx.validation.score : 0;
+    const schema= st.schema_ok===false? 0.5 : 1;
+    const keyFields=[f.client_name, n.timeline, o.call_result, sm.summary];
+    const fields= keyFields.filter(v=>v!==undefined&&v!==null&&v!=='').length/keyFields.length;
+    // criticalRatio: галлюцинации и PII — критические, счётчиком снижают оценку проверщика
+    const critical=(chk.hallucinations||[]).length + (chk.pii_found||[]).length;
+    const check= Math.max(0, ((chk.score||0)/100) - critical*0.15);
+    const parts={evidence,validation,schema,fields,check};
+    const conf= Object.keys(W).reduce((a,k)=>a+parts[k]*W[k],0);
+    const labels={evidence:'Цитаты (код)',validation:'Валидация входа',schema:'Схема и правила',fields:'Ключевые поля',check:'Проверщик (крит. штраф)'};
+    const breakdown=Object.keys(W).map(k=>({k,label:labels[k],val:parts[k],w:W[k]}));
+    let decision, action, stt;
+    if(conf>=0.92){decision='AUTO_SAVE';action='Публикация без задержки';stt='ok';}
+    else if(conf>=0.80){decision='AUTO_SAVE + лог';action='Публикация + выборочный контроль';stt='ok';}
+    else if(conf>=0.65){decision='RETRY';action='Повтор на Claude Sonnet 4.6';stt='warn';}
+    else {decision='FALLBACK';action='Показать транскрипцию + «Проверьте вручную»';stt='bad';}
+    return {output:{decision, action, confidence:+conf.toFixed(3), critical_issues:critical},
+      metrics:[['Решение',decision],['Уверенность системы',conf.toFixed(2)],['Крит. проблем',critical]],
+      status:stt,
+      confidenceBreakdown:breakdown,
+      checks:[{label:action, pass:stt==='ok', warn:stt==='warn'}].concat(extraChecks)};
+  },
+
+  // ── этап CRM: сборка карточки и симуляция сохранения ─────────────────────
+  crm(stage,ctx){
+    const st=ctx.store||{}, rec=st.record||ctx.facts||{}, n=ctx.needs||{}, o=ctx.outcome||{}, sm=ctx.summary||{}, g=ctx.gate||{};
+    const card={
+      client_name: rec.client_name ?? null,
+      budget: rec.budget_normalized ?? rec.budget ?? null,
+      source_of_funds: rec.source_of_funds ?? [],
+      interested_in: n.interested_in ?? [],
+      timeline: n.timeline ?? 'не определено',
+      call_result: o.call_result ?? null,
+      next_step: o.next_step ?? null,
+      summary: sm.summary ?? null,
+      quality: {confidence: g.confidence ?? 0, decision: g.decision ?? '—'}
+    };
+    const saved= g.decision==='AUTO_SAVE' || g.decision==='AUTO_SAVE + лог';
+    return {output:{card, saved},
+      metrics:[['Решение Gate', g.decision||'—'],['Сохранение', saved?'выполнено':'отложено']],
+      status: saved?'ok':'warn',
+      checks:[{label: saved
+        ? 'Карточка сохранена в CRM (в песочнице — симуляция)'
+        : 'Карточка не пустая, но отправлена на ручную проверку (принцип «Never empty card»)',
+        pass:saved, warn:!saved}]};
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ДВИЖОК: шаблоны + вызов модели
+// ═══════════════════════════════════════════════════════════════════════════
+function tmpl(str, ctx){
+  return str.replace(/\{\{([^}]+)\}\}/g, (_,expr)=>{
+    expr=expr.trim();
+    if(expr==='transcript') return ctx.__transcript||'';
+    if(expr.startsWith('ctx.')){
+      const path=expr.slice(4).split('.');
+      let v=ctx;
+      for(const p of path){ v = (v==null)?undefined:v[p]; }
+      if(v===undefined) return '';
+      return typeof v==='object'? JSON.stringify(v,null,2) : String(v);
+    }
+    return '';
+  });
+}
+
+async function callModel(prompt, model){
+  const useModel = SANDBOX_MODEL; // в песочнице только Claude
+  const res = await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ model:useModel, max_tokens:1500,
+      messages:[{role:"user",content:prompt}] })
+  });
+  if(!res.ok) throw new Error('API '+res.status);
+  const data=await res.json();
+  const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+  return text;
+}
+function parseJSON(text){
+  let t=text.trim().replace(/```json/gi,'').replace(/```/g,'').trim();
+  const a=t.indexOf('{'), b=t.lastIndexOf('}');
+  if(a>=0&&b>a) t=t.slice(a,b+1);
+  return JSON.parse(t);
+}
+
+async function runStage(stage, ctx){
+  const t0=performance.now();
+  const isModelStep = stage.type==='llm' || stage.type==='check';
+  if(!isModelStep){
+    const fn=CODE_FUNCS[stage.codeFn];
+    if(!fn) throw new Error('нет код-функции '+stage.codeFn);
+    const r=fn(stage,ctx);
+    r.ms=Math.round(performance.now()-t0); r.isCode=true;
+    return r;
+  } else {
+    const prompt=tmpl(stage.prompt, ctx);
+    const raw=await callModel(prompt, stage.model);
+    let parsed=null, parseErr=null;
+    try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
+    const ms=Math.round(performance.now()-t0);
+    return { output: parsed || {raw}, raw, parseErr, ms,
+      status: parseErr?'warn':'ok',
+      metrics:[['Модель',stage.model&&stage.model.includes('gpt')?'GPT-5 mini*':'Claude'],['Время',ms+' мс'],
+        ['JSON', parseErr?'ошибка':'ок']] };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ПРОГОН
+// ═══════════════════════════════════════════════════════════════════════════
+const reportsEl=document.getElementById('reports');
+const emptyState=document.getElementById('emptyState');
+const progBar=document.getElementById('progBar');
+const runStatus=document.getElementById('runStatus');
+const runBtn=document.getElementById('runBtn');
+
+async function runPipeline(){
+  const transcript=document.getElementById('transcript').value.trim();
+  if(!transcript){ toast('Загрузите транскрипцию'); return; }
+  const active=pipeline.filter(s=>s.enabled);
+  if(!active.length){ toast('Нет активных шагов'); return; }
+
+  ctx={ __transcript:transcript };
+  reportsEl.innerHTML=''; emptyState.style.display='none';
+  runBtn.disabled=true; progBar.style.width='0%';
+
+  for(let i=0;i<active.length;i++){
+    const stage=active[i];
+    runStatus.textContent='шаг '+(i+1)+'/'+active.length+': '+stage.name;
+    const card=renderRunning(stage);
+    reportsEl.appendChild(card);
+    card.scrollIntoView({behavior:'smooth',block:'center'});
+
+    let rep;
+    try{ rep=await runStage(stage, ctx); }
+    catch(e){ rep={status:'bad',error:e.message,ms:0,metrics:[['Ошибка',e.message]]}; }
+
+    // сохраняем в контекст
+    if(stage.outKey && rep.output!==undefined) ctx[stage.outKey]=rep.output;
+
+    card.replaceWith(renderReport(stage, rep, i+1));
+    progBar.style.width=((i+1)/active.length*100)+'%';
+  }
+
+  runStatus.textContent='готово';
+  runBtn.disabled=false;
+  renderFinal();
+}
+
+function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='bad'?'bad':'run';}
+function badgeText(st){return st==='ok'?'OK':st==='warn'?'Внимание':st==='bad'?'Ошибка':'…';}
+function whoLabel(stage){
+  if(stage.vendor) return stage.vendor;
+  if(stage.model) return stage.model.includes('gpt')?'GPT-5 mini* → Claude':'Claude Sonnet 4.6';
+  return '';
+}
+
+function renderRunning(stage){
+  const M=stageTypeMeta(stage);
+  const el=document.createElement('div'); el.className='report';
+  el.innerHTML='<div class="rep-h">'
+    +'<div class="ri" style="background:'+M.bg+';color:'+M.c+'">⏳</div>'
+    +'<div class="rt"><div class="rn">'+escapeHtml(stage.name)+'</div><div class="rm">выполняется…</div></div>'
+    +'<div class="badge run">…</div></div>';
+  return el;
+}
+
+function renderReport(stage, rep, num){
+  const M=stageTypeMeta(stage);
+  const el=document.createElement('div'); el.className='report';
+  let body='';
+
+  if(rep.metrics&&rep.metrics.length){
+    body+='<div class="metrics">'+rep.metrics.map(([l,v])=>{
+      let cls='';
+      if(l==='Уверенность системы'||l==='Уверенность'){const nn=parseFloat(v);cls=nn>=0.8?'ok':nn>=0.65?'warn':'bad';}
+      return '<div class="metric"><div class="ml">'+l+'</div><div class="mv '+cls+'">'+v+'</div></div>';
+    }).join('')+'</div>';
+  }
+
+  if(rep.checks&&rep.checks.length){
+    body+='<ul class="chklist">'+rep.checks.map(c=>{
+      const cls=c.pass?'pass':(c.warn?'warnli':'fail'); const ic=c.pass?'✓':(c.warn?'!':'✕');
+      return '<li class="'+cls+'"><span class="ic">'+ic+'</span><span>'+escapeHtml(c.label)+'</span></li>';
+    }).join('')+'</ul>';
+  }
+
+  if(rep.confidenceBreakdown){
+    body+='<div class="kvlist" style="margin-top:6px">'+rep.confidenceBreakdown.map(b=>
+      '<div><span class="k">'+b.label+' <span class="tag">'+(b.w*100)+'%</span></span> <b>'+(b.val*100).toFixed(0)+'%</b></div>').join('')+'</div>';
+  }
+
+  if(rep.error){ body+='<div class="out" style="color:var(--bad)">Ошибка: '+escapeHtml(rep.error)+'</div>'; }
+  else if(rep.parseErr){ body+='<div class="out" style="color:var(--warn)">JSON не распознан: '+escapeHtml(rep.parseErr)+'\n\n'+escapeHtml((rep.raw||'').slice(0,600))+'</div>'; }
+  else if(rep.output!==undefined && !rep.isCode){
+    body+='<div class="out">'+escapeHtml(JSON.stringify(rep.output,null,2))+'</div>';
+  } else if(rep.isCode && stage.codeFn!=='gate' && rep.output){
+    // компактный вывод для сервисных и код-шагов
+    const o={...rep.output}; delete o.checks; delete o.rows; delete o.breakdown;
+    if(Object.keys(o).length) body+='<div class="out">'+escapeHtml(JSON.stringify(o,null,2))+'</div>';
+  }
+
+  const st=rep.status||'ok';
+  const who=whoLabel(stage);
+  el.innerHTML='<div class="rep-h">'
+    +'<div class="ri" style="background:'+M.bg+';color:'+M.c+'">'+num+'</div>'
+    +'<div class="rt"><div class="rn">'+escapeHtml(stage.name)+'</div>'
+    +'<div class="rm">'+M.label+(who?' · '+who:'')+' · '+(rep.ms||0)+' мс</div></div>'
+    +'<div class="badge '+badgeFor(st)+'">'+badgeText(st)+'</div></div>'
+    +'<div class="rep-b">'+(body||'<div class="rm" style="color:var(--dim)">нет данных</div>')+'</div>';
+  return el;
+}
+
+function renderFinal(){
+  const sm=ctx.summary, gate=ctx.gate, crm=ctx.crm;
+  const summary = (sm&&sm.summary) || '—';
+  const highlights = (sm&&sm.highlights)||[];
+  const el=document.createElement('div'); el.className='final';
+  const decision = gate? gate.decision : '—';
+  const c = gate? (gate.confidence||0) : 0;
+  const saved = crm? (crm.saved?'сохранена':'на ручной проверке') : '—';
+  el.innerHTML=
+    '<p class="fl">🎯 Итоговое саммари</p>'
+    +'<p class="fs">'+escapeHtml(summary)+'</p>'
+    +(highlights.length?'<ul class="chklist" style="margin-bottom:14px">'+highlights.map(h=>'<li class="pass"><span class="ic">•</span><span>'+escapeHtml(h)+'</span></li>').join('')+'</ul>':'')
+    +'<div class="fmeta">'
+    +'<div class="fm">Уверенность системы: <b>'+c.toFixed(2)+'</b></div>'
+    +'<div class="fm">Решение: <b>'+escapeHtml(decision)+'</b></div>'
+    +'<div class="fm">Карточка CRM: <b>'+saved+'</b></div>'
+    +'<div class="fm">Шагов пройдено: <b>'+pipeline.filter(s=>s.enabled).length+'</b></div>'
+    +'</div>'
+    +'<div class="row" style="margin-top:14px">'
+    +'<button class="btn sm" id="dlReport">↓ Скачать полный отчёт (JSON)</button>'
+    +'</div>';
+  reportsEl.appendChild(el);
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  document.getElementById('dlReport').onclick=()=>{
+    const blob=new Blob([JSON.stringify({pipeline:pipeline.map(sanitize),result:ctx},null,2)],{type:'application/json'});
+    dl(blob,'pipeline_report.json');
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  UI: конфигурация пайплайна
+// ═══════════════════════════════════════════════════════════════════════════
+const stagesEl=document.getElementById('stages');
+function stageTypeMeta(stage){ return TYPE_META[stage.type]||TYPE_META.code; }
+
+function renderStages(){
+  stagesEl.innerHTML='';
+  pipeline.forEach((stage,i)=>{
+    const M=stageTypeMeta(stage);
+    const isModelStep = stage.type==='llm' || stage.type==='check';
+    const el=document.createElement('div');
+    el.className='stage'+(stage.enabled?'':' disabled');
+    el.style.setProperty('--sc',M.c); el.style.setProperty('--scbg',M.bg); el.style.setProperty('--scl',M.l);
+    el.innerHTML=
+      '<div class="stage-h" data-toggle>'
+      +'<div class="bar"></div>'
+      +'<div class="st-idx">'+(i+1)+'</div>'
+      +'<div class="st-name">'+escapeHtml(stage.name)+'</div>'
+      +'<div class="st-type">'+M.label+'</div>'
+      +'<label class="toggle" onclick="event.stopPropagation()">'
+      +'<input type="checkbox" '+(stage.enabled?'checked':'')+' data-en>'
+      +'<span class="sl"></span>'
+      +'</label>'
+      +'<span class="chev">▶</span>'
+      +'</div>'
+      +'<div class="stage-body">'
+      +'<div class="mini">'
+      +'<div><label class="fld">Название</label>'
+      +'<input type="text" data-name value="'+escapeAttr(stage.name)+'"></div>'
+      +'<div style="max-width:130px"><label class="fld">Тип</label>'
+      +'<select data-type>'
+      +'<option value="llm" '+(stage.type==='llm'?'selected':'')+'>LLM-агент</option>'
+      +'<option value="check" '+(stage.type==='check'?'selected':'')+'>Проверщик</option>'
+      +'<option value="code" '+(stage.type==='code'?'selected':'')+'>Код</option>'
+      +'<option value="svc" '+(stage.type==='svc'?'selected':'')+'>Сервис</option>'
+      +'<option value="store" '+(stage.type==='store'?'selected':'')+'>Хранилище</option>'
+      +'</select></div>'
+      +'</div>'
+      +(!isModelStep ?
+        '<label class="fld">Код-функция</label>'
+        +'<select data-codefn>'
+        +CODE_FN_LIST.map(f=>'<option value="'+f+'" '+(stage.codeFn===f?'selected':'')+'>'+f+'</option>').join('')
+        +'</select>'
+        +'<label class="fld" style="margin-top:10px">Исполнитель (сервис)</label>'
+        +'<input type="text" data-vendor value="'+escapeAttr(stage.vendor||'')+'">'
+        +'<div class="hintbar">Детерминированный шаг: выполняется кодом, без модели. Использует результаты предыдущих шагов из контекста.</div>'
+      :
+        '<label class="fld">Модель</label>'
+        +'<select data-model>'
+        +MODEL_OPTIONS.map(m=>'<option value="'+m.v+'" '+(stage.model===m.v?'selected':'')+'>'+m.t+'</option>').join('')
+        +'</select>'
+        +'<label class="fld" style="margin-top:10px">Промт</label>'
+        +'<textarea class="mono" data-prompt rows="6">'+escapeHtml(stage.prompt)+'</textarea>'
+      )
+      +'<label class="fld" style="margin-top:10px">Ключ результата (для {{ctx.КЛЮЧ}})</label>'
+      +'<input type="text" data-outkey value="'+escapeAttr(stage.outKey||'')+'">'
+      +'<div class="stage-actions" style="margin-top:10px">'
+      +'<button class="btn ghost sm" data-up '+(i===0?'disabled':'')+'>↑</button>'
+      +'<button class="btn ghost sm" data-down '+(i===pipeline.length-1?'disabled':'')+'>↓</button>'
+      +'<div class="spacer"></div>'
+      +'<button class="btn ghost sm" data-del style="color:var(--bad)">Удалить</button>'
+      +'</div>'
+      +'</div>';
+
+    // события
+    el.querySelector('[data-toggle]').addEventListener('click',()=>el.classList.toggle('open'));
+    el.querySelector('[data-en]').addEventListener('change',e=>{stage.enabled=e.target.checked;el.classList.toggle('disabled',!stage.enabled);});
+    el.querySelector('[data-name]').addEventListener('input',e=>{stage.name=e.target.value;el.querySelector('.st-name').textContent=e.target.value;});
+    el.querySelector('[data-type]').addEventListener('change',e=>{
+      stage.type=e.target.value;
+      const modelStep = stage.type==='llm'||stage.type==='check';
+      if(!modelStep && !stage.codeFn) stage.codeFn='validate';
+      if(modelStep && !stage.model) stage.model='claude-sonnet-4-6';
+      renderStages();
+    });
+    el.querySelector('[data-outkey]').addEventListener('input',e=>stage.outKey=e.target.value.trim());
+    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>stage.prompt=e.target.value);
+    const mm=el.querySelector('[data-model]'); if(mm)mm.addEventListener('change',e=>stage.model=e.target.value);
+    const cf=el.querySelector('[data-codefn]'); if(cf)cf.addEventListener('change',e=>stage.codeFn=e.target.value);
+    const vn=el.querySelector('[data-vendor]'); if(vn)vn.addEventListener('input',e=>stage.vendor=e.target.value.trim());
+    el.querySelector('[data-up]').addEventListener('click',()=>{if(i>0){[pipeline[i-1],pipeline[i]]=[pipeline[i],pipeline[i-1]];renderStages();}});
+    el.querySelector('[data-down]').addEventListener('click',()=>{if(i<pipeline.length-1){[pipeline[i+1],pipeline[i]]=[pipeline[i],pipeline[i+1]];renderStages();}});
+    el.querySelector('[data-del]').addEventListener('click',()=>{pipeline.splice(i,1);renderStages();});
+
+    stagesEl.appendChild(el);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  УТИЛИТЫ + СОБЫТИЯ
+// ═══════════════════════════════════════════════════════════════════════════
+function escapeHtml(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function escapeAttr(s){return String(s).replace(/"/g,'&quot;');}
+function sanitize(st){const {id,...rest}=st;return rest;}
+function dl(blob,name){const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
+let toastT; function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2200);}
+
+document.getElementById('runBtn').addEventListener('click',runPipeline);
+document.getElementById('clearBtn').addEventListener('click',()=>{reportsEl.innerHTML='';emptyState.style.display='';reportsEl.appendChild(emptyState);progBar.style.width='0%';runStatus.textContent='готов';ctx={};});
+document.getElementById('addStage').addEventListener('click',()=>{pipeline.push({id:s(),enabled:true,type:'llm',name:'Новый шаг',model:'claude-sonnet-4-6',outKey:'step'+(pipeline.length+1),prompt:'Промт... {{transcript}}'});renderStages();});
+document.getElementById('preset').addEventListener('change',e=>{
+  if(e.target.value==='default'){pipeline=defaultPipeline();}
+  else{pipeline=[{id:s(),enabled:true,type:'llm',name:'Шаг',model:'claude-sonnet-4-6',outKey:'step1',prompt:'{{transcript}}'}];}
+  renderStages();
+});
+
+document.getElementById('exportBtn').addEventListener('click',()=>{
+  const blob=new Blob([JSON.stringify(pipeline.map(sanitize),null,2)],{type:'application/json'});
+  dl(blob,'pipeline_config.json'); toast('Пайплайн экспортирован');
+});
+document.getElementById('importFile').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return; const r=new FileReader();
+  r.onload=()=>{try{const arr=JSON.parse(r.result);pipeline=arr.map(x=>({id:s(),...x}));renderStages();toast('Пайплайн загружен');}catch(err){toast('Ошибка JSON');}};
+  r.readAsText(f);
+});
+
+document.getElementById('txtFile').addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{document.getElementById('transcript').value=r.result;updateCount();};r.readAsText(f);
+});
+const ta=document.getElementById('transcript');
+function updateCount(){document.getElementById('charCount').textContent=ta.value.length+' символов';}
+ta.addEventListener('input',updateCount);
+
+document.getElementById('sampleBtn').addEventListener('click',()=>{
+  ta.value=
+`Оператор: Здравствуйте, компания Владис, меня зовут Мария. Соединяю вас с агентом Александром.
+Агент: Добрый день! Александр, агент по недвижимости. Слушаю вас.
+Клиент: Здравствуйте, меня Татьяна зовут. Я по объявлению звоню, новостройка в центре интересует.
+Агент: Отлично, Татьяна. Подскажите, какой бюджет рассматриваете?
+Клиент: Рассматриваю до восьми миллионов. У меня ипотека сейчас в процессе одобрения, Сбербанк.
+Агент: Понял, до восьми миллионов, ипотека в процессе. А когда планируете покупку?
+Клиент: Хотелось бы в ближайшие два-три месяца определиться.
+Агент: Хорошо. Давайте я вам покажу пару вариантов. Встретимся в пятницу, пятнадцатого, в 14:00 на объекте?
+Клиент: Да, давайте в пятницу в два часа. Договорились.
+Агент: Отлично, тогда до встречи, Татьяна! Всего доброго.`;
+  updateCount(); toast('Пример вставлен');
+});
+
+// инициализация
+renderStages(); updateCount();
+</script>
+</body>
+</html>
