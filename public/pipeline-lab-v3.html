@@ -278,6 +278,15 @@ const MODEL_OPTIONS = [
 ];
 const CODE_FN_LIST = ['stt','validate','store','gate','crm'];
 
+// Ориентировочная стоимость за 1000 токенов -- оценка для отображения
+// расходов теста, а не точный биллинг вендора (реальная стоимость
+// зависит от актуального прайса и соотношения input/output токенов).
+const COST_PER_1K_TOKENS = { 'gpt-5-mini': 0.0006, 'claude-sonnet-4-6': 0.006 };
+function estimateCost(model, tokens){
+  const rate = COST_PER_1K_TOKENS[model] ?? 0.001;
+  return (tokens/1000)*rate;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  ДЕФОЛТНЫЙ ПАЙПЛАЙН — ДЕСЯТЬ ЭТАПОВ
 //  Nexara → Валидация → Факты → Хранилище → Потребности → Результат →
@@ -661,7 +670,10 @@ async function callAnthropic(prompt, model){
     throw new Error('Anthropic API '+res.status+(detail?': '+detail:''));
   }
   const data=await res.json();
-  return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+  const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+  const usage=data.usage||{};
+  const tokens=(usage.input_tokens||0)+(usage.output_tokens||0);
+  return { text, tokens };
 }
 
 // OpenAI's API does not send CORS headers for browser origins, so a
@@ -684,7 +696,9 @@ async function callOpenAI(prompt, model){
     const detail=(data&&data.error&&data.error.message)||'';
     throw new Error('OpenAI API '+res.status+(detail?': '+detail:''));
   }
-  return (data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+  const text=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+  const tokens=(data.usage&&data.usage.total_tokens)||0;
+  return { text, tokens };
 }
 
 async function callModel(prompt, model){
@@ -709,13 +723,14 @@ async function runStage(stage, ctx){
     return r;
   } else {
     const prompt=tmpl(stage.prompt, ctx);
-    const raw=await callModel(prompt, stage.model);
+    const {text:raw, tokens}=await callModel(prompt, stage.model);
     let parsed=null, parseErr=null;
     try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
     const ms=Math.round(performance.now()-t0);
-    return { output: parsed || {raw}, raw, parseErr, ms,
+    const cost=estimateCost(stage.model, tokens);
+    return { output: parsed || {raw}, raw, parseErr, ms, tokens, cost,
       status: parseErr?'warn':'ok',
-      metrics:[['Модель',stage.model&&stage.model.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude'],['Время',ms+' мс'],
+      metrics:[['Модель',stage.model&&stage.model.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude'],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
   }
 }
@@ -743,6 +758,7 @@ async function runPipeline(){
   ctx={ __transcript:transcript };
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
+  let totalTokens=0, totalCost=0;
 
   for(let i=0;i<active.length;i++){
     const stage=active[i];
@@ -757,6 +773,8 @@ async function runPipeline(){
 
     // сохраняем в контекст
     if(stage.outKey && rep.output!==undefined) ctx[stage.outKey]=rep.output;
+    if(rep.tokens) totalTokens+=rep.tokens;
+    if(rep.cost) totalCost+=rep.cost;
 
     card.replaceWith(renderReport(stage, rep, i+1));
     progBar.style.width=((i+1)/active.length*100)+'%';
@@ -764,7 +782,7 @@ async function runPipeline(){
 
   runStatus.textContent='готово';
   runBtn.disabled=false;
-  renderFinal();
+  renderFinal(totalTokens, totalCost);
 }
 
 function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='bad'?'bad':'run';}
@@ -839,7 +857,7 @@ function fmtNeed(v){
   return Array.isArray(v) ? (v.length? v.join(', ') : 'не определено') : String(v);
 }
 
-function renderFinal(){
+function renderFinal(totalTokens, totalCost){
   const sm=ctx.summary, gate=ctx.gate, crm=ctx.crm, n=ctx.needs||{};
   const summary = (sm&&sm.summary) || '—';
   const highlights = (sm&&sm.highlights)||[];
@@ -847,36 +865,43 @@ function renderFinal(){
   const decision = gate? gate.decision : '—';
   const c = gate? (gate.confidence||0) : 0;
   const saved = crm? (crm.saved?'сохранена':'на ручной проверке') : '—';
+
+  // «Итоговое саммари»: текст саммари + потребности клиента (из
+  // «Определение потребностей» / ctx.needs) -- всё в одной карточке.
   el.innerHTML=
     '<p class="fl">🎯 Итоговое саммари</p>'
     +'<p class="fs">'+escapeHtml(summary)+'</p>'
     +(highlights.length?'<ul class="chklist" style="margin-bottom:14px">'+highlights.map(h=>'<li class="pass"><span class="ic">•</span><span>'+escapeHtml(h)+'</span></li>').join('')+'</ul>':'')
+    +'<p class="fl" style="margin-top:4px">П Потребности клиента</p>'
+    +'<div class="fmeta">'
+    +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
+    +'<div class="fm">Источник средств: <b>'+escapeHtml(fmtNeed(n.source_of_funds))+'</b></div>'
+    +'<div class="fm">Срок покупки: <b>'+escapeHtml(fmtNeed(n.timeline))+'</b></div>'
+    +'</div>';
+  reportsEl.appendChild(el);
+
+  // Метрики прогона (уверенность/решение/CRM/шаги/токены/стоимость) и
+  // скачивание отчёта -- отдельным блоком ПОД «Итоговое саммари».
+  const metaEl=document.createElement('div'); metaEl.className='card'; metaEl.style.marginTop='12px';
+  metaEl.innerHTML=
+    '<div class="card-b">'
     +'<div class="fmeta">'
     +'<div class="fm">Уверенность системы: <b>'+c.toFixed(2)+'</b></div>'
     +'<div class="fm">Решение: <b>'+escapeHtml(decision)+'</b></div>'
     +'<div class="fm">Карточка CRM: <b>'+saved+'</b></div>'
     +'<div class="fm">Шагов пройдено: <b>'+pipeline.filter(s=>s.enabled).length+'</b></div>'
+    +'<div class="fm">Токены (тест): <b>'+(totalTokens||0)+'</b></div>'
+    +'<div class="fm">Стоимость (тест): <b>$'+(totalCost||0).toFixed(4)+'</b></div>'
     +'</div>'
     +'<div class="row" style="margin-top:14px">'
     +'<button class="btn sm" id="dlReport">↓ Скачать полный отчёт (JSON)</button>'
+    +'</div>'
     +'</div>';
-  reportsEl.appendChild(el);
+  reportsEl.appendChild(metaEl);
 
-  // Потребности клиента -- отдельным блоком ПОД «Итоговое саммари»
-  // (см. «Определение потребностей» / ctx.needs), а не внутри него.
-  const needsEl=document.createElement('div'); needsEl.className='card'; needsEl.style.marginTop='12px';
-  needsEl.innerHTML=
-    '<div class="card-h"><span class="n">П</span> Потребности клиента</div>'
-    +'<div class="card-b"><div class="fmeta">'
-    +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
-    +'<div class="fm">Источник средств: <b>'+escapeHtml(fmtNeed(n.source_of_funds))+'</b></div>'
-    +'<div class="fm">Срок покупки: <b>'+escapeHtml(fmtNeed(n.timeline))+'</b></div>'
-    +'</div></div>';
-  reportsEl.appendChild(needsEl);
-
-  needsEl.scrollIntoView({behavior:'smooth',block:'center'});
+  metaEl.scrollIntoView({behavior:'smooth',block:'center'});
   document.getElementById('dlReport').onclick=()=>{
-    const blob=new Blob([JSON.stringify({pipeline:pipeline.map(sanitize),result:ctx},null,2)],{type:'application/json'});
+    const blob=new Blob([JSON.stringify({pipeline:pipeline.map(sanitize),result:ctx,usage:{totalTokens,totalCost}},null,2)],{type:'application/json'});
     dl(blob,'pipeline_report.json');
   };
 }
