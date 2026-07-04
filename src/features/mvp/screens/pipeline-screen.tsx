@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Background, Controls, MiniMap, ReactFlow, addEdge, useUpdateNodeInternals, type Connection, type Edge as FlowEdge, type Node as FlowNode, type NodeChange, type EdgeChange, applyNodeChanges, applyEdgeChanges } from "@xyflow/react";
-import { Copy, Download, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
+import { Copy, Download, FlaskConical, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
 import { Button, Card, EmptyState, Input, Select, Textarea, Toolbar, IconButton, Badge } from "@/shared/ui";
 import { createNode } from "@/entities/Node/model/factory";
 import type { Node, NodeType } from "@/entities/Node/model/types";
@@ -46,6 +47,16 @@ function describeRetryPolicy(): string {
 }
 
 const nodeTypes: readonly NodeType[] = ["input", "agent", "llm", "tool", "function", "router", "store", "validation", "human_review", "output"];
+
+/**
+ * The one demo pipeline that has a real, working standalone tool
+ * behind it (public/pipeline-lab-v3.html, BYOK OpenAI/Anthropic) --
+ * this graph is only a structural/mock mirror of it (§M.11). Shown as
+ * a contextual link only for this specific pipeline, not a generic
+ * banner every project would show, since it would be misleading for
+ * the other three demo pipelines.
+ */
+const PIPELINE_LAB_V3_PIPELINE_ID = "pipeline_demo_pipeline_lab_v3";
 
 const CONDITION_OPERATOR_SYMBOLS: Record<EdgeConditionOperator, string> = {
   eq: "=",
@@ -132,6 +143,7 @@ function fromFlow(flowNodes: readonly FlowNode[], flowEdges: readonly FlowEdge[]
 }
 
 export function PipelineScreen() {
+  const router = useRouter();
   const { snapshot, selectedProjectId } = useRepositoryStore();
   const { selectedNodeId, history, setSelectedNodeId, addNode, deleteNode, duplicateNode, updateNode, setNodesAndEdges, undo, redo } = usePipelineStore();
   const { getTrace } = useExecutionTraceStore();
@@ -258,7 +270,15 @@ export function PipelineScreen() {
             <Download className="size-4" aria-hidden="true" />
           </IconButton>
         </div>
-        <span className="text-sm text-text-muted">{pipeline.nodes.length} nodes · {pipeline.edges.length} edges · Undo {pipelineHistory.past.length}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-text-muted">{pipeline.nodes.length} nodes · {pipeline.edges.length} edges · Undo {pipelineHistory.past.length}</span>
+          {pipeline.id === PIPELINE_LAB_V3_PIPELINE_ID ? (
+            <Button variant="secondary" onClick={() => router.push("/?view=pipeline-lab-v3")}>
+              <FlaskConical className="size-4" aria-hidden="true" />
+              Открыть в Pipeline Lab v3
+            </Button>
+          ) : null}
+        </div>
       </Toolbar>
       <div className="flex min-h-0 flex-1">
         <div className="h-full min-w-[320px] flex-1">

@@ -99,6 +99,94 @@ const CHAT_CLASSIFICATION_TEMPLATE = `Ты классифицируешь вхо
 - Каждое ключевое утверждение должно быть подкреплено цитатой в поле "цитаты".`;
 
 /**
+ * Real templates for the fourth demo pipeline, "Pipeline Lab v3"
+ * (CLAUDE.md §M.11 integration). These are the SAME prompt bodies as
+ * `defaultPipeline()` in public/pipeline-lab-v3.html, adapted only
+ * where that file's own `{{ctx.x}}` dot-path syntax doesn't match
+ * this registry's `{{snake_case}}`-only variable regex
+ * (prompt-registry.ts's `VARIABLE_PATTERN`) -- e.g. `{{ctx.facts}}`
+ * becomes `{{facts}}`. Kept in sync with the real tool's wording by
+ * hand; the standalone tool has its own independent template engine
+ * and does not read from this registry.
+ */
+const PIPELINE_LAB_FACTS_TEMPLATE = `Ты — Fact Agent пайплайна анализа звонков по недвижимости.
+Извлеки ФАКТЫ из транскрипции. Верни СТРОГО валидный JSON без markdown и пояснений.
+Если факт не прозвучал — ставь null. Отсутствие данных — это нормально, ничего не выдумывай.
+Для каждого факта, где возможно, приведи ДОСЛОВНУЮ цитату из транскрипции.
+
+Схема:
+{
+  "client_name": <имя клиента или null>,
+  "budget": <число в рублях или null>,
+  "budget_citation": <дословная цитата или null>,
+  "source_of_funds": [<массив из: "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено">],
+  "city_or_district": <город/район или null>,
+  "phone_mentioned": <true/false — звучал ли номер телефона>
+}
+
+Транскрипция:
+{{transcript}}`;
+
+const PIPELINE_LAB_NEEDS_TEMPLATE = `Ты — Need Agent пайплайна анализа звонков по недвижимости.
+Определи ПОТРЕБНОСТИ клиента из транскрипции. Верни СТРОГО валидный JSON без markdown.
+Если потребность не обсуждалась — null или "не определено". Ничего не выдумывай.
+
+Схема:
+{
+  "interested_in": [<из: "Новостройки","Вторичка","Ипотека","Строительство","Аренда">],
+  "property_requirements": <краткое описание требований к объекту или null>,
+  "timeline": <из: "до 1 месяца","2-3 месяца","3-6 месяцев","более 6 месяцев","не определено">,
+  "timeline_citation": <дословная цитата или null>
+}
+
+Транскрипция:
+{{transcript}}`;
+
+const PIPELINE_LAB_OUTCOME_TEMPLATE = `Ты — Outcome Agent пайплайна анализа звонков по недвижимости.
+Определи РЕЗУЛЬТАТ звонка. Верни СТРОГО валидный JSON без markdown.
+Для следующего шага приведи ДОСЛОВНУЮ цитату из транскрипции, если она есть.
+
+Схема:
+{
+  "call_result": <из: "назначен показ","назначен повторный звонок","клиент думает","отказ","нецелевой звонок">,
+  "next_step": <конкретный следующий шаг или null>,
+  "next_step_citation": <дословная цитата или null>,
+  "agreements": [<достигнутые договорённости строками>]
+}
+
+Транскрипция:
+{{transcript}}`;
+
+const PIPELINE_LAB_SUMMARY_TEMPLATE = `Ты — Summary Agent. Составь саммари звонка для карточки в CRM.
+Используй ТОЛЬКО факты из данных ниже. Ничего не добавляй от себя.
+ЗАПРЕЩЕНО упоминать: номера телефонов, точные адреса, цены и суммы бюджета —
+они уже есть в структурированных полях карточки CRM.
+Максимум 3 предложения, деловой тон. Верни СТРОГО валидный JSON без markdown:
+{
+  "summary": <текст саммари>,
+  "highlights": [<2-4 ключевых факта строками, без сумм и телефонов>]
+}
+
+Факты: {{facts}}
+Потребности: {{needs}}
+Результат звонка: {{outcome}}`;
+
+const PIPELINE_LAB_CHECK_TEMPLATE = `Ты — независимый Check Agent (кросс-вендорная проверка).
+Сверь саммари с данными хранилища и транскрипцией. Верни СТРОГО валидный JSON без markdown:
+{
+  "score": <0-100, точность и полнота саммари>,
+  "hallucinations": [<утверждения саммари, которых НЕТ в данных или транскрипции>],
+  "pii_found": [<телефоны, точные адреса или суммы, просочившиеся в саммари>],
+  "issues": [<прочие проблемы строками>]
+}
+
+Саммари: {{summary}}
+Данные хранилища: {{store}}
+
+Транскрипция:
+{{transcript}}`;
+
+/**
  * Fixed, matching `demo-data.ts`'s own `createdAt` constant --
  * deliberately NOT `new Date().toISOString()`. This registry is a
  * module-level singleton evaluated once on the server (SSR) and once
@@ -114,7 +202,12 @@ export function withSeedPrompts(registry: PromptRegistry = emptyPromptRegistry):
     .register("prompt_call_summary", "1.0.0", CALL_SUMMARY_TEMPLATE, SEED_TIMESTAMP)
     .register("prompt_quality_check", "1.0.0", QUALITY_CHECK_TEMPLATE, SEED_TIMESTAMP)
     .register("prompt_lead_qualification", "1.0.0", LEAD_QUALIFICATION_TEMPLATE, SEED_TIMESTAMP)
-    .register("prompt_chat_classification", "1.0.0", CHAT_CLASSIFICATION_TEMPLATE, SEED_TIMESTAMP);
+    .register("prompt_chat_classification", "1.0.0", CHAT_CLASSIFICATION_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_pipeline_lab_facts", "1.0.0", PIPELINE_LAB_FACTS_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_pipeline_lab_needs", "1.0.0", PIPELINE_LAB_NEEDS_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_pipeline_lab_outcome", "1.0.0", PIPELINE_LAB_OUTCOME_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_pipeline_lab_summary", "1.0.0", PIPELINE_LAB_SUMMARY_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_pipeline_lab_check", "1.0.0", PIPELINE_LAB_CHECK_TEMPLATE, SEED_TIMESTAMP);
 }
 
 export const seededPromptRegistry: PromptRegistry = withSeedPrompts();

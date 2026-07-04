@@ -43,6 +43,12 @@ const knowledgeModules: KnowledgeModule[] = [
 const models: Model[] = [
   { id: "model_fast", name: "Fast Classifier", provider: "local", capabilities: ["classification", "extraction"], contextWindow: 16000, version: "1.0.0" },
   { id: "model_reasoning", name: "Reasoning LLM", provider: "local", capabilities: ["generation", "reasoning", "tool_use"], contextWindow: 64000, version: "1.0.0" },
+  // Real vendor models, distinct from the "local" mock models above --
+  // these are the two vendors Pipeline Lab v3 (public/pipeline-lab-v3.html)
+  // genuinely calls (via BYOK, §M.11 integration), unlike the rest of the
+  // app which only ever calls MockLLMProvider.
+  { id: "model_gpt5_mini", name: "GPT-5 mini", provider: "openai", capabilities: ["extraction", "generation"], contextWindow: 128000, version: "1.0.0" },
+  { id: "model_claude_sonnet", name: "Claude Sonnet 4.6", provider: "anthropic", capabilities: ["reasoning", "generation"], contextWindow: 200000, version: "1.0.0" },
 ];
 
 const prompts: Prompt[] = [
@@ -78,6 +84,57 @@ const prompts: Prompt[] = [
     name: "Chat Classification Behavior",
     purpose: "routing",
     description: "Классифицирует входящее сообщение чата поддержки по категории, тональности и необходимости эскалации.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  // ── Pipeline Lab v3 integration (§M.11) -- same wording as the real
+  // prompt bodies in public/pipeline-lab-v3.html's defaultPipeline(),
+  // adapted only where that file's own `{{ctx.x}}` template syntax
+  // doesn't match this registry's `{{snake_case}}`-only variable regex
+  // (prompt-registry.ts) -- `{{ctx.facts}}` becomes `{{facts}}` etc.
+  // See seed-prompts.ts for the registered template bodies.
+  {
+    id: "prompt_pipeline_lab_facts",
+    name: "Fact Agent (Pipeline Lab v3)",
+    purpose: "extraction",
+    description: "Извлекает факты из транскрипции звонка по недвижимости: имя клиента, бюджет, источник средств, район, упоминание телефона -- с цитатами.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_pipeline_lab_needs",
+    name: "Need Agent (Pipeline Lab v3)",
+    purpose: "extraction",
+    description: "Определяет потребности клиента (тип объекта, требования, срок покупки) из транскрипции звонка по недвижимости.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_pipeline_lab_outcome",
+    name: "Outcome Agent (Pipeline Lab v3)",
+    purpose: "extraction",
+    description: "Определяет результат звонка (назначен показ, повторный звонок, отказ и т.д.) и следующий шаг.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_pipeline_lab_summary",
+    name: "Summary Agent (Pipeline Lab v3)",
+    purpose: "generation",
+    description: "Формирует саммари звонка для карточки CRM на основе фактов/потребностей/результата -- без телефонов, адресов и сумм в тексте.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_pipeline_lab_check",
+    name: "Check Agent (Pipeline Lab v3, cross-vendor)",
+    purpose: "evaluation",
+    description: "Независимая (другой вендор) проверка саммари на галлюцинации и утечку PII относительно данных хранилища и транскрипции.",
     status: "ready",
     ownerModuleId: "knowledge_architect",
     version: "1.0.0",
@@ -375,6 +432,164 @@ const pipelineChat: Pipeline = {
   version: "1.0.0",
 };
 
+/**
+ * Fourth demo project -- Pipeline Lab v3 (§M.11 "полноценная интеграция").
+ * This is the domain-model (Project/Product/Architecture/Pipeline)
+ * mirror of the standalone tool at public/pipeline-lab-v3.html, so that
+ * tool participates in the same Projects -> Product -> Architecture ->
+ * Pipeline -> Playground lifecycle every other demo project does,
+ * rather than sitting off to the side as an unrelated nav item.
+ *
+ * The Pipeline graph below is a faithful structural mirror of the real
+ * tool's 10 stages plus its own transcript input, with edges drawn from
+ * each stage's ACTUAL data dependencies (read directly from the real
+ * CODE_FUNCS.gate/crm/store bodies in pipeline-lab-v3.html, not
+ * guessed) -- Pipeline Lab v3 itself runs its stages as a flat ordered
+ * list against one shared `ctx` object, not a dependency graph, so this
+ * is the closest a Node/Edge DAG can get to the same real behavior.
+ * Running THIS graph through the app's own Mock Runtime (Playground)
+ * is a structural/mock exercise of the same shape -- for the real
+ * OpenAI/Anthropic-backed run, use the "Открыть в Pipeline Lab v3"
+ * link this project's Pipeline/Playground screens show (see
+ * pipeline-screen.tsx / playground-screen.tsx).
+ */
+const productPipelineLab: Product = {
+  id: "product_demo_pipeline_lab_v3",
+  projectId: "project_demo_pipeline_lab_v3",
+  status: "ready",
+  idea: {
+    statement: "Pipeline Lab v3 извлекает структурированную карточку CRM (факты, потребности, результат звонка, саммари) из звонков по недвижимости и решает, можно ли сохранить её автоматически, не теряя доверие к данным.",
+    source: "pdf-notes.txt (Miro board, workstream «ИИ в заявке») + public/pipeline-lab-v3.html",
+  },
+  discovery:
+    "Агенты по недвижимости теряют контекст звонка, если не заполняют карточку CRM сразу; ручное заполнение задерживает follow-up и даёт неполные/непроверенные данные о бюджете, сроке покупки и договорённостях.",
+  problem: {
+    statement: "Без проверенного автоматического извлечения фактов из звонка карточка CRM либо не заполняется вовремя, либо заполняется с ошибками и без цитат-обоснований.",
+    evidenceIds: ["evidence_demo_realestate_calls"],
+  },
+  users: [
+    { id: "user_realestate_agent", name: "Real Estate Agent", segment: "Недвижимость" },
+    { id: "user_sales_manager_pl", name: "Sales Manager", segment: "Недвижимость" },
+  ],
+  jtbd: [
+    {
+      statement: "Когда завершился звонок с клиентом по недвижимости, я хочу получить проверенную карточку CRM с бюджетом, потребностями и next step, без ручного заполнения и без риска утечки чувствительных данных.",
+      context: "Сразу после звонка с клиентом",
+      desiredOutcome: "Карточка CRM заполнена автоматически там, где хватает уверенности, иначе -- честно отправлена на ручную проверку",
+    },
+  ],
+  features: [
+    { id: "feature_pl_fact_extraction", name: "Fact/Need/Outcome Extraction", description: "Извлечение бюджета, источника средств, потребностей и результата звонка с цитатами.", priority: "high" },
+    { id: "feature_pl_cross_vendor_check", name: "Cross-Vendor Quality Check", description: "Независимая проверка саммари другим вендором на галлюцинации и утечку PII.", priority: "high" },
+    { id: "feature_pl_quality_gate", name: "Confidence-Based Quality Gate", description: "Решение AUTO_SAVE / AUTO_SAVE+лог / RETRY / FALLBACK на основе взвешенной уверенности системы.", priority: "medium" },
+  ],
+  mvp: "10-этапный пайплайн: STT-симуляция (Nexara) -> валидация кодом -> извлечение фактов (LLM) -> единое хранилище (код) -> потребности (LLM) -> результат звонка (LLM) -> саммари (LLM) -> cross-vendor проверка (LLM) -> Quality Gate (код, confidence) -> сохранение в CRM.",
+  metrics: [
+    { name: "Confidence перед авто-сохранением", target: ">= 0.80" },
+    { name: "Hallucination rate (проверщик)", target: "<= 5%" },
+    { name: "Доля карточек с цитатой на ключевое поле", target: "100%" },
+  ],
+  prd:
+    "Pipeline Lab v3 принимает текст звонка и возвращает: факты (бюджет, источник средств, имя, район), потребности, результат звонка, саммари для CRM, независимую cross-vendor проверку саммари и итоговое решение Quality Gate (AUTO_SAVE/RETRY/FALLBACK) с разбивкой уверенности по 5 сигналам.",
+  frameworkIds: ["framework_jtbd", "framework_prd"],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const architecturePipelineLab: Architecture = {
+  id: "architecture_demo_pipeline_lab_v3",
+  projectId: "project_demo_pipeline_lab_v3",
+  productId: "product_demo_pipeline_lab_v3",
+  status: "ready",
+  capabilities: [
+    { id: "cap_pl_stt", name: "STT Ingestion (Nexara)", description: "Приём улучшенной транскрипции звонка.", required: true },
+    { id: "cap_pl_extract", name: "Fact/Need/Outcome Extraction", description: "Извлечение структурированных фактов, потребностей и результата звонка.", required: true },
+    { id: "cap_pl_check", name: "Cross-Vendor Verification", description: "Независимая проверка саммари вторым вендором.", required: true },
+    { id: "cap_pl_gate", name: "Confidence-Based Quality Gate", description: "Взвешенное решение об автосохранении в CRM.", required: true },
+  ],
+  aiComponents: [
+    { id: "component_pl_nexara", name: "Nexara STT", type: "gateway", description: "Внешний сервис распознавания и улучшения речи (в Lab -- симуляция)." },
+    { id: "component_pl_validate", name: "Transcript Validator", type: "rules_engine", description: "Детерминированная проверка длины, ролей и завершённости транскрипции." },
+    { id: "component_pl_facts", name: "Fact Agent", type: "llm", description: "Извлекает факты с цитатами (GPT-5 mini)." },
+    { id: "component_pl_needs", name: "Need Agent", type: "llm", description: "Извлекает потребности клиента (GPT-5 mini)." },
+    { id: "component_pl_outcome", name: "Outcome Agent", type: "llm", description: "Определяет результат звонка (GPT-5 mini)." },
+    { id: "component_pl_summary", name: "Summary Agent", type: "llm", description: "Формирует саммари для карточки CRM (GPT-5 mini)." },
+    { id: "component_pl_check", name: "Check Agent", type: "llm", description: "Независимая cross-vendor проверка саммари (Claude Sonnet 4.6)." },
+    { id: "component_pl_gate", name: "Quality Gate", type: "rules_engine", description: "Взвешенная уверенность системы (5 сигналов) -> решение AUTO_SAVE/RETRY/FALLBACK." },
+    { id: "component_pl_crm", name: "CRM Writer", type: "gateway", description: "Запись карточки в CRM (в Lab -- симуляция)." },
+  ],
+  modelIds: ["model_gpt5_mini", "model_claude_sonnet"],
+  dataFlow: [
+    { id: "flow_pl_input_facts", source: "Input", target: "Fact Agent", dataType: "transcript" },
+    { id: "flow_pl_facts_store", source: "Fact Agent", target: "Единое хранилище", dataType: "facts" },
+    { id: "flow_pl_summary_check", source: "Summary Agent", target: "Check Agent", dataType: "summary" },
+    { id: "flow_pl_gate_crm", source: "Quality Gate", target: "CRM Writer", dataType: "decision" },
+  ],
+  quality: [
+    { name: "Цитата на бюджет обязательна", threshold: "100%" },
+    { name: "Порог автосохранения", threshold: "confidence >= 0.80" },
+  ],
+  evaluation: [
+    { metric: "Hallucinations (проверщик)", method: "Cross-vendor LLM-judge", threshold: "0" },
+    { metric: "PII leak (КЦ-саммари)", method: "Cross-vendor LLM-judge", threshold: "0" },
+  ],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const nodesPipelineLab: Node[] = [
+  { id: "node_pl_input", type: "input", name: "Транскрипция", description: "Текст звонка (роли: Агент / Оператор / Клиент).", inputPorts: [], outputPorts: [{ id: "port_pl_input_out", name: "transcript" }], tools: [], metadata: { stage: "ingest" }, position: { x: 0, y: 220 }, version: "1.0.0" },
+  { id: "node_pl_nexara", type: "tool", name: "STT + улучшение (Nexara)", description: "В Lab транскрипция уже улучшена -- сервис Nexara симулируется.", inputPorts: [{ id: "port_pl_nexara_in", name: "transcript" }], outputPorts: [{ id: "port_pl_nexara_out", name: "stt" }], tools: ["nexara-stt"], metadata: { vendor: "Nexara" }, position: { x: 260, y: 40 }, version: "1.0.0" },
+  { id: "node_pl_validate", type: "validation", name: "Валидация транскрипции", description: "Длина, роли, число реплик, завершённость -- детерминированно, без модели.", inputPorts: [{ id: "port_pl_validate_in", name: "transcript" }], outputPorts: [{ id: "port_pl_validate_out", name: "validation" }], tools: [], metadata: {}, position: { x: 260, y: 400 }, version: "1.0.0" },
+  { id: "node_pl_facts", type: "llm", name: "Извлечение фактов", description: "Бюджет, источник средств, имя, район -- с цитатами.", inputPorts: [{ id: "port_pl_facts_in", name: "transcript" }], outputPorts: [{ id: "port_pl_facts_out", name: "facts" }], modelId: "model_gpt5_mini", promptId: "prompt_pipeline_lab_facts", temperature: 0.3, tools: [], metadata: { output: "structured" }, position: { x: 520, y: 220 }, version: "1.0.0" },
+  { id: "node_pl_store", type: "store", name: "Единое хранилище", description: "Схема, справочники, нормализация бюджета, verify-before-store для цитат.", inputPorts: [{ id: "port_pl_store_in", name: "facts" }], outputPorts: [{ id: "port_pl_store_out", name: "store" }], tools: [], metadata: { retention: "365d" }, position: { x: 780, y: 220 }, version: "1.0.0" },
+  { id: "node_pl_needs", type: "llm", name: "Определение потребностей", description: "Тип объекта, требования, срок покупки -- с цитатой.", inputPorts: [{ id: "port_pl_needs_in", name: "transcript" }], outputPorts: [{ id: "port_pl_needs_out", name: "needs" }], modelId: "model_gpt5_mini", promptId: "prompt_pipeline_lab_needs", temperature: 0.3, tools: [], metadata: { output: "structured" }, position: { x: 520, y: 400 }, version: "1.0.0" },
+  { id: "node_pl_outcome", type: "llm", name: "Результат звонка", description: "Назначен показ / повторный звонок / отказ и т.д. + next step с цитатой.", inputPorts: [{ id: "port_pl_outcome_in", name: "transcript" }], outputPorts: [{ id: "port_pl_outcome_out", name: "outcome" }], modelId: "model_gpt5_mini", promptId: "prompt_pipeline_lab_outcome", temperature: 0.3, tools: [], metadata: { output: "structured" }, position: { x: 520, y: 580 }, version: "1.0.0" },
+  { id: "node_pl_summary", type: "llm", name: "Генерация саммари", description: "Саммари для карточки CRM -- без телефонов, адресов и сумм в тексте.", inputPorts: [{ id: "port_pl_summary_in", name: "facts+needs+outcome" }], outputPorts: [{ id: "port_pl_summary_out", name: "summary" }], modelId: "model_gpt5_mini", promptId: "prompt_pipeline_lab_summary", temperature: 0.3, tools: [], metadata: { output: "structured" }, position: { x: 1040, y: 400 }, version: "1.0.0" },
+  { id: "node_pl_check", type: "llm", name: "Проверка саммари (cross-vendor)", description: "Независимая проверка на галлюцинации и утечку PII -- другой вендор.", inputPorts: [{ id: "port_pl_check_in", name: "summary+store" }], outputPorts: [{ id: "port_pl_check_out", name: "summary_check" }], modelId: "model_claude_sonnet", promptId: "prompt_pipeline_lab_check", temperature: 0, tools: [], metadata: { output: "structured" }, position: { x: 1300, y: 400 }, version: "1.0.0" },
+  { id: "node_pl_gate", type: "validation", name: "Quality Gate", description: "Взвешенная уверенность системы (цитаты 25% + валидация 15% + схема 15% + поля 15% + проверщик 30%) -> AUTO_SAVE/RETRY/FALLBACK.", inputPorts: [{ id: "port_pl_gate_in", name: "store+needs+outcome+check+validation" }], outputPorts: [{ id: "port_pl_gate_out", name: "gate" }], tools: [], metadata: { autoSaveThreshold: "0.80" }, position: { x: 1560, y: 220 }, version: "1.0.0" },
+  { id: "node_pl_crm", type: "output", name: "Сохранение в CRM", description: "Карточка CRM: клиент, бюджет, потребности, результат, саммари, решение Gate.", inputPorts: [{ id: "port_pl_crm_in", name: "gate+store+needs+outcome+summary" }], outputPorts: [], tools: [], metadata: { format: "json" }, position: { x: 1820, y: 220 }, version: "1.0.0" },
+];
+
+const edgesPipelineLab: Edge[] = [
+  { id: "edge_pl_input_nexara", sourceNodeId: "node_pl_input", targetNodeId: "node_pl_nexara", sourcePortId: "port_pl_input_out", targetPortId: "port_pl_nexara_in", version: "1.0.0" },
+  { id: "edge_pl_input_validate", sourceNodeId: "node_pl_input", targetNodeId: "node_pl_validate", sourcePortId: "port_pl_input_out", targetPortId: "port_pl_validate_in", version: "1.0.0" },
+  { id: "edge_pl_input_facts", sourceNodeId: "node_pl_input", targetNodeId: "node_pl_facts", sourcePortId: "port_pl_input_out", targetPortId: "port_pl_facts_in", version: "1.0.0" },
+  { id: "edge_pl_input_needs", sourceNodeId: "node_pl_input", targetNodeId: "node_pl_needs", sourcePortId: "port_pl_input_out", targetPortId: "port_pl_needs_in", version: "1.0.0" },
+  { id: "edge_pl_input_outcome", sourceNodeId: "node_pl_input", targetNodeId: "node_pl_outcome", sourcePortId: "port_pl_input_out", targetPortId: "port_pl_outcome_in", version: "1.0.0" },
+  { id: "edge_pl_facts_store", sourceNodeId: "node_pl_facts", targetNodeId: "node_pl_store", sourcePortId: "port_pl_facts_out", targetPortId: "port_pl_store_in", version: "1.0.0" },
+  { id: "edge_pl_facts_summary", sourceNodeId: "node_pl_facts", targetNodeId: "node_pl_summary", sourcePortId: "port_pl_facts_out", targetPortId: "port_pl_summary_in", version: "1.0.0" },
+  { id: "edge_pl_needs_summary", sourceNodeId: "node_pl_needs", targetNodeId: "node_pl_summary", sourcePortId: "port_pl_needs_out", targetPortId: "port_pl_summary_in", version: "1.0.0" },
+  { id: "edge_pl_outcome_summary", sourceNodeId: "node_pl_outcome", targetNodeId: "node_pl_summary", sourcePortId: "port_pl_outcome_out", targetPortId: "port_pl_summary_in", version: "1.0.0" },
+  { id: "edge_pl_summary_check", sourceNodeId: "node_pl_summary", targetNodeId: "node_pl_check", sourcePortId: "port_pl_summary_out", targetPortId: "port_pl_check_in", version: "1.0.0" },
+  { id: "edge_pl_store_check", sourceNodeId: "node_pl_store", targetNodeId: "node_pl_check", sourcePortId: "port_pl_store_out", targetPortId: "port_pl_check_in", version: "1.0.0" },
+  { id: "edge_pl_store_gate", sourceNodeId: "node_pl_store", targetNodeId: "node_pl_gate", sourcePortId: "port_pl_store_out", targetPortId: "port_pl_gate_in", version: "1.0.0" },
+  { id: "edge_pl_needs_gate", sourceNodeId: "node_pl_needs", targetNodeId: "node_pl_gate", sourcePortId: "port_pl_needs_out", targetPortId: "port_pl_gate_in", version: "1.0.0" },
+  { id: "edge_pl_outcome_gate", sourceNodeId: "node_pl_outcome", targetNodeId: "node_pl_gate", sourcePortId: "port_pl_outcome_out", targetPortId: "port_pl_gate_in", version: "1.0.0" },
+  { id: "edge_pl_check_gate", sourceNodeId: "node_pl_check", targetNodeId: "node_pl_gate", sourcePortId: "port_pl_check_out", targetPortId: "port_pl_gate_in", version: "1.0.0" },
+  { id: "edge_pl_validate_gate", sourceNodeId: "node_pl_validate", targetNodeId: "node_pl_gate", sourcePortId: "port_pl_validate_out", targetPortId: "port_pl_gate_in", version: "1.0.0" },
+  { id: "edge_pl_gate_crm", sourceNodeId: "node_pl_gate", targetNodeId: "node_pl_crm", sourcePortId: "port_pl_gate_out", targetPortId: "port_pl_crm_in", version: "1.0.0" },
+  { id: "edge_pl_store_crm", sourceNodeId: "node_pl_store", targetNodeId: "node_pl_crm", sourcePortId: "port_pl_store_out", targetPortId: "port_pl_crm_in", version: "1.0.0" },
+  { id: "edge_pl_needs_crm", sourceNodeId: "node_pl_needs", targetNodeId: "node_pl_crm", sourcePortId: "port_pl_needs_out", targetPortId: "port_pl_crm_in", version: "1.0.0" },
+  { id: "edge_pl_outcome_crm", sourceNodeId: "node_pl_outcome", targetNodeId: "node_pl_crm", sourcePortId: "port_pl_outcome_out", targetPortId: "port_pl_crm_in", version: "1.0.0" },
+  { id: "edge_pl_summary_crm", sourceNodeId: "node_pl_summary", targetNodeId: "node_pl_crm", sourcePortId: "port_pl_summary_out", targetPortId: "port_pl_crm_in", version: "1.0.0" },
+];
+
+const pipelinePipelineLab: Pipeline = {
+  id: "pipeline_demo_pipeline_lab_v3",
+  projectId: "project_demo_pipeline_lab_v3",
+  architectureId: "architecture_demo_pipeline_lab_v3",
+  status: "ready",
+  nodes: nodesPipelineLab,
+  edges: edgesPipelineLab,
+  layout: { viewport: { x: 0, y: 0, zoom: 0.6 } },
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
 const reviews: Review[] = [
   { id: "review_product_demo", targetType: "product", targetId: "product_demo_call_analysis", status: "approved", score: 91, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
   { id: "review_architecture_demo", targetType: "architecture", targetId: "architecture_demo_call_analysis", status: "approved", score: 93, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
@@ -385,6 +600,9 @@ const reviews: Review[] = [
   { id: "review_product_chat", targetType: "product", targetId: "product_demo_chat_classification", status: "approved", score: 85, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
   { id: "review_architecture_chat", targetType: "architecture", targetId: "architecture_demo_chat_classification", status: "approved", score: 86, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
   { id: "review_pipeline_chat", targetType: "pipeline", targetId: "pipeline_demo_chat_classification", status: "approved", score: 84, issues: [], createdAt, version: "1.0.0" },
+  { id: "review_product_pl", targetType: "product", targetId: "product_demo_pipeline_lab_v3", status: "approved", score: 92, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
+  { id: "review_architecture_pl", targetType: "architecture", targetId: "architecture_demo_pipeline_lab_v3", status: "approved", score: 94, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
+  { id: "review_pipeline_pl", targetType: "pipeline", targetId: "pipeline_demo_pipeline_lab_v3", status: "approved", score: 90, issues: [], createdAt, version: "1.0.0" },
 ];
 
 const runs: Run[] = [
@@ -475,6 +693,41 @@ const runs: Run[] = [
     finishedAt: createdAt,
     version: "1.0.0",
   },
+  {
+    id: "run_demo_pipeline_lab_seed",
+    pipelineId: "pipeline_demo_pipeline_lab_v3",
+    status: "succeeded",
+    input: "Клиент: Здравствуйте, интересует трёхкомнатная квартира в центре, бюджет до 8 миллионов, ипотека в процессе одобрения. Агент: Отлично, давайте назначим показ на пятницу в 14:00. Клиент: Договорились.",
+    output: {
+      client_name: null,
+      budget: 8000000,
+      source_of_funds: ["ипотека в процессе"],
+      interested_in: ["Новостройки"],
+      timeline: "до 1 месяца",
+      call_result: "назначен показ",
+      next_step: "Показать варианты в пятницу в 14:00",
+      summary: "Клиент рассматривает трёхкомнатную квартиру в центре с бюджетом до 8 млн, ипотека в процессе одобрения. Показ назначен на пятницу.",
+      quality: { confidence: 0.87, decision: "AUTO_SAVE + лог" },
+    },
+    metrics: [
+      { name: "tokens", value: 2140, unit: "tokens" },
+      { name: "cost", value: 0.0038, unit: "usd" },
+      { name: "latency", value: 3120, unit: "ms" },
+      { name: "confidence", value: 0.87 },
+    ],
+    evidence: ["интересует трёхкомнатная квартира в центре, бюджет до 8 миллионов", "ипотека в процессе одобрения", "давайте назначим показ на пятницу в 14:00"],
+    latencyMs: 3120,
+    costUsd: 0.0038,
+    logs: [
+      { timestamp: createdAt, level: "info", message: "Pipeline run started." },
+      { timestamp: createdAt, level: "info", message: "Fact Agent (GPT-5 mini) extracted budget and source of funds." },
+      { timestamp: createdAt, level: "info", message: "Check Agent (Claude Sonnet 4.6) found no hallucinations or PII leaks." },
+      { timestamp: createdAt, level: "info", message: "Quality Gate decision: AUTO_SAVE + лог (confidence 0.87)." },
+    ],
+    startedAt: createdAt,
+    finishedAt: createdAt,
+    version: "1.0.0",
+  },
 ];
 
 const projects: Project[] = [
@@ -520,13 +773,27 @@ const projects: Project[] = [
     updatedAt: createdAt,
     version: "1.0.0",
   },
+  {
+    id: "project_demo_pipeline_lab_v3",
+    name: "Pipeline Lab v3 — Анализ звонков (Недвижимость)",
+    description: "10-этапный пайплайн анализа звонков по недвижимости с реальными вызовами OpenAI/Anthropic (BYOK) в Pipeline Lab v3 -- см. вкладку «Pipeline Lab v3».",
+    status: "testing",
+    productId: "product_demo_pipeline_lab_v3",
+    architectureId: "architecture_demo_pipeline_lab_v3",
+    pipelineId: "pipeline_demo_pipeline_lab_v3",
+    playgroundRunIds: ["run_demo_pipeline_lab_seed"],
+    reviewIds: ["review_product_pl", "review_architecture_pl", "review_pipeline_pl"],
+    createdAt,
+    updatedAt: createdAt,
+    version: "1.0.0",
+  },
 ];
 
 export const demoSnapshot: RepositorySnapshot = {
   projects,
-  products: [product, productLead, productChat],
-  architectures: [architecture, architectureLead, architectureChat],
-  pipelines: [pipeline, pipelineLead, pipelineChat],
+  products: [product, productLead, productChat, productPipelineLab],
+  architectures: [architecture, architectureLead, architectureChat, architecturePipelineLab],
+  pipelines: [pipeline, pipelineLead, pipelineChat, pipelinePipelineLab],
   runs,
   reviews,
   frameworks,

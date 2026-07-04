@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Play, Microscope } from "lucide-react";
-import { Button, Card, EmptyState, Page, Section, Textarea, Badge, Status } from "@/shared/ui";
+import { Play, Microscope, FlaskConical } from "lucide-react";
+import { Alert, Button, Card, EmptyState, Page, Section, Textarea, Badge, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundStore } from "@/shared/stores/playground-store";
 import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
@@ -17,6 +17,12 @@ import { getProjectBundle } from "../selectors";
 function stringifyOutput(output: unknown): string {
   return JSON.stringify(output, null, 2);
 }
+
+// Same pipeline this app's own domain graph mirrors (see
+// pipeline-screen.tsx's PIPELINE_LAB_V3_PIPELINE_ID) -- shown here too
+// since this is a real, more capable (BYOK OpenAI/Anthropic) tool for
+// exactly this pipeline, not a generic cross-project banner.
+const PIPELINE_LAB_V3_PIPELINE_ID = "pipeline_demo_pipeline_lab_v3";
 
 export function PlaygroundScreen() {
   const router = useRouter();
@@ -82,6 +88,18 @@ export function PlaygroundScreen() {
           </Button>
         </div>
       </div>
+
+      {pipeline.id === PIPELINE_LAB_V3_PIPELINE_ID ? (
+        <Alert tone="info">
+          <div className="flex items-center justify-between gap-3">
+            <span>Для этого пайплайна есть отдельный инструмент с реальными вызовами OpenAI/Anthropic (BYOK) — Playground ниже выполняет только mock-версию через общий Runtime.</span>
+            <Button variant="secondary" onClick={() => router.push("/?view=pipeline-lab-v3")}>
+              <FlaskConical className="size-4" aria-hidden="true" />
+              Pipeline Lab v3
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="grid gap-3">

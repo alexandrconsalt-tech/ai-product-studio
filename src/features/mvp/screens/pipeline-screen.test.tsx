@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePipelineStore } from "@/shared/stores/pipeline-store";
 import { demoSnapshot } from "@/shared/repositories/demo-data";
 import { PipelineScreen } from "./pipeline-screen";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 describe("PipelineScreen", () => {
   afterEach(() => {
