@@ -231,7 +231,7 @@ export function PipelineScreen() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-56px)] min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <Toolbar className="justify-between">
         <div className="flex items-center gap-1">
           <Button onClick={handleAddNode}>
