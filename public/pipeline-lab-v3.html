@@ -335,6 +335,7 @@ function defaultPipeline(){
 {
   "interested_in": [<из: "Новостройки","Вторичка","Ипотека","Строительство","Аренда">],
   "property_requirements": <краткое описание требований к объекту или null>,
+  "source_of_funds": [<массив из справочника: "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено">],
   "timeline": <из: "до 1 месяца","2-3 месяца","3-6 месяцев","более 6 месяцев","не определено">,
   "timeline_citation": <дословная цитата или null>
 }
@@ -828,8 +829,16 @@ function renderReport(stage, rep, num){
   return el;
 }
 
+// Форматирует значение потребности (строка/массив/null) для блока
+// "Итоговое саммари" -- значения приходят из справочников (ENUMS),
+// заполняются агентом "Определение потребностей" (ctx.needs).
+function fmtNeed(v){
+  if(v==null || v==='не определено') return 'не определено';
+  return Array.isArray(v) ? (v.length? v.join(', ') : 'не определено') : String(v);
+}
+
 function renderFinal(){
-  const sm=ctx.summary, gate=ctx.gate, crm=ctx.crm;
+  const sm=ctx.summary, gate=ctx.gate, crm=ctx.crm, n=ctx.needs||{};
   const summary = (sm&&sm.summary) || '—';
   const highlights = (sm&&sm.highlights)||[];
   const el=document.createElement('div'); el.className='final';
@@ -840,6 +849,11 @@ function renderFinal(){
     '<p class="fl">🎯 Итоговое саммари</p>'
     +'<p class="fs">'+escapeHtml(summary)+'</p>'
     +(highlights.length?'<ul class="chklist" style="margin-bottom:14px">'+highlights.map(h=>'<li class="pass"><span class="ic">•</span><span>'+escapeHtml(h)+'</span></li>').join('')+'</ul>':'')
+    +'<div class="fmeta" style="margin-bottom:10px">'
+    +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
+    +'<div class="fm">Источник средств: <b>'+escapeHtml(fmtNeed(n.source_of_funds))+'</b></div>'
+    +'<div class="fm">Срок покупки: <b>'+escapeHtml(fmtNeed(n.timeline))+'</b></div>'
+    +'</div>'
     +'<div class="fmeta">'
     +'<div class="fm">Уверенность системы: <b>'+c.toFixed(2)+'</b></div>'
     +'<div class="fm">Решение: <b>'+escapeHtml(decision)+'</b></div>'
