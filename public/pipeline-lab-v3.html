@@ -161,11 +161,6 @@
     <div>
       <p class="eyebrow">AI Pipeline Lab · Платформа VT</p>
       <h1>Тестовый стенд <span class="g">AI-пайплайнов</span></h1>
-      <p class="lede">Полный пайплайн из десяти этапов: Nexara (STT) → валидация кодом → извлечение фактов → единое хранилище → потребности → результат звонка → саммари → проверка Claude → Quality Gate → сохранение в CRM. В песочнице сервисные этапы (Nexara, CRM) симулируются кодом, LLM-этапы вызывают реальную модель.</p>
-    </div>
-    <div class="row">
-      <button class="btn ghost sm" id="exportBtn">↓ Экспорт пайплайна</button>
-      <label class="btn ghost sm" style="margin:0">↑ Импорт<input type="file" id="importFile" accept=".json" style="display:none"></label>
     </div>
   </header>
 
@@ -991,16 +986,6 @@ document.getElementById('preset').addEventListener('change',e=>{
   if(e.target.value==='default'){pipeline=defaultPipeline();}
   else{pipeline=[{id:s(),enabled:true,type:'llm',name:'Шаг',model:'claude-sonnet-4-6',outKey:'step1',prompt:'{{transcript}}'}];}
   renderStages();
-});
-
-document.getElementById('exportBtn').addEventListener('click',()=>{
-  const blob=new Blob([JSON.stringify(pipeline.map(sanitize),null,2)],{type:'application/json'});
-  dl(blob,'pipeline_config.json'); toast('Пайплайн экспортирован');
-});
-document.getElementById('importFile').addEventListener('change',e=>{
-  const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-  r.onload=()=>{try{const arr=JSON.parse(r.result);pipeline=arr.map(x=>({id:s(),...x}));renderStages();toast('Пайплайн загружен');}catch(err){toast('Ошибка JSON');}};
-  r.readAsText(f);
 });
 
 document.getElementById('txtFile').addEventListener('change',e=>{
