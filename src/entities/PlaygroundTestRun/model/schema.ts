@@ -5,8 +5,12 @@ import { EntityIdSchema, IsoDateTimeSchema, VersionSchema } from "@/entities/sha
 // domain Pipeline entity through the real Production Pipeline Runtime
 // (src/shared/runtime/pipeline-executor.ts) -- distinct from
 // "pipeline-lab-v3" (the standalone iframe tool's own postMessage
-// bridge). Both feed the same Dashboard history uniformly.
-export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor"]);
+// bridge). "product-test-bench" (added same day, follow-up) is a real,
+// product-specific stage orchestrator with a genuine confidence-gated
+// retry loop (src/features/mvp/lib/ad-copy-test-bench.ts) -- something
+// the domain Pipeline's DAG-based executor cannot do at all. All three
+// feed the same Dashboard history uniformly.
+export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor", "product-test-bench"]);
 export const PlaygroundTestRunStatusSchema = z.enum(["succeeded", "failed"]);
 
 export const PlaygroundTestRunSchema = z.object({

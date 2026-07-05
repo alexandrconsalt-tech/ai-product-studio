@@ -12,7 +12,6 @@ import type { Node, NodeType } from "@/entities/Node/model/types";
 import type { Pipeline } from "@/entities/Pipeline/model/types";
 import type { Model } from "@/entities/Model/model/types";
 import type { PipelineLabV3RunPayload } from "@/shared/model/pipeline-lab-v3-message";
-import { AD_COPY_CRM_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
 import { executePipeline } from "@/shared/runtime/pipeline-executor";
 import { realStageRegistry } from "@/shared/runtime/real-stage";
 import { defaultLLMProviderRegistry } from "@/shared/llm/provider-registry";
@@ -21,9 +20,13 @@ import { buildExecutionTrace, type ExecutionTrace, type StageTrace } from "@/sha
 import type { ExecutionEvent } from "@/shared/runtime/types";
 import { getProjectBundle } from "../selectors";
 import { PipelineLabV3Screen } from "./pipeline-lab-v3-screen";
+import { AdCopyTestBenchPanel } from "./ad-copy-test-bench-panel";
+import type { AdCopyRunResult } from "../lib/ad-copy-test-bench";
 
 const IFRAME_SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
+const TEST_BENCH_SOURCE: PlaygroundTestRunSource = "product-test-bench";
+const AD_COPY_PIPELINE_ID = "pipeline_ad_copy_generation";
 
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
   agent: "Агент",
@@ -191,11 +194,7 @@ export function PlaygroundScreen() {
   React.useEffect(() => {
     setRunError(null);
     setLastRunId(null);
-    if (pipeline?.id === "pipeline_ad_copy_generation") {
-      setRunInput(JSON.stringify(AD_COPY_CRM_INPUT_EXAMPLE, null, 2));
-    } else {
-      setRunInput("");
-    }
+    setRunInput("");
   }, [pipeline?.id]);
 
   const handleRunComplete = React.useCallback(
@@ -219,6 +218,34 @@ export function PlaygroundScreen() {
           report: payload.report,
           startedAt: payload.startedAt,
           finishedAt: payload.finishedAt,
+        }),
+      );
+    },
+    [selectedProjectId, recordRun],
+  );
+
+  const handleAdCopyRunComplete = React.useCallback(
+    (result: AdCopyRunResult, rawInput: string) => {
+      if (!selectedProjectId) return;
+      const errorCount = result.stages.filter((stage) => stage.status === "failed").length;
+      const startedAt = result.stages.find((stage) => stage.startedAt)?.startedAt ?? new Date().toISOString();
+      recordRun(
+        createPlaygroundTestRun({
+          projectId: selectedProjectId,
+          source: TEST_BENCH_SOURCE,
+          status: result.success ? "succeeded" : "failed",
+          stageCount: result.stages.length,
+          errorCount,
+          warningCount: result.finalRecord?.lowConfidence ? 1 : 0,
+          tokens: result.totalTokensEstimate,
+          costUsd: result.totalCostUsd,
+          durationMs: result.totalDurationMs,
+          confidence: result.finalRecord ? result.finalRecord.confidenceScore / 100 : undefined,
+          decision: result.finalRecord ? (result.finalRecord.lowConfidence ? "SAVE_LOW_CONFIDENCE" : "SAVE") : undefined,
+          transcript: rawInput,
+          report: { stages: result.stages },
+          startedAt,
+          finishedAt: new Date().toISOString(),
         }),
       );
     },
@@ -309,6 +336,17 @@ export function PlaygroundScreen() {
         <EmptyState>Выберите продукт выше, чтобы открыть его pipeline.</EmptyState>
       ) : !pipeline ? (
         <EmptyState>Для этого продукта ещё не создан Pipeline.</EmptyState>
+      ) : pipeline.id === AD_COPY_PIPELINE_ID ? (
+        <Section>
+          <div className="flex items-center gap-2">
+            <Layers className="size-4 text-text-muted" aria-hidden="true" />
+            <h2 className="text-lg font-semibold">Тестовый стенд: {selectedProject.name}</h2>
+          </div>
+          <p className="text-sm text-text-muted">
+            Полноценный прогон 10-этапного пайплайна с реальными вызовами модели (ключ из «Настройки») и реальной детерминированной логикой — как в Pipeline Lab v3, но по конфигурации этого продукта.
+          </p>
+          <AdCopyTestBenchPanel onRunComplete={handleAdCopyRunComplete} />
+        </Section>
       ) : (
         <>
           <PipelineStagesSection pipeline={pipeline} models={models} trace={lastTrace} />

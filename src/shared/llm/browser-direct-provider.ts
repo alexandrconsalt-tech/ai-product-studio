@@ -110,6 +110,24 @@ export async function callBrowserLlm(prompt: string): Promise<string> {
   throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в разделе «Настройки».");
 }
 
+export type ConfiguredLlmResult = Readonly<{ text: string; vendor: "openai" | "anthropic"; model: string }>;
+
+/**
+ * Same BYOK call path as `callBrowserLlm`, but prefers OpenAI/GPT-5 mini
+ * first -- for stages whose Architecture explicitly specifies that model
+ * (e.g. "Генерация текстов объявлений"'s Benefit Extraction/Generation/
+ * Checker agents, all `modelId: "model_gpt5_mini"` in demo-data.ts), so
+ * a real run actually uses the configured model rather than whichever
+ * vendor happens to be checked first. Falls back to Anthropic if only
+ * that key is configured, rather than hard-failing -- still a real
+ * model call, just not the specific one the architecture names.
+ */
+export async function callConfiguredLlm(prompt: string): Promise<ConfiguredLlmResult> {
+  if (loadOpenAiApiKey()) return { text: await callOpenAi(prompt), vendor: "openai", model: DEFAULT_OPENAI_MODEL };
+  if (loadAnthropicApiKey()) return { text: await callAnthropic(prompt), vendor: "anthropic", model: DEFAULT_ANTHROPIC_MODEL };
+  throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в разделе «Настройки».");
+}
+
 /** Same tolerant parsing Pipeline Lab v3's own parseJSON does (strips ```json fences, trims to the outer braces). */
 export function parseJsonResponse<T>(raw: string): T {
   let text = raw.trim().replace(/```json/gi, "").replace(/```/g, "").trim();
