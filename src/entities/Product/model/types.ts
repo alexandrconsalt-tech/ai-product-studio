@@ -29,9 +29,12 @@ export type ProductFeature = Readonly<{
   priority?: "low" | "medium" | "high";
 }>;
 
+export type ProductMetricCategory = "success" | "quality" | "cost" | "speed";
+
 export type ProductMetric = Readonly<{
   name: string;
   target?: string;
+  category?: ProductMetricCategory;
 }>;
 
 export type Product = Readonly<{
@@ -48,6 +51,18 @@ export type Product = Readonly<{
   metrics: readonly ProductMetric[];
   prd?: string;
   frameworkIds: readonly EntityId[];
+  valueProposition?: string;
+  targetAudience?: string;
+  userStory?: string;
+  mainScenario?: string;
+  mvpOut?: string;
+  assumptions?: string;
+  aiModels?: string;
+  aiAgents?: string;
+  aiPipelineNotes?: string;
+  acceptanceCriteria?: string;
+  roadmap?: string;
+  notes?: string;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
   version: Version;

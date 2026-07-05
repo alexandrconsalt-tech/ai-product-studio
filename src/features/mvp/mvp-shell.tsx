@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FlaskConical, FolderKanban, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
+import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation, Card } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
@@ -17,7 +17,13 @@ import { ExecutionInspectorScreen } from "./screens/execution-inspector-screen";
 import { PromptInspectorScreen } from "./screens/prompt-inspector-screen";
 import { AnalyticsScreen } from "./screens/analytics-screen";
 import { PipelineLabV3Screen } from "./screens/pipeline-lab-v3-screen";
+import { DashboardScreen } from "./screens/dashboard-screen";
 
+// Every view stays reachable by URL (`?view=...`) -- CLAUDE.md's "hide
+// navigation, never delete code" rule (AI Product Studio v2 addendum).
+// Only `visibleNavItems` below decides what actually renders in the
+// sidebar/prev-next arrows; `navItems` here stays the full list so
+// `isMvpView`/`viewTitles` keep recognizing every hidden view too.
 const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNode }> = [
   { id: "projects", label: "Projects", icon: <FolderKanban className="size-4" aria-hidden="true" /> },
   { id: "product", label: "Product", icon: <Boxes className="size-4" aria-hidden="true" /> },
@@ -28,8 +34,16 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
   { id: "prompts", label: "Prompts", icon: <ScrollText className="size-4" aria-hidden="true" /> },
   { id: "analytics", label: "Analytics", icon: <LineChart className="size-4" aria-hidden="true" /> },
   { id: "pipeline-lab-v3", label: "Pipeline Lab v3", icon: <FlaskConical className="size-4" aria-hidden="true" /> },
+  { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard className="size-4" aria-hidden="true" /> },
   { id: "settings", label: "Settings", icon: <Settings className="size-4" aria-hidden="true" /> },
 ];
+
+// AI Product Studio v2: only these three sections are visible navigation
+// (Product -> Playground -> Dashboard). Everything else above stays
+// reachable by URL only (Projects, Architecture, Pipeline, Inspector,
+// Prompts, Analytics, Pipeline Lab v3 standalone, Settings).
+const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "dashboard"]);
+const visibleNavItems = navItems.filter((item) => VISIBLE_VIEW_IDS.has(item.id));
 
 const viewTitles: Record<MvpView, string> = {
   projects: "Projects",
@@ -41,6 +55,7 @@ const viewTitles: Record<MvpView, string> = {
   prompts: "Prompt Inspector",
   analytics: "Analytics",
   "pipeline-lab-v3": "Pipeline Lab v3",
+  dashboard: "Dashboard",
   settings: "Settings",
 };
 
@@ -55,6 +70,7 @@ function isMvpView(value: string | null): value is MvpView {
     value === "prompts" ||
     value === "analytics" ||
     value === "pipeline-lab-v3" ||
+    value === "dashboard" ||
     value === "settings"
   );
 }
@@ -63,7 +79,10 @@ export function MvpShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedView = searchParams.get("view");
-  const view: MvpView = isMvpView(requestedView) ? requestedView : "projects";
+  // AI Product Studio v2's default landing view is Product (list of
+  // products), not Projects -- Product -> Playground -> Dashboard is the
+  // whole visible app now.
+  const view: MvpView = isMvpView(requestedView) ? requestedView : "product";
   const { snapshot, selectedProjectId, load } = useRepositoryStore();
   const { theme, setTheme, sidebarCollapsed, toggleSidebar, assistantOpen, toggleAssistant } = useUiStore();
 
@@ -77,9 +96,12 @@ export function MvpShell() {
 
   const bundle = getProjectBundle(snapshot, selectedProjectId);
   const goTo = (nextView: MvpView) => router.push(`/?view=${nextView}`);
-  const currentIndex = navItems.findIndex((item) => item.id === view);
-  const previousView = navItems[Math.max(0, currentIndex - 1)]?.id ?? "projects";
-  const nextView = navItems[Math.min(navItems.length - 1, currentIndex + 1)]?.id ?? "settings";
+  // Prev/next arrows cycle only the 3 visible views -- primary
+  // navigation matches the visible sidebar; hidden screens stay
+  // reachable only by typing `?view=...` directly.
+  const currentIndex = visibleNavItems.findIndex((item) => item.id === view);
+  const previousView = visibleNavItems[Math.max(0, currentIndex - 1)]?.id ?? "product";
+  const nextView = visibleNavItems[Math.min(visibleNavItems.length - 1, currentIndex + 1)]?.id ?? "dashboard";
 
   return (
     <AppShell>
@@ -91,7 +113,7 @@ export function MvpShell() {
           </IconButton>
         </div>
         <nav className="flex flex-col gap-1">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavigationItem key={item.id} active={view === item.id} icon={item.icon} href={`/?view=${item.id}`}>
               {!sidebarCollapsed ? item.label : null}
             </NavigationItem>
@@ -128,6 +150,7 @@ export function MvpShell() {
             {view === "prompts" ? <PromptInspectorScreen /> : null}
             {view === "analytics" ? <AnalyticsScreen /> : null}
             {view === "pipeline-lab-v3" ? <PipelineLabV3Screen /> : null}
+            {view === "dashboard" ? <DashboardScreen /> : null}
             {view === "settings" ? <SettingsScreen /> : null}
           </Workspace>
           {assistantOpen ? (

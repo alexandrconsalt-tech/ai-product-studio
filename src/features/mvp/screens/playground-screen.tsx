@@ -1,152 +1,112 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { Play, Microscope, FlaskConical } from "lucide-react";
-import { Alert, Button, Card, EmptyState, Page, Section, Textarea, Badge, Status } from "@/shared/ui";
+import { FlaskConical } from "lucide-react";
+import { Badge, Card, EmptyState, Page, Search, Section, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
-import { usePlaygroundStore } from "@/shared/stores/playground-store";
-import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
-import { executePipeline } from "@/shared/runtime/pipeline-executor";
-import { realStageRegistry } from "@/shared/runtime/real-stage";
-import { defaultLLMProviderRegistry } from "@/shared/llm/provider-registry";
-import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
-import type { ExecutionEvent } from "@/shared/runtime/types";
-import { getProjectBundle } from "../selectors";
+import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
+import { createPlaygroundTestRun } from "@/entities/PlaygroundTestRun/model/factory";
+import type { PlaygroundTestRunSource } from "@/entities/PlaygroundTestRun/model/types";
+import type { PipelineLabV3RunPayload } from "@/shared/model/pipeline-lab-v3-message";
+import { PipelineLabV3Screen } from "./pipeline-lab-v3-screen";
 
-function stringifyOutput(output: unknown): string {
-  return JSON.stringify(output, null, 2);
-}
+const SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 
-// Same pipeline this app's own domain graph mirrors (see
-// pipeline-screen.tsx's PIPELINE_LAB_V3_PIPELINE_ID) -- shown here too
-// since this is a real, more capable (BYOK OpenAI/Anthropic) tool for
-// exactly this pipeline, not a generic cross-project banner.
-const PIPELINE_LAB_V3_PIPELINE_ID = "pipeline_demo_pipeline_lab_v3";
-
+/**
+ * Playground is a universal test bench, not tied to any one product's
+ * pipeline (CLAUDE.md addendum "Product -> Playground -> Dashboard"): a
+ * product picker up top, Pipeline Lab v3 below scoped to whichever
+ * product is selected (existing app-wide `selectedProjectId`, so the
+ * same product naturally carries across Product -> Playground ->
+ * Dashboard). Every run's aggregate result is recorded into
+ * PlaygroundTestRun history for Dashboard to read.
+ *
+ * This replaces the previous mock-executor demo UI this screen used to
+ * show (`executePipeline`/`realStageRegistry` against the domain
+ * Pipeline entity) -- that Production Pipeline Runtime code is untouched
+ * and still exercised by the (hidden) Analytics screen's Golden Dataset
+ * evaluation/benchmark, so nothing was deleted, only this screen's
+ * presentation changed to the product-first Pipeline Lab v3 flow this
+ * refactor asked for.
+ */
 export function PlaygroundScreen() {
-  const router = useRouter();
-  const { snapshot, selectedProjectId } = useRepositoryStore();
-  const { input, setInput, selectedRunId, selectRun, addRun } = usePlaygroundStore();
-  const { recordTrace, getTrace } = useExecutionTraceStore();
-  const { pipeline, runs } = getProjectBundle(snapshot, selectedProjectId);
-  const [executing, setExecuting] = React.useState(false);
-  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null;
+  const { snapshot, selectedProjectId, selectProject } = useRepositoryStore();
+  const { recordRun } = usePlaygroundTestRunStore();
+  const [query, setQuery] = React.useState("");
+  const projects = snapshot?.projects ?? [];
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const filtered = projects.filter((project) => `${project.name} ${project.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
 
-  if (!pipeline) {
-    return <EmptyState>Playground станет доступен после Pipeline Complete gate.</EmptyState>;
-  }
-
-  const handleRun = () => {
-    setExecuting(true);
-    // Real Production Pipeline Runtime (src/shared/runtime), replacing
-    // the Simulation Engine here per the "gradually replace" plan --
-    // this is the first (and so far only) screen wired to it. Stage
-    // handlers still use LLMProvider's default mock (see
-    // src/shared/llm/provider-registry.ts) unless OPENAI_API_KEY is
-    // configured server-side, so this remains a real executor with a
-    // fake model call by default, not a real LLM integration.
-    const registry = realStageRegistry({
-      llmProviders: defaultLLMProviderRegistry,
-      prompts: seededPromptRegistry,
-      models: snapshot?.models ?? [],
-    });
-    const events: ExecutionEvent[] = [];
-    executePipeline(pipeline, input, { registry, projectId: pipeline.projectId, onEvent: (event) => events.push(event) })
-      .then((run) => {
-        addRun(run);
-        recordTrace(run.id, events);
-      })
-      .finally(() => setExecuting(false));
-  };
-
-  const openInspector = () => {
-    if (selectedRun) router.push(`/?view=inspector`);
-  };
-
-  const tokens = selectedRun?.metrics.find((metric) => metric.name === "tokens")?.value ?? 0;
-  // Derived from latencyMs rather than a separate "duration" metric --
-  // the Runtime's stage handlers only report latency once (as
-  // "latency"), not redundantly under two different metric names.
-  const duration = Math.round(((selectedRun?.latencyMs ?? 0) / 100)) / 10;
+  const handleRunComplete = React.useCallback(
+    (payload: PipelineLabV3RunPayload) => {
+      if (!selectedProjectId) return;
+      recordRun(
+        createPlaygroundTestRun({
+          projectId: selectedProjectId,
+          source: SOURCE,
+          status: payload.status,
+          stageCount: payload.stageCount,
+          errorCount: payload.errorCount,
+          warningCount: payload.warningCount,
+          tokens: payload.tokens,
+          costUsd: payload.costUsd,
+          durationMs: payload.durationMs,
+          confidence: payload.confidence,
+          qualityScore: payload.qualityScore,
+          decision: payload.decision,
+          startedAt: payload.startedAt,
+          finishedAt: payload.finishedAt,
+        }),
+      );
+    },
+    [selectedProjectId, recordRun],
+  );
 
   return (
     <Page className="max-w-none">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Playground</h1>
-          <p className="text-sm text-text-muted">Pipeline Executor выполняет граф пайплайна по узлам; модель по умолчанию — mock LLM provider (без реального AI-вызова).</p>
+      <div>
+        <h1 className="text-2xl font-semibold">Playground</h1>
+        <p className="text-sm text-text-muted">Выберите продукт и протестируйте его pipeline в Pipeline Lab v3 — загрузка данных, запуск, промежуточные результаты и отчёт.</p>
+      </div>
+
+      <Section>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-lg font-semibold">Продукты</h2>
+          <Status tone="info">{projects.length}</Status>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={openInspector} disabled={!selectedRun || !getTrace(selectedRun.id)}>
-            <Microscope className="size-4" aria-hidden="true" />
-            Execution Inspector
-          </Button>
-          <Button variant="primary" onClick={handleRun} disabled={executing || !input.trim()}>
-            <Play className="size-4" aria-hidden="true" />
-            {executing ? "Execution" : "Run Pipeline"}
-          </Button>
-        </div>
-      </div>
-
-      {pipeline.id === PIPELINE_LAB_V3_PIPELINE_ID ? (
-        <Alert tone="info">
-          <div className="flex items-center justify-between gap-3">
-            <span>Для этого пайплайна есть отдельный инструмент с реальными вызовами OpenAI/Anthropic (BYOK) — Playground ниже выполняет только mock-версию через общий Runtime.</span>
-            <Button variant="secondary" onClick={() => router.push("/?view=pipeline-lab-v3")}>
-              <FlaskConical className="size-4" aria-hidden="true" />
-              Pipeline Lab v3
-            </Button>
-          </div>
-        </Alert>
-      ) : null}
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="grid gap-3">
-          <h2 className="text-lg font-semibold">Input</h2>
-          <Textarea className="min-h-56" value={input} onChange={(event) => setInput(event.target.value)} />
-        </Card>
-        <Card className="grid gap-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Output</h2>
-            {selectedRun ? <Status tone={selectedRun.status === "succeeded" ? "success" : "warning"}>{selectedRun.status}</Status> : null}
-          </div>
-          <pre className="min-h-56 overflow-auto rounded-md bg-muted p-3 text-sm text-foreground">{selectedRun ? stringifyOutput(selectedRun.output) : "Run отсутствует"}</pre>
-        </Card>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card><p className="text-xs text-text-muted">Tokens</p><p className="text-xl font-semibold">{tokens}</p></Card>
-        <Card><p className="text-xs text-text-muted">Cost</p><p className="text-xl font-semibold">${selectedRun?.costUsd?.toFixed(4) ?? "0.0000"}</p></Card>
-        <Card><p className="text-xs text-text-muted">Latency</p><p className="text-xl font-semibold">{selectedRun?.latencyMs ?? 0} ms</p></Card>
-        <Card><p className="text-xs text-text-muted">Duration</p><p className="text-xl font-semibold">{duration}s</p></Card>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-        <Card>
-          <h2 className="mb-3 text-lg font-semibold">Execution Log</h2>
-          <div className="grid gap-2">
-            {(selectedRun?.logs ?? []).map((log, index) => (
-              <div key={`${log.timestamp}-${index}`} className="flex items-center gap-2 text-sm">
-                <Badge tone={log.level === "error" ? "error" : log.level === "warning" ? "warning" : "neutral"}>{log.level}</Badge>
-                <span className="text-text-muted">{log.message}</span>
-              </div>
+        <Search value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск продукта" aria-label="Поиск продукта" />
+        {filtered.length === 0 ? (
+          <EmptyState>Продукты не найдены. Создайте продукт в разделе Product.</EmptyState>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+            {filtered.map((project) => (
+              <Card key={project.id} className={project.id === selectedProjectId ? "border-focus" : undefined}>
+                <button type="button" className="w-full text-left" onClick={() => selectProject(project.id)}>
+                  <p className="truncate text-sm font-medium">{project.name}</p>
+                  <p className="mt-1 truncate text-xs text-text-muted">{project.description}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Badge tone={project.id === selectedProjectId ? "info" : "neutral"}>{project.status}</Badge>
+                  </div>
+                </button>
+              </Card>
             ))}
           </div>
-        </Card>
-        <Section>
-          <h2 className="text-lg font-semibold">Run History</h2>
-          <div className="grid gap-2">
-            {runs.map((run) => (
-              <button key={run.id} type="button" className="rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover" onClick={() => selectRun(run.id)}>
-                <p className="font-medium">{run.id}</p>
-                <p className="text-text-muted">{run.latencyMs} ms · ${run.costUsd?.toFixed(4) ?? "0.0000"}</p>
-              </button>
-            ))}
+        )}
+      </Section>
+
+      {selectedProject ? (
+        <Section className="flex min-h-0 flex-1 flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <FlaskConical className="size-4 text-text-muted" aria-hidden="true" />
+            <h2 className="text-lg font-semibold">Pipeline Lab v3 — {selectedProject.name}</h2>
           </div>
+          <Card className="h-[75vh] min-h-[560px] overflow-hidden p-0">
+            <PipelineLabV3Screen productId={selectedProject.id} onRunComplete={handleRunComplete} />
+          </Card>
         </Section>
-      </div>
+      ) : (
+        <EmptyState>Выберите продукт выше, чтобы открыть Pipeline Lab v3.</EmptyState>
+      )}
     </Page>
   );
 }
-

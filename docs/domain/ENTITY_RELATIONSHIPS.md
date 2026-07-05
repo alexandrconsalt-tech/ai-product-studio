@@ -75,3 +75,14 @@ KnowledgeModule
 - UI не должен создавать собственную модель связей.
 - React Flow graph должен адаптироваться из Pipeline, Node и Edge, а не наоборот.
 
+## PlaygroundTestRun (добавлено 2026-07-05, AI Product Studio v2)
+
+`PlaygroundTestRun` -- новая сущность, не входящая в `RepositorySnapshot`. Ссылается
+на `Project.id` (`projectId`) однонаправленно, без обратного массива на `Project`
+(в отличие от `Run`, у которого есть `Project.playgroundRunIds`). Причина: она
+не создаётся мутацией внутри React-дерева приложения, а приходит через
+`postMessage` от `public/pipeline-lab-v3.html`, поэтому хранится отдельно, в
+`usePlaygroundTestRunStore` (localStorage, см. DDD README сущности). Dashboard
+читает историю именно через `projectId`, так же как `getProjectBundle` везде
+использует `selectedProjectId`.
+

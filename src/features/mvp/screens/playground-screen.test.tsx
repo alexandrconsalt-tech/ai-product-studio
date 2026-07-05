@@ -1,37 +1,64 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
-import { usePlaygroundStore } from "@/shared/stores/playground-store";
-import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
+import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
 import { demoSnapshot } from "@/shared/repositories/demo-data";
 import { PlaygroundScreen } from "./playground-screen";
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
-}));
 
 describe("PlaygroundScreen", () => {
   afterEach(() => {
     useRepositoryStore.setState({ snapshot: null, selectedProjectId: null });
-    usePlaygroundStore.setState({ selectedRunId: null });
-    useExecutionTraceStore.setState({ tracesByRunId: {} });
+    usePlaygroundTestRunStore.setState({ runsByProjectId: {} });
   });
 
-  it("disables the Execution Inspector button until a run with a recorded trace exists", () => {
-    useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: demoSnapshot.projects[0].id });
+  it("shows the product picker and scopes the Pipeline Lab v3 iframe to the selected product", () => {
+    const [firstProject, secondProject] = demoSnapshot.projects;
+    useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: firstProject.id });
     render(<PlaygroundScreen />);
-    expect(screen.getByRole("button", { name: /execution inspector/i })).toBeDisabled();
+
+    expect(screen.getByText(firstProject.name)).toBeInTheDocument();
+    expect(screen.getByText(secondProject.name)).toBeInTheDocument();
+    const iframe = screen.getByTitle("Pipeline Lab v3") as HTMLIFrameElement;
+    expect(iframe.src).toContain(`productId=${encodeURIComponent(firstProject.id)}`);
+
+    fireEvent.click(screen.getByText(secondProject.name));
+    expect(useRepositoryStore.getState().selectedProjectId).toBe(secondProject.id);
   });
 
-  it("runs the real Pipeline Executor end to end and records a trace on completion", async () => {
-    useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: demoSnapshot.projects[0].id });
+  it("records a PlaygroundTestRun when the iframe reports run completion for the selected product", () => {
+    const project = demoSnapshot.projects[0];
+    useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: project.id });
     render(<PlaygroundScreen />);
 
-    fireEvent.click(screen.getByRole("button", { name: /run pipeline/i }));
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            source: "pipeline-lab-v3",
+            type: "run-complete",
+            productId: project.id,
+            payload: {
+              startedAt: "2026-07-05T10:00:00.000Z",
+              finishedAt: "2026-07-05T10:00:05.000Z",
+              durationMs: 5000,
+              stageCount: 10,
+              errorCount: 0,
+              warningCount: 0,
+              tokens: 1200,
+              costUsd: 0.012,
+              status: "succeeded",
+              confidence: 0.9,
+              qualityScore: 92,
+              decision: "AUTO_SAVE",
+            },
+          },
+        }),
+      );
+    });
 
-    await waitFor(() => expect(screen.getByText("succeeded")).toBeInTheDocument(), { timeout: 10000 });
-    expect(screen.getByRole("button", { name: /execution inspector/i })).not.toBeDisabled();
-    expect(Object.keys(useExecutionTraceStore.getState().tracesByRunId)).toHaveLength(1);
-  }, 10000);
+    const runs = usePlaygroundTestRunStore.getState().getRuns(project.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ projectId: project.id, status: "succeeded", costUsd: 0.012, qualityScore: 92 });
+  });
 });

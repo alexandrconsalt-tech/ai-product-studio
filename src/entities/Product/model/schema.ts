@@ -30,9 +30,12 @@ export const ProductFeatureSchema = z.object({
   priority: z.enum(["low", "medium", "high"]).optional(),
 });
 
+export const ProductMetricCategorySchema = z.enum(["success", "quality", "cost", "speed"]);
+
 export const ProductMetricSchema = z.object({
   name: z.string().min(1),
   target: z.string().optional(),
+  category: ProductMetricCategorySchema.optional(),
 });
 
 export const ProductSchema = z.object({
@@ -49,6 +52,24 @@ export const ProductSchema = z.object({
   metrics: z.array(ProductMetricSchema).readonly(),
   prd: z.string().optional(),
   frameworkIds: z.array(EntityIdSchema).readonly(),
+  // Product Manager template fields (AI Product Studio v2, CLAUDE.md addendum
+  // "Product -> Playground -> Dashboard") -- additive per DDD-1, all optional
+  // so existing seeded Products (demo-data.ts) remain valid without changes.
+  valueProposition: z.string().optional(),
+  targetAudience: z.string().optional(),
+  userStory: z.string().optional(),
+  mainScenario: z.string().optional(),
+  // `mvp` (existing field) holds "что входит"; `mvpOut` complements it with
+  // "что не входит" -- kept as two plain strings rather than a nested object
+  // per CLAUDE.md's simplicity-first principle (no second consumer yet).
+  mvpOut: z.string().optional(),
+  assumptions: z.string().optional(),
+  aiModels: z.string().optional(),
+  aiAgents: z.string().optional(),
+  aiPipelineNotes: z.string().optional(),
+  acceptanceCriteria: z.string().optional(),
+  roadmap: z.string().optional(),
+  notes: z.string().optional(),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
   version: VersionSchema,

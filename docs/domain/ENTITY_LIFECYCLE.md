@@ -71,3 +71,10 @@ created -> versioned -> deprecated
 - Run не может быть `succeeded` и `failed` одновременно.
 - Review score не управляет lifecycle напрямую; решение принимает Orchestrator через Quality Gates.
 
+## PlaygroundTestRun (добавлено 2026-07-05, AI Product Studio v2)
+
+Без lifecycle status, как и `Run` -- append-only, одна запись на завершённый
+тестовый прогон Pipeline Lab v3, никогда не редактируется после создания.
+`status` -- узкий enum `succeeded | failed` (не `LifecycleStatusSchema`),
+определяется тем, была ли хотя бы одна стадия прогона со статусом `bad`.
+

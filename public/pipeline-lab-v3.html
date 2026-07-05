@@ -431,12 +431,19 @@ let idc = 0; function s(){ return 'st'+(++idc); }
 // все текущие изменения по всем шагам разом, включая ещё не сохранённые
 // правки в других блоках.
 const PIPELINE_CONFIG_STORAGE='pipelineLabV3.pipelineConfig';
+// Playground (AI Product Studio v2, 2026-07-05) embeds this tool per
+// product via `?productId=`, so each product keeps its own saved stage
+// configuration instead of sharing one global one. Opened standalone
+// (no query param, e.g. the app's hidden "Pipeline Lab v3" route) keeps
+// using the original global key unchanged -- fully backward compatible.
+const PRODUCT_ID = new URLSearchParams(location.search).get('productId') || null;
+const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID : PIPELINE_CONFIG_STORAGE;
 function savePipelineConfig(){
-  localStorage.setItem(PIPELINE_CONFIG_STORAGE, JSON.stringify(pipeline.map(sanitize)));
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(pipeline.map(sanitize)));
 }
 function loadPipelineConfig(){
   try{
-    const raw=localStorage.getItem(PIPELINE_CONFIG_STORAGE);
+    const raw=localStorage.getItem(CONFIG_STORAGE_KEY);
     if(!raw) return null;
     const arr=JSON.parse(raw);
     if(!Array.isArray(arr) || !arr.length) return null;
@@ -778,7 +785,8 @@ async function runPipeline(){
   ctx={ __transcript:transcript };
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
-  let totalTokens=0, totalCost=0;
+  let totalTokens=0, totalCost=0, errorCount=0, warningCount=0;
+  const startedAt=new Date().toISOString(), startedMs=Date.now();
 
   for(let i=0;i<active.length;i++){
     const stage=active[i];
@@ -795,6 +803,8 @@ async function runPipeline(){
     if(stage.outKey && rep.output!==undefined) ctx[stage.outKey]=rep.output;
     if(rep.tokens) totalTokens+=rep.tokens;
     if(rep.cost) totalCost+=rep.cost;
+    if(rep.status==='bad') errorCount++;
+    else if(rep.status==='warn') warningCount++;
 
     card.replaceWith(renderReport(stage, rep, i+1));
     progBar.style.width=((i+1)/active.length*100)+'%';
@@ -803,6 +813,35 @@ async function runPipeline(){
   runStatus.textContent='готово';
   runBtn.disabled=false;
   renderFinal(totalTokens, totalCost);
+  reportRunToParent({ startedAt, durationMs: Date.now()-startedMs, stageCount: active.length, errorCount, warningCount, totalTokens, totalCost });
+}
+
+// Playground (AI Product Studio v2) listens for this from the parent
+// window to build Dashboard's run history -- see
+// src/features/mvp/screens/pipeline-lab-v3-screen.tsx. Wrapped in
+// try/catch and a no-op when there's no parent (opened standalone) so
+// this can never break the tool's own behavior.
+function reportRunToParent(run){
+  try{
+    const gate=ctx.gate, check=ctx.summary_check;
+    window.parent.postMessage({
+      source:'pipeline-lab-v3', type:'run-complete', productId: PRODUCT_ID,
+      payload:{
+        startedAt: run.startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: run.durationMs,
+        stageCount: run.stageCount,
+        errorCount: run.errorCount,
+        warningCount: run.warningCount,
+        tokens: run.totalTokens,
+        costUsd: run.totalCost,
+        status: run.errorCount>0 ? 'failed' : 'succeeded',
+        confidence: gate ? gate.confidence : undefined,
+        decision: gate ? gate.decision : undefined,
+        qualityScore: check ? check.score : undefined,
+      },
+    }, '*');
+  }catch(e){ /* no parent listening, or postMessage unsupported -- harmless */ }
 }
 
 function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='bad'?'bad':'run';}
