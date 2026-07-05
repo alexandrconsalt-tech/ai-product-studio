@@ -289,7 +289,7 @@ function AiAssistPanel({ onApply }: Readonly<{ onApply: (draft: Record<string, u
         {!speechSupported ? <span className="text-xs text-text-muted">Голосовой ввод недоступен в этом браузере.</span> : null}
       </div>
       {!keyConfigured ? (
-        <Alert tone="info">Чтобы ИИ мог заполнить карточку, задайте API-ключ Anthropic или OpenAI в разделе «Песочница» → Pipeline Lab v3 → «API-ключи» (используется тот же ключ).</Alert>
+        <Alert tone="info">Чтобы ИИ мог заполнить карточку, задайте API-ключ Anthropic или OpenAI в разделе «Настройки» (используется тот же ключ, что и в Песочнице).</Alert>
       ) : null}
       {error ? <Alert tone="warning">{error}</Alert> : null}
     </Card>

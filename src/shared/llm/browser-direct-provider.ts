@@ -33,15 +33,42 @@ export function loadOpenAiApiKey(): string {
   return window.localStorage.getItem(OPENAI_KEY_STORAGE) ?? "";
 }
 
+// Managed from the Настройки (Settings) screen, src/features/mvp/screens/
+// settings-screen.tsx -- same localStorage keys public/pipeline-lab-v3.html
+// itself reads (its own "API-ключи" card is hidden, not deleted, since the
+// two share this storage by being same-origin), so a key saved once here
+// applies to every product's Pipeline Lab v3 instance.
+export function saveAnthropicApiKey(key: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ANTHROPIC_KEY_STORAGE, key);
+}
+export function clearAnthropicApiKey(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(ANTHROPIC_KEY_STORAGE);
+}
+export function saveOpenAiApiKey(key: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(OPENAI_KEY_STORAGE, key);
+}
+export function clearOpenAiApiKey(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(OPENAI_KEY_STORAGE);
+}
+
 export function hasBrowserLlmKeyConfigured(): boolean {
   return Boolean(loadAnthropicApiKey() || loadOpenAiApiKey());
+}
+
+/** Same masking Pipeline Lab v3's own maskKey does: first 10 chars + last 4, never the full key. */
+export function maskApiKey(key: string): string {
+  return key.length > 10 ? `${key.slice(0, 10)}…${key.slice(-4)}` : key;
 }
 
 type AnthropicTextBlock = Readonly<{ type: string; text?: string }>;
 
 async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_MODEL): Promise<string> {
   const apiKey = loadAnthropicApiKey();
-  if (!apiKey) throw new Error("Не задан API-ключ Anthropic — задайте его в Playground → Pipeline Lab v3 → «API-ключи».");
+  if (!apiKey) throw new Error("Не задан API-ключ Anthropic — задайте его в разделе «Настройки».");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -65,7 +92,7 @@ async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_M
 // existing stateless relay instead of a direct fetch.
 async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL): Promise<string> {
   const apiKey = loadOpenAiApiKey();
-  if (!apiKey) throw new Error("Не задан API-ключ OpenAI — задайте его в Playground → Pipeline Lab v3 → «API-ключи».");
+  if (!apiKey) throw new Error("Не задан API-ключ OpenAI — задайте его в разделе «Настройки».");
   const res = await fetch("/api/openai-proxy", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -80,7 +107,7 @@ async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL):
 export async function callBrowserLlm(prompt: string): Promise<string> {
   if (loadAnthropicApiKey()) return callAnthropic(prompt);
   if (loadOpenAiApiKey()) return callOpenAi(prompt);
-  throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в Playground → Pipeline Lab v3 → «API-ключи».");
+  throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в разделе «Настройки».");
 }
 
 /** Same tolerant parsing Pipeline Lab v3's own parseJSON does (strips ```json fences, trims to the outer braces). */

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation, Card } from "@/shared/ui";
+import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { getProjectBundle } from "./selectors";
@@ -18,6 +18,7 @@ import { PromptInspectorScreen } from "./screens/prompt-inspector-screen";
 import { AnalyticsScreen } from "./screens/analytics-screen";
 import { PipelineLabV3Screen } from "./screens/pipeline-lab-v3-screen";
 import { DashboardScreen } from "./screens/dashboard-screen";
+import { SettingsScreen } from "./screens/settings-screen";
 
 // Every view stays reachable by URL (`?view=...`) -- CLAUDE.md's "hide
 // navigation, never delete code" rule (AI Product Studio v2 addendum).
@@ -38,11 +39,12 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
   { id: "settings", label: "Настройки", icon: <Settings className="size-4" aria-hidden="true" /> },
 ];
 
-// AI Product Studio v2: only these three sections are visible navigation
-// (Product -> Playground -> Dashboard). Everything else above stays
-// reachable by URL only (Projects, Architecture, Pipeline, Inspector,
-// Prompts, Analytics, Pipeline Lab v3 standalone, Settings).
-const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "dashboard"]);
+// AI Product Studio v2: only these four sections are visible navigation
+// (Product -> Playground -> Dashboard, plus Settings for the shared
+// API keys). Everything else above stays reachable by URL only
+// (Projects, Architecture, Pipeline, Inspector, Prompts, Analytics,
+// Pipeline Lab v3 standalone).
+const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "dashboard", "settings"]);
 const visibleNavItems = navItems.filter((item) => VISIBLE_VIEW_IDS.has(item.id));
 
 const viewTitles: Record<MvpView, string> = {
@@ -166,29 +168,5 @@ export function MvpShell() {
         </div>
       </div>
     </AppShell>
-  );
-}
-
-function SettingsScreen() {
-  const { reset } = useRepositoryStore();
-  return (
-    <div className="flex flex-col gap-4 p-6">
-      <h1 className="text-2xl font-semibold">Настройки</h1>
-      <p className="max-w-2xl text-sm text-text-muted">MVP использует Local Storage Repository. Можно сбросить данные к Demo Project.</p>
-      <Button className="w-fit" onClick={reset}>Сбросить Demo Repository</Button>
-
-      <Card className="grid max-w-2xl gap-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Среда выполнения</h2>
-          <Badge tone="neutral">Mock LLM Provider</Badge>
-        </div>
-        <p className="text-sm text-text-muted">
-          Песочница, Golden Dataset Evaluation и Benchmark всегда выполняются реальным Pipeline Executor, но LLM-вызовы сейчас идут через Mock LLM Provider (без сети, без реальной модели) — поэтому оценки в Аналитике честно показывают низкий pass rate.
-        </p>
-        <p className="text-sm text-text-muted">
-          Это не переключается конфигурацией в UI: `configureFromEnv()` (`src/shared/llm/provider-registry.ts`) умеет собрать реальный `OpenAiCompatibleProvider` из `OPENAI_API_KEY`, но каждый экран, вызывающий Runtime (Песочница, Аналитика), — клиентский компонент, а Next.js не пробрасывает серверные переменные окружения (без префикса `NEXT_PUBLIC_`) в клиентский бандл. Включить реальный provider сегодня означало бы либо публично раскрыть API-ключ в браузере (нарушает CLAUDE.md §49 SEC-1), либо перенести LLM-вызовы за серверный API route — этого пока нет в репозитории (§10 SB-1).
-        </p>
-      </Card>
-    </div>
   );
 }

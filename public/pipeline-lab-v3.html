@@ -164,7 +164,14 @@
     </div>
   </header>
 
-  <div class="card collapsible" id="apiKeysCard" style="margin-bottom:16px">
+  <!-- API keys are now managed centrally in the app's Настройки (Settings)
+       screen (src/features/mvp/screens/settings-screen.tsx), which reads
+       and writes the exact same localStorage keys
+       (pipelineLabV3.anthropicApiKey / pipelineLabV3.openaiApiKey) --
+       this card is hidden (not deleted: its ids/wiring stay so nothing
+       below errors) so a key set once in Settings applies to every
+       product's Pipeline Lab v3 instead of being entered per product. -->
+  <div class="card collapsible" id="apiKeysCard" style="margin-bottom:16px;display:none">
     <div class="card-h toggle-h" id="apiKeysToggle"><span class="n">🔑</span> API-ключи<span class="chev">▶</span></div>
     <div class="card-b">
       <label class="fld">Anthropic (для шагов с моделью «Claude Sonnet 4.6», sk-ant-…)</label>
