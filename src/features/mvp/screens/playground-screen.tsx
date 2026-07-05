@@ -21,7 +21,7 @@ import type { ExecutionEvent } from "@/shared/runtime/types";
 import { getProjectBundle } from "../selectors";
 import { PipelineLabV3Screen } from "./pipeline-lab-v3-screen";
 import { AdCopyTestBenchPanel } from "./ad-copy-test-bench-panel";
-import type { AdCopyRunResult } from "../lib/ad-copy-test-bench";
+import type { AdCopyPipelineResult } from "../lib/ad-copy-test-bench";
 
 const IFRAME_SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
@@ -225,25 +225,27 @@ export function PlaygroundScreen() {
   );
 
   const handleAdCopyRunComplete = React.useCallback(
-    (result: AdCopyRunResult, rawInput: string) => {
+    (result: AdCopyPipelineResult, rawInput: string) => {
       if (!selectedProjectId) return;
-      const errorCount = result.stages.filter((stage) => stage.status === "failed").length;
-      const startedAt = result.stages.find((stage) => stage.startedAt)?.startedAt ?? new Date().toISOString();
+      const reportList = Object.values(result.reports);
+      const errorCount = reportList.filter((report) => report.status === "bad").length;
+      const warningCount = reportList.filter((report) => report.status === "warn").length;
+      const startedAt = new Date(Date.now() - result.totalDurationMs).toISOString();
       recordRun(
         createPlaygroundTestRun({
           projectId: selectedProjectId,
           source: TEST_BENCH_SOURCE,
-          status: result.success ? "succeeded" : "failed",
-          stageCount: result.stages.length,
+          status: errorCount === 0 ? "succeeded" : "failed",
+          stageCount: reportList.length,
           errorCount,
-          warningCount: result.finalRecord?.lowConfidence ? 1 : 0,
+          warningCount,
           tokens: result.totalTokensEstimate,
           costUsd: result.totalCostUsd,
           durationMs: result.totalDurationMs,
           confidence: result.finalRecord ? result.finalRecord.confidenceScore / 100 : undefined,
           decision: result.finalRecord ? (result.finalRecord.lowConfidence ? "SAVE_LOW_CONFIDENCE" : "SAVE") : undefined,
           transcript: rawInput,
-          report: { stages: result.stages },
+          report: { reports: result.reports, ctx: result.ctx },
           startedAt,
           finishedAt: new Date().toISOString(),
         }),
@@ -345,7 +347,7 @@ export function PlaygroundScreen() {
           <p className="text-sm text-text-muted">
             Полноценный прогон 10-этапного пайплайна с реальными вызовами модели (ключ из «Настройки») и реальной детерминированной логикой — как в Pipeline Lab v3, но по конфигурации этого продукта.
           </p>
-          <AdCopyTestBenchPanel onRunComplete={handleAdCopyRunComplete} />
+          <AdCopyTestBenchPanel productId={selectedProject.id} onRunComplete={handleAdCopyRunComplete} />
         </Section>
       ) : (
         <>

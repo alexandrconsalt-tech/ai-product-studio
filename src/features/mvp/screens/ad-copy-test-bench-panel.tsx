@@ -1,33 +1,59 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, KeyRound, Loader2, Play, XCircle } from "lucide-react";
-import { Alert, Badge, Button, Card, Dialog, NodeCard, Textarea } from "@/shared/ui";
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, KeyRound, Play, Plus, Save, Trash2, XCircle } from "lucide-react";
+import { Alert, Badge, Button, Card, Input, Section, Select, Switch, Textarea } from "@/shared/ui";
 import { AD_COPY_CRM_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
-import { hasBrowserLlmKeyConfigured } from "@/shared/llm/browser-direct-provider";
-import { AD_COPY_STAGE_DEFINITIONS, runAdCopyTestBench, type AdCopyRunResult, type AdCopyStageDefinition, type AdCopyStageId, type AdCopyStageResult } from "../lib/ad-copy-test-bench";
+import { hasBrowserLlmKeyConfigured, MODEL_OPTIONS } from "@/shared/llm/browser-direct-provider";
+import {
+  AD_COPY_CODE_FN_LIST,
+  AD_COPY_TYPE_LABELS,
+  availableContextKeys,
+  createBlankStage,
+  defaultAdCopyStages,
+  runAdCopyPipeline,
+  type AdCopyPipelineResult,
+  type AdCopyStageConfig,
+  type AdCopyStageReport,
+  type AdCopyStageStatus,
+  type AdCopyStageType,
+} from "../lib/ad-copy-test-bench";
 
-const STATUS_LABELS: Record<AdCopyStageResult["status"], string> = {
-  idle: "не запускался",
+const STATUS_LABELS: Record<AdCopyStageStatus, string> = {
+  idle: "готов",
   running: "выполняется…",
-  succeeded: "успешно",
-  failed: "ошибка",
-  skipped: "пропущен",
+  ok: "успешно",
+  warn: "внимание",
+  bad: "ошибка",
 };
 
-const GROUP_LABELS: Record<AdCopyStageDefinition["group"], string> = {
-  code: "Код",
-  llm: "LLM",
-  storage: "Хранилище",
-  service: "Сервис",
-};
-
-function statusTone(status: AdCopyStageResult["status"]): "success" | "error" | "neutral" | "warning" | "info" {
-  if (status === "succeeded") return "success";
-  if (status === "failed") return "error";
-  if (status === "skipped") return "warning";
+function statusTone(status: AdCopyStageStatus): "success" | "error" | "neutral" | "warning" | "info" {
+  if (status === "ok") return "success";
+  if (status === "bad") return "error";
+  if (status === "warn") return "warning";
   if (status === "running") return "info";
   return "neutral";
+}
+
+function configStorageKey(productId: string): string {
+  return `adCopyTestBench.config.${productId}`;
+}
+
+function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(configStorageKey(productId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredStages(productId: string, stages: readonly AdCopyStageConfig[]): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(configStorageKey(productId), JSON.stringify(stages));
 }
 
 function stringifyPayload(payload: unknown): string {
@@ -36,134 +62,228 @@ function stringifyPayload(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
 
-function initialStages(): readonly AdCopyStageResult[] {
-  return AD_COPY_STAGE_DEFINITIONS.map((definition) => ({ id: definition.id, status: "idle" as const }));
-}
+const TYPE_OPTIONS: readonly AdCopyStageType[] = ["svc", "code", "llm", "check", "store"];
 
-function StageDetailDialog({ definition, stage, onClose }: Readonly<{ definition: AdCopyStageDefinition; stage: AdCopyStageResult; onClose: () => void }>) {
+function StageReportBody({ report }: Readonly<{ report: AdCopyStageReport | undefined }>) {
+  if (!report || (report.status === "idle" && !report.output)) return null;
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4 backdrop-blur-sm">
-      <Dialog className="grid max-h-[85vh] w-full max-w-2xl gap-3 overflow-y-auto">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold">
-              {definition.number}. {definition.name}
-              {stage.attempt && stage.attempt > 1 ? ` · попытка ${stage.attempt}` : ""}
-            </h2>
-            <p className="text-sm text-text-muted">{definition.description}</p>
-          </div>
-          <Badge tone={statusTone(stage.status)}>{STATUS_LABELS[stage.status]}</Badge>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
-          <Card><p className="text-xs text-text-muted">Тип</p><p className="font-medium">{GROUP_LABELS[definition.group]}</p></Card>
-          {stage.durationMs !== undefined ? <Card><p className="text-xs text-text-muted">Длительность</p><p className="font-medium">{stage.durationMs} мс</p></Card> : null}
-          {stage.metrics?.map((metric) => (
-            <Card key={metric.label}><p className="text-xs text-text-muted">{metric.label}</p><p className="font-medium">{metric.value}</p></Card>
+    <div className="grid gap-2 border-t border-border pt-3">
+      {report.metrics && report.metrics.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {report.metrics.map((metric) => (
+            <Badge key={metric.label} tone="neutral">
+              {metric.label}: {metric.value}
+            </Badge>
           ))}
+          {report.durationMs !== undefined ? <Badge tone="neutral">{report.durationMs} мс</Badge> : null}
         </div>
-
-        {stage.checklist && stage.checklist.length > 0 ? (
-          <div className="grid gap-1">
-            <p className="text-sm font-medium">Проверки (каждая отображается отдельно)</p>
-            <div className="grid gap-1">
-              {stage.checklist.map((item) => (
-                <div key={item.label} className="flex items-center gap-2 text-sm">
-                  {item.pass ? <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden="true" /> : <XCircle className="size-4 shrink-0 text-error" aria-hidden="true" />}
-                  {item.label}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {stage.error ? <Alert tone="warning">{stage.error}</Alert> : null}
-
-        {stage.input !== undefined ? (
-          <div className="grid gap-1">
-            <p className="text-sm font-medium">Вход</p>
-            <pre className="max-h-40 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{stringifyPayload(stage.input)}</pre>
-          </div>
-        ) : null}
-
-        {stage.output !== undefined ? (
-          <div className="grid gap-1">
-            <p className="text-sm font-medium">Выход</p>
-            <pre className="max-h-56 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{stringifyPayload(stage.output)}</pre>
-          </div>
-        ) : null}
-
-        <div className="flex justify-end">
-          <Button variant="primary" onClick={onClose}>Закрыть</Button>
-        </div>
-      </Dialog>
-    </div>
-  );
-}
-
-function StageCard({ definition, stage, onClick }: Readonly<{ definition: AdCopyStageDefinition; stage: AdCopyStageResult; onClick: () => void }>) {
-  return (
-    <NodeCard selected={stage.status === "running"} className="w-56 cursor-pointer" onClick={onClick}>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <Badge tone="neutral">
-          {definition.number}. {GROUP_LABELS[definition.group]}
-        </Badge>
-        <Badge tone={statusTone(stage.status)}>
-          <span className="flex items-center gap-1">
-            {stage.status === "running" ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : null}
-            {STATUS_LABELS[stage.status]}
-          </span>
-        </Badge>
-      </div>
-      <p className="text-sm font-medium">{definition.name}</p>
-      <p className="mt-1 line-clamp-2 text-xs text-text-muted">{definition.description}</p>
-      {stage.attempt && stage.attempt > 1 ? <p className="mt-2 text-xs text-warning">Попытка {stage.attempt}</p> : null}
-      {stage.checklist ? (
-        <div className="mt-2 grid gap-0.5">
-          {stage.checklist.map((item) => (
-            <div key={item.label} className="flex items-center gap-1 text-xs text-text-muted">
-              {item.pass ? <CheckCircle2 className="size-3 shrink-0 text-success" aria-hidden="true" /> : <XCircle className="size-3 shrink-0 text-error" aria-hidden="true" />}
-              <span className="truncate">{item.label}</span>
+      ) : null}
+      {report.checks && report.checks.length > 0 ? (
+        <div className="grid gap-1">
+          {report.checks.map((check) => (
+            <div key={check.label} className="flex items-center gap-2 text-xs">
+              {check.pass ? <CheckCircle2 className="size-3.5 shrink-0 text-success" aria-hidden="true" /> : <XCircle className={`size-3.5 shrink-0 ${check.warn ? "text-warning" : "text-error"}`} aria-hidden="true" />}
+              {check.label}
             </div>
           ))}
         </div>
       ) : null}
-    </NodeCard>
+      {report.error ? <Alert tone="warning">{report.error}</Alert> : null}
+      {report.output !== undefined ? <pre className="max-h-56 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{stringifyPayload(report.output)}</pre> : null}
+    </div>
   );
 }
 
-export type AdCopyTestBenchPanelProps = Readonly<{ onRunComplete: (result: AdCopyRunResult, rawInput: string) => void }>;
+function StageEditor({
+  stage,
+  index,
+  total,
+  report,
+  onChange,
+  onMove,
+  onSave,
+  onDelete,
+}: Readonly<{
+  stage: AdCopyStageConfig;
+  index: number;
+  total: number;
+  report: AdCopyStageReport | undefined;
+  onChange: (next: AdCopyStageConfig) => void;
+  onMove: (direction: -1 | 1) => void;
+  onSave: () => void;
+  onDelete: () => void;
+}>) {
+  const [expanded, setExpanded] = React.useState(false);
+  const isModelType = stage.type === "llm" || stage.type === "check";
+
+  return (
+    <Card className="grid gap-0 p-0">
+      <button type="button" className="flex w-full items-center gap-3 p-3 text-left" onClick={() => setExpanded((value) => !value)}>
+        {expanded ? <ChevronDown className="size-4 shrink-0 text-text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-text-muted" aria-hidden="true" />}
+        <span className="text-sm font-semibold text-text-muted">{index + 1}</span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{stage.name}</p>
+          <p className="text-xs text-text-muted">{AD_COPY_TYPE_LABELS[stage.type]}</p>
+        </div>
+        <label className="flex items-center gap-1 text-xs text-text-muted" onClick={(event) => event.stopPropagation()}>
+          <Switch checked={stage.enabled} onChange={(event) => onChange({ ...stage, enabled: event.target.checked })} />
+          Вкл
+        </label>
+        {report ? <Badge tone={statusTone(report.status)}>{STATUS_LABELS[report.status]}{report.attempt && report.attempt > 1 ? ` · попытка ${report.attempt}` : ""}</Badge> : <Badge tone="neutral">{STATUS_LABELS.idle}</Badge>}
+      </button>
+
+      {expanded ? (
+        <div className="grid gap-3 border-t border-border p-3">
+          <label className="grid gap-1 text-sm">
+            Название
+            <Input value={stage.name} onChange={(event) => onChange({ ...stage, name: event.target.value })} />
+          </label>
+
+          <label className="grid gap-1 text-sm">
+            Тип
+            <Select value={stage.type} onChange={(event) => onChange({ ...stage, type: event.target.value as AdCopyStageType })}>
+              {TYPE_OPTIONS.map((type) => (
+                <option key={type} value={type}>
+                  {AD_COPY_TYPE_LABELS[type]}
+                </option>
+              ))}
+            </Select>
+          </label>
+
+          {isModelType ? (
+            <>
+              <label className="grid gap-1 text-sm">
+                Модель
+                <Select value={stage.model ?? MODEL_OPTIONS[0].value} onChange={(event) => onChange({ ...stage, model: event.target.value })}>
+                  {MODEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="grid gap-1 text-sm">
+                Промт
+                <Textarea className="min-h-40 font-mono text-xs" value={stage.prompt ?? ""} onChange={(event) => onChange({ ...stage, prompt: event.target.value })} />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="grid gap-1 text-sm">
+                Код-функция
+                <Select value={stage.codeFn ?? ""} onChange={(event) => onChange({ ...stage, codeFn: event.target.value || undefined })}>
+                  <option value="">—</option>
+                  {AD_COPY_CODE_FN_LIST.map((fn) => (
+                    <option key={fn} value={fn}>
+                      {fn}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="grid gap-1 text-sm">
+                Исполнитель (сервис)
+                <Input value={stage.vendor ?? ""} onChange={(event) => onChange({ ...stage, vendor: event.target.value })} />
+              </label>
+              <p className="text-xs text-text-muted">Детерминированный шаг: выполняется кодом, без модели. Использует результаты предыдущих шагов из контекста.</p>
+            </>
+          )}
+
+          <label className="grid gap-1 text-sm">
+            {"Ключ результата (для {{ctx.КЛЮЧ}})"}
+            <Input value={stage.outKey} onChange={(event) => onChange({ ...stage, outKey: event.target.value })} />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" onClick={() => onMove(-1)} disabled={index === 0}>
+              <ArrowUp className="size-4" aria-hidden="true" />
+            </Button>
+            <Button variant="ghost" onClick={() => onMove(1)} disabled={index === total - 1}>
+              <ArrowDown className="size-4" aria-hidden="true" />
+            </Button>
+            <Button variant="secondary" onClick={onSave}>
+              <Save className="size-4" aria-hidden="true" />
+              Сохранить
+            </Button>
+            <Button variant="ghost" onClick={onDelete}>
+              <Trash2 className="size-4" aria-hidden="true" />
+              Удалить
+            </Button>
+          </div>
+
+          <StageReportBody report={report} />
+        </div>
+      ) : (
+        <StageReportBody report={report} />
+      )}
+    </Card>
+  );
+}
+
+export type AdCopyTestBenchPanelProps = Readonly<{ productId: string; onRunComplete: (result: AdCopyPipelineResult, rawInput: string) => void }>;
 
 /**
- * Real, product-specific test bench for "Генерация текстов
- * объявлений" -- mirrors Pipeline Lab v3's live step-by-step run
- * experience (progressively updating stage cards, real model calls),
- * but for this product's own 10-stage design, including the
- * confidence-gated retry loop the domain Pipeline's DAG-based executor
- * cannot represent as an executable cycle. Real LLM calls use the
- * BYOK Anthropic/OpenAI keys configured in Настройки (Settings) --
- * `runAdCopyTestBench` calls `callConfiguredLlm`, never the Mock LLM
- * Provider.
+ * Editable test bench matching Pipeline Lab v3's own format exactly
+ * (per explicit request): collapsible stage cards with editable
+ * Название/Тип/Модель/Промт/Код-функция/Исполнитель/Ключ результата,
+ * reorder, save (persists the whole stage list, same granularity
+ * Pipeline Lab v3's own "💾 Сохранить" has), delete, add a new step,
+ * and a "Переменные в промтах" reference -- driving the real
+ * `runAdCopyPipeline` engine (real Zod validation, real quality-circuit
+ * math, real confidence-gated retry), not a copy of the call-analysis
+ * business logic.
  */
-export function AdCopyTestBenchPanel({ onRunComplete }: AdCopyTestBenchPanelProps) {
+export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBenchPanelProps) {
+  const [stages, setStages] = React.useState<AdCopyStageConfig[]>(() => loadStoredStages(productId) ?? defaultAdCopyStages());
   const [rawInput, setRawInput] = React.useState(() => JSON.stringify(AD_COPY_CRM_INPUT_EXAMPLE, null, 2));
-  const [stages, setStages] = React.useState<readonly AdCopyStageResult[]>(initialStages);
-  const [selectedStageId, setSelectedStageId] = React.useState<AdCopyStageId | null>(null);
+  const [reports, setReports] = React.useState<Readonly<Record<string, AdCopyStageReport>>>({});
   const [running, setRunning] = React.useState(false);
   const [runError, setRunError] = React.useState<string | null>(null);
-  const [lastResult, setLastResult] = React.useState<AdCopyRunResult | null>(null);
+  const [lastResult, setLastResult] = React.useState<AdCopyPipelineResult | null>(null);
   const keyConfigured = hasBrowserLlmKeyConfigured();
 
-  const selectedDefinition = AD_COPY_STAGE_DEFINITIONS.find((definition) => definition.id === selectedStageId);
-  const selectedStage = stages.find((stage) => stage.id === selectedStageId);
+  React.useEffect(() => {
+    setStages(loadStoredStages(productId) ?? defaultAdCopyStages());
+    setReports({});
+    setLastResult(null);
+    setRunError(null);
+  }, [productId]);
+
+  const updateStage = (id: string, next: AdCopyStageConfig) => {
+    setStages((current) => current.map((stage) => (stage.id === id ? next : stage)));
+  };
+  const moveStage = (index: number, direction: -1 | 1) => {
+    setStages((current) => {
+      const next = [...current];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return current;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+  const deleteStage = (id: string) => {
+    setStages((current) => {
+      const next = current.filter((stage) => stage.id !== id);
+      saveStoredStages(productId, next);
+      return next;
+    });
+  };
+  const persistAll = () => saveStoredStages(productId, stages);
+  const addStage = () => setStages((current) => [...current, createBlankStage()]);
+
+  const handleInsertExample = () => setRawInput(JSON.stringify(AD_COPY_CRM_INPUT_EXAMPLE, null, 2));
+  const handleClear = () => {
+    setReports({});
+    setLastResult(null);
+    setRunError(null);
+  };
 
   const handleRun = async () => {
     setRunning(true);
     setRunError(null);
     setLastResult(null);
-    setStages(initialStages());
+    setReports({});
     try {
-      const result = await runAdCopyTestBench(rawInput, setStages);
+      const result = await runAdCopyPipeline(stages, rawInput, setReports);
       setLastResult(result);
       onRunComplete(result, rawInput);
     } catch (error) {
@@ -173,44 +293,87 @@ export function AdCopyTestBenchPanel({ onRunComplete }: AdCopyTestBenchPanelProp
     }
   };
 
+  const contextKeys = availableContextKeys(stages);
+
   return (
     <div className="grid gap-4">
       {!keyConfigured ? (
         <Alert tone="info">
           <span className="flex items-center gap-2">
             <KeyRound className="size-4 shrink-0" aria-hidden="true" />
-            Чтобы прогнать пайплайн с реальными вызовами модели, задайте API-ключ Anthropic или OpenAI в разделе «Настройки».
+            Чтобы LLM-агенты и Проверщик вызывали реальную модель, задайте API-ключ Anthropic или OpenAI в разделе «Настройки».
           </span>
         </Alert>
       ) : null}
 
       <Card className="grid gap-2">
-        <p className="text-sm font-medium">Входные данные (CRM JSON)</p>
+        <p className="text-sm font-medium">Вход · данные объекта недвижимости (CRM JSON)</p>
         <Textarea className="min-h-40 font-mono text-xs" value={rawInput} onChange={(event) => setRawInput(event.target.value)} />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="ghost" onClick={handleInsertExample}>
+            Вставить пример
+          </Button>
+          <span className="text-xs text-text-muted">{rawInput.length} символов</span>
+        </div>
+      </Card>
+
+      <Section>
+        <div className="flex items-center justify-between gap-4">
+          <h3 className="text-lg font-semibold">Пайплайн</h3>
+          <Badge tone="info">{stages.length}</Badge>
+        </div>
+        <div className="grid gap-2">
+          {stages.map((stage, index) => (
+            <StageEditor
+              key={stage.id}
+              stage={stage}
+              index={index}
+              total={stages.length}
+              report={reports[stage.id]}
+              onChange={(next) => updateStage(stage.id, next)}
+              onMove={(direction) => moveStage(index, direction)}
+              onSave={persistAll}
+              onDelete={() => deleteStage(stage.id)}
+            />
+          ))}
+        </div>
+        <Button variant="ghost" onClick={addStage} className="w-fit">
+          <Plus className="size-4" aria-hidden="true" />+ Добавить шаг
+        </Button>
+      </Section>
+
+      <Card className="grid gap-1">
+        <p className="text-sm font-medium">Переменные в промтах</p>
+        <p className="text-xs text-text-muted">
+          {"{{crm.поле}}"} — данные объекта (deal_type, object_type, city, district, street, rooms, area, floor, total_floors, price, description, features, renovation, balcony, bathroom, view, infrastructure, parking, mortgage). {"{{ctx.КЛЮЧ}}"} — результат
+          любого предыдущего этапа по его «Ключу результата»: {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}.
+        </p>
+      </Card>
+
+      <Card className="grid gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" onClick={handleRun} disabled={running || !rawInput.trim()}>
             <Play className="size-4" aria-hidden="true" />
             {running ? "Выполняется…" : "▶ Прогнать пайплайн"}
           </Button>
+          <Button variant="ghost" onClick={handleClear} disabled={running}>
+            Очистить
+          </Button>
           {lastResult ? (
             <>
-              <Badge tone={lastResult.success ? "success" : "error"}>{lastResult.success ? "Завершено" : "Ошибка"}</Badge>
+              <Badge tone={lastResult.finalRecord ? (lastResult.finalRecord.lowConfidence ? "warning" : "success") : "error"}>
+                {lastResult.finalRecord ? `Confidence ${lastResult.finalRecord.confidenceScore}%` : "Ошибка"}
+              </Badge>
               <Badge tone="neutral">{lastResult.totalDurationMs} мс</Badge>
               <Badge tone="neutral">≈{lastResult.totalTokensEstimate} токенов</Badge>
               <Badge tone="neutral">≈${lastResult.totalCostUsd.toFixed(4)}</Badge>
-              {lastResult.finalRecord ? <Badge tone={lastResult.finalRecord.lowConfidence ? "warning" : "success"}>Confidence {lastResult.finalRecord.confidenceScore}%</Badge> : null}
             </>
-          ) : null}
+          ) : (
+            <Badge tone="neutral">готов</Badge>
+          )}
         </div>
         {runError ? <Alert tone="warning">{runError}</Alert> : null}
       </Card>
-
-      <div className="flex flex-wrap gap-3">
-        {AD_COPY_STAGE_DEFINITIONS.map((definition) => {
-          const stage = stages.find((item) => item.id === definition.id) ?? { id: definition.id, status: "idle" as const };
-          return <StageCard key={definition.id} definition={definition} stage={stage} onClick={() => setSelectedStageId(definition.id)} />;
-        })}
-      </div>
 
       {lastResult?.finalRecord ? (
         <Card className="grid gap-2">
@@ -226,8 +389,6 @@ export function AdCopyTestBenchPanel({ onRunComplete }: AdCopyTestBenchPanelProp
           </div>
         </Card>
       ) : null}
-
-      {selectedDefinition && selectedStage ? <StageDetailDialog definition={selectedDefinition} stage={selectedStage} onClose={() => setSelectedStageId(null)} /> : null}
     </div>
   );
 }

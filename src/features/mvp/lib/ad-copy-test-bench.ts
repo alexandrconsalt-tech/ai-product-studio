@@ -1,67 +1,68 @@
 /**
- * Dedicated test bench for the "Генерация текстов объявлений" demo
- * product -- built because the generic Playground "Запустить Pipeline"
- * (domain Pipeline + Production Pipeline Runtime, `executePipeline`)
- * only ever calls the Mock LLM Provider, which returns
- * `{mock, model, echo, confidence}` regardless of what a prompt asked
- * for -- never a real ad. This module runs the exact same 9-stage
- * design for real: real Zod validation, real deterministic
- * normalization/quality checks, and real BYOK model calls (via
- * `browser-direct-provider.ts`, the same Anthropic/OpenAI keys
- * configured in Настройки that Pipeline Lab v3 already uses), with a
- * genuine confidence-gated retry loop -- something the domain
- * Pipeline's DAG-based executor cannot do at all (no cycles allowed,
- * `topology.ts`'s `topologicalOrder` throws `CyclicPipelineError`).
+ * Editable, ctx-based test bench engine for "Генерация текстов
+ * объявлений" -- rebuilt to match Pipeline Lab v3's own format exactly
+ * (per explicit request): the same 5 stage types (`svc`/`llm`/`check`/
+ * `code`/`store`), the same `{{ctx.KEY}}` template convention (here
+ * generalized to `{{crm.field}}` for the raw/normalized input, since
+ * this pipeline has no single "transcript" the way the call-analysis
+ * one does), the same editable Название/Тип/Модель/Промт/Код-функция/
+ * Ключ результата fields per stage, and the same "run every enabled
+ * stage in order, never hard-abort on one stage's failure" behavior.
  *
- * Reused, not duplicated: the real seeded prompts (`seed-prompts.ts`),
- * the real Zod schemas (`src/shared/model/ad-copy-*.ts`), and the real
- * BYOK call path (`browser-direct-provider.ts`) -- only the
- * orchestration (stage sequencing, retry loop, live progress
- * reporting) is new, because no existing engine in this repository can
- * do a real confidence-gated retry loop over real model calls.
+ * What's real, not decorative, and different from a freeform copy of
+ * Pipeline Lab v3: the deterministic `codeFn` implementations
+ * (validate/normalize/storage/quality/gate/saveAd/saveCrm) are this
+ * product's actual business logic (real Zod validation against
+ * `AdCopyCrmInputSchema`, a real weighted Confidence Score formula,
+ * real HTML stripping), not stand-ins -- and the Quality Gate drives a
+ * genuine confidence-gated retry loop (re-running the stages between
+ * the last `store`-type stage and the `gate` stage up to 2 extra times
+ * when confidence < 90%), which Pipeline Lab v3 itself does not have at
+ * all (it always runs each enabled stage exactly once).
  */
 
-import { AdCopyBenefitsSchema, type AdCopyBenefits } from "@/shared/model/ad-copy-benefits";
 import { AdCopyCrmInputSchema, type AdCopyCrmInput } from "@/shared/model/ad-copy-crm-input";
-import { AdCopySchema, type AdCopy } from "@/shared/model/ad-copy-output";
-import { AdCopyQualityCheckSchema, type AdCopyQualityCheck } from "@/shared/model/ad-copy-quality-check";
-import { callConfiguredLlm, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
-import { seededPromptRegistry } from "@/shared/prompts/seed-prompts";
+import { callModelByName, MODEL_VENDOR, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
 
-export type AdCopyStageId = "validate" | "normalize" | "benefits" | "storage" | "generate" | "check" | "quality" | "gate" | "saveAd" | "saveCrm";
-export type AdCopyStageStatus = "idle" | "running" | "succeeded" | "failed" | "skipped";
-export type AdCopyStageGroup = "code" | "llm" | "storage" | "service";
+export type AdCopyStageType = "svc" | "llm" | "check" | "code" | "store";
 
-export type AdCopyChecklistItem = Readonly<{ label: string; pass: boolean }>;
-export type AdCopyStageMetric = Readonly<{ label: string; value: string }>;
+export const AD_COPY_TYPE_LABELS: Record<AdCopyStageType, string> = {
+  svc: "Сервис",
+  llm: "LLM-агент",
+  check: "Проверщик",
+  code: "Код",
+  store: "Хранилище",
+};
 
-export type AdCopyStageResult = Readonly<{
-  id: AdCopyStageId;
-  status: AdCopyStageStatus;
-  startedAt?: string;
-  durationMs?: number;
-  attempt?: number;
-  input?: unknown;
-  output?: unknown;
-  error?: string;
-  checklist?: readonly AdCopyChecklistItem[];
-  metrics?: readonly AdCopyStageMetric[];
+export const AD_COPY_CODE_FN_LIST = ["validate", "normalize", "storage", "quality", "gate", "saveAd", "saveCrm"] as const;
+export type AdCopyCodeFn = (typeof AD_COPY_CODE_FN_LIST)[number];
+
+export type AdCopyStageConfig = Readonly<{
+  id: string;
+  enabled: boolean;
+  name: string;
+  type: AdCopyStageType;
+  codeFn?: string;
+  vendor?: string;
+  model?: string;
+  prompt?: string;
+  outKey: string;
 }>;
 
-export type AdCopyStageDefinition = Readonly<{ id: AdCopyStageId; number: number; name: string; group: AdCopyStageGroup; description: string }>;
+export type AdCopyCheckItem = Readonly<{ label: string; pass: boolean; warn?: boolean }>;
+export type AdCopyMetricItem = Readonly<{ label: string; value: string }>;
+export type AdCopyStageStatus = "idle" | "running" | "ok" | "warn" | "bad";
 
-export const AD_COPY_STAGE_DEFINITIONS: readonly AdCopyStageDefinition[] = [
-  { id: "validate", number: 1, name: "Валидация входных данных", group: "code", description: "Проверка полноты и корректности данных CRM (обязательные поля, типы, диапазоны)." },
-  { id: "normalize", number: 2, name: "Подготовка структуры объекта", group: "code", description: "Нормализация и очистка данных CRM: удаление HTML, объединение полей." },
-  { id: "benefits", number: 3, name: "Агент извлечения преимуществ", group: "llm", description: "Анализ объекта как опытный риелтор: преимущества, УТП, целевая аудитория." },
-  { id: "storage", number: 4, name: "Единое хранилище", group: "storage", description: "Единое JSON-хранилище данных для всех последующих этапов." },
-  { id: "generate", number: 5, name: "Генерация объявления", group: "llm", description: "Генерация продающего текста объявления: заголовок, описание, CTA." },
-  { id: "check", number: 6, name: "Проверка объявления", group: "llm", description: "Самопроверка и улучшение качества текста." },
-  { id: "quality", number: 7, name: "Контур качества", group: "code", description: "Проверка структуры, обязательных данных, требований площадок и расчёт Confidence Score." },
-  { id: "gate", number: 8, name: "Quality Gate", group: "code", description: "Confidence >= 90% -> сохранить, иначе повторная генерация (максимум 2 попытки)." },
-  { id: "saveAd", number: 9, name: "Сохранение объявления", group: "service", description: "Сохранение финального объявления и метаданных (модель, версия промпта, дата)." },
-  { id: "saveCrm", number: 10, name: "Сохранение в CRM и публикация", group: "service", description: "Запись в CRM и отправка на публикацию." },
-];
+export type AdCopyStageReport = Readonly<{
+  stageId: string;
+  status: AdCopyStageStatus;
+  attempt?: number;
+  output?: unknown;
+  checks?: readonly AdCopyCheckItem[];
+  metrics?: readonly AdCopyMetricItem[];
+  error?: string;
+  durationMs?: number;
+}>;
 
 export type AdCopyFinalRecord = Readonly<{
   title: string;
@@ -75,17 +76,17 @@ export type AdCopyFinalRecord = Readonly<{
   retryCount: number;
 }>;
 
-export type AdCopyRunResult = Readonly<{
-  stages: readonly AdCopyStageResult[];
-  success: boolean;
-  finalRecord?: AdCopyFinalRecord;
+export type AdCopyPipelineResult = Readonly<{
+  reports: Readonly<Record<string, AdCopyStageReport>>;
+  ctx: Readonly<Record<string, unknown>>;
   totalTokensEstimate: number;
   totalCostUsd: number;
   totalDurationMs: number;
+  finalRecord?: AdCopyFinalRecord;
 }>;
 
 const CONFIDENCE_THRESHOLD = 90;
-const MAX_RETRIES = 2;
+const MAX_ATTEMPTS = 3;
 
 // Same rates public/pipeline-lab-v3.html's own COST_PER_1K_TOKENS uses for
 // these exact model names -- an estimate for display, not real vendor billing.
@@ -94,307 +95,385 @@ const COST_PER_1K_TOKENS: Record<string, number> = { "gpt-5-mini": 0.0006, "clau
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
 function estimateTokens(text: string): number {
   return Math.max(1, Math.round(text.length / 4));
 }
-
 function estimateCost(model: string, tokens: number): number {
-  const rate = COST_PER_1K_TOKENS[model] ?? 0.001;
-  return (tokens / 1000) * rate;
+  return (tokens / 1000) * (COST_PER_1K_TOKENS[model] ?? 0.001);
 }
-
-function toTemplateVariables(record: Record<string, unknown>): Record<string, string> {
-  const variables: Record<string, string> = {};
-  for (const [key, value] of Object.entries(record)) {
-    if (value === undefined) continue;
-    variables[key] = typeof value === "string" ? value : JSON.stringify(value);
-  }
-  return variables;
-}
-
 function stripHtml(text: string): string {
-  return text
-    .replace(/<[^>]*>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return text.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
 
-// ── Stage 1: real Zod validation (no LLM, no fabricated errors) ──
-function runValidateStage(rawInput: string): Readonly<{ data?: AdCopyCrmInput; errors?: readonly string[] }> {
+/** Same `{{expr}}` replacement Pipeline Lab v3's own `tmpl()` does, generalized to a `{crm, ctx}` root instead of a single special-cased `transcript`. */
+export function tmpl(str: string, root: Readonly<{ crm: unknown; ctx: unknown }>): string {
+  return str.replace(/\{\{([^}]+)\}\}/g, (_, expr: string) => {
+    const path = expr.trim().split(".");
+    let value: unknown = root;
+    for (const segment of path) {
+      value = value == null ? undefined : (value as Record<string, unknown>)[segment];
+    }
+    if (value === undefined) return "";
+    return typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+  });
+}
+
+// ── Real, deterministic code-function implementations ──
+type CodeFnInput = Readonly<{ crm: Record<string, unknown>; ctx: Record<string, unknown>; rawInput: string }>;
+type CodeFnMeta = Readonly<{ attempt: number; maxAttempts: number; lastModelUsed: string }>;
+type CodeFnResult = Readonly<{ output: unknown; checks?: readonly AdCopyCheckItem[]; metrics?: readonly AdCopyMetricItem[]; status: "ok" | "warn" | "bad" }>;
+
+function fnValidate({ rawInput }: CodeFnInput): CodeFnResult {
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(rawInput);
   } catch (error) {
-    return { errors: [`Некорректный JSON: ${errorMessage(error)}`] };
+    return { output: undefined, status: "bad", checks: [{ label: `Валидный JSON: ${errorMessage(error)}`, pass: false }] };
   }
   const result = AdCopyCrmInputSchema.safeParse(parsedJson);
   if (!result.success) {
-    return { errors: result.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`) };
+    const checks = result.error.issues.map((issue) => ({ label: `${issue.path.join(".") || "(root)"}: ${issue.message}`, pass: false }));
+    return { output: parsedJson, status: "bad", checks, metrics: [{ label: "Ошибок валидации", value: String(checks.length) }] };
   }
-  return { data: result.data };
+  return {
+    output: result.data,
+    status: "ok",
+    checks: [
+      { label: "Обязательные поля заполнены", pass: true },
+      { label: "Типы полей корректны", pass: true },
+      { label: "Диапазоны значений корректны", pass: true },
+    ],
+    metrics: [{ label: "Полей проверено", value: String(Object.keys(parsedJson as Record<string, unknown>).length) }],
+  };
 }
 
-// ── Stage 2: real deterministic normalization ──
-function runNormalizeStage(data: AdCopyCrmInput): AdCopyCrmInput {
-  return {
+function fnNormalize({ crm }: CodeFnInput): CodeFnResult {
+  if (!crm || Object.keys(crm).length === 0) {
+    return { output: undefined, status: "bad", checks: [{ label: "Есть валидные данные для нормализации", pass: false }] };
+  }
+  const data = crm as unknown as AdCopyCrmInput;
+  const normalized: AdCopyCrmInput = {
     ...data,
-    object_type: data.object_type.trim(),
-    city: data.city.trim(),
+    object_type: data.object_type?.trim(),
+    city: data.city?.trim(),
     district: data.district?.trim(),
     street: data.street?.trim(),
     description: data.description ? stripHtml(data.description) : data.description,
   };
-}
-
-type LlmCallOutcome<T> = Readonly<{ data?: T; raw: string; vendor: string; model: string; tokens: number; costUsd: number }>;
-
-async function callLlmStage<T>(prompt: string, schema: { safeParse: (value: unknown) => { success: boolean; data?: T } }): Promise<LlmCallOutcome<T>> {
-  const { text, vendor, model } = await callConfiguredLlm(prompt);
-  const tokens = estimateTokens(prompt) + estimateTokens(text);
-  const costUsd = estimateCost(model, tokens);
-  let data: T | undefined;
-  try {
-    const parsed = parseJsonResponse<unknown>(text);
-    const result = schema.safeParse(parsed);
-    data = result.success ? result.data : undefined;
-  } catch {
-    data = undefined;
-  }
-  return { data, raw: text, vendor, model, tokens, costUsd };
-}
-
-// ── Stage 3: real LLM call (Benefit Extraction Agent) ──
-async function runBenefitsStage(normalized: AdCopyCrmInput): Promise<LlmCallOutcome<AdCopyBenefits>> {
-  const prompt = seededPromptRegistry.render("prompt_ad_benefits", toTemplateVariables(normalized));
-  return callLlmStage(prompt, AdCopyBenefitsSchema);
-}
-
-// ── Stage 5: real LLM call (Ad Generation Agent) ──
-async function runGenerateStage(normalized: AdCopyCrmInput, benefits: AdCopyBenefits): Promise<LlmCallOutcome<AdCopy>> {
-  const variables = { ...toTemplateVariables(normalized), value: JSON.stringify(benefits) };
-  const prompt = seededPromptRegistry.render("prompt_ad_generation", variables);
-  return callLlmStage(prompt, AdCopySchema);
-}
-
-// ── Stage 6: real LLM call (Self-Check Agent) ──
-async function runCheckStage(normalized: AdCopyCrmInput, benefits: AdCopyBenefits, ad: AdCopy): Promise<LlmCallOutcome<AdCopyQualityCheck>> {
-  const variables = {
-    city: normalized.city,
-    district: normalized.district ?? "не указан",
-    rooms: String(normalized.rooms),
-    area: String(normalized.area),
-    price: String(normalized.price),
-    value: JSON.stringify({ ...ad, advantages: benefits.advantages }),
+  return {
+    output: normalized,
+    status: "ok",
+    checks: [
+      { label: "HTML удалён из описания", pass: true },
+      { label: "Поля объединены и стандартизированы", pass: true },
+    ],
   };
-  const prompt = seededPromptRegistry.render("prompt_ad_checker", variables);
-  return callLlmStage(prompt, AdCopyQualityCheckSchema);
 }
 
-// ── Stage 7: real deterministic quality circuit (4 checks, each shown separately) ──
-function runQualityCircuit(normalized: AdCopyCrmInput, checked: AdCopyQualityCheck): Readonly<{ checklist: readonly AdCopyChecklistItem[]; confidenceScore: number }> {
-  const structureOk = Boolean(checked.title?.trim() && checked.description?.trim() && checked.cta?.trim());
+function fnStorage({ ctx }: CodeFnInput): CodeFnResult {
+  const normalized = (ctx.normalized ?? {}) as Record<string, unknown>;
+  const benefits = (ctx.benefits ?? {}) as Record<string, unknown>;
+  const merged = { ...normalized, ...benefits };
+  return {
+    output: merged,
+    status: "ok",
+    checks: [{ label: "CRM-данные объединены с преимуществами в единый контекст", pass: Boolean(ctx.normalized && ctx.benefits) }],
+    metrics: [{ label: "Полей в хранилище", value: String(Object.keys(merged).length) }],
+  };
+}
+
+function fnQuality({ ctx }: CodeFnInput): CodeFnResult {
+  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyCrmInput>;
+  const checked = (ctx.checked ?? {}) as Record<string, unknown>;
+  const title = typeof checked.title === "string" ? checked.title : "";
+  const description = typeof checked.description === "string" ? checked.description : "";
+  const cta = typeof checked.cta === "string" ? checked.cta : "";
+
+  const structureOk = Boolean(title.trim() && description.trim() && cta.trim());
   const requiredDataOk = [normalized.price, normalized.area, normalized.rooms, normalized.object_type].every((value) => value !== undefined && value !== null && value !== "");
-  const withinLength = checked.title.length <= 70 && checked.description.length <= 600;
-  const noForbiddenChars = !/[<>{}]/.test(`${checked.title}${checked.description}`);
+  const withinLength = title.length <= 70 && description.length <= 600;
+  const noForbiddenChars = !/[<>{}]/.test(`${title}${description}`);
   const platformOk = withinLength && noForbiddenChars;
 
-  const booleanChecks = [checked.facts_ok, checked.style_ok, checked.language_ok, checked.prohibited_words_ok, checked.seo_ok, checked.duplicates_ok];
+  const booleanFields = ["facts_ok", "style_ok", "language_ok", "prohibited_words_ok", "seo_ok", "duplicates_ok"] as const;
+  const booleanChecks = booleanFields.map((field) => checked[field] === true);
   const checksScore = (booleanChecks.filter(Boolean).length / booleanChecks.length) * 100;
+  const readabilityScore = typeof checked.readability_score === "number" ? checked.readability_score : 50;
+
   const structureScore = structureOk ? 100 : 40;
   const requiredDataScore = requiredDataOk ? 100 : 50;
   const platformScore = platformOk ? 100 : 60;
-  const rawScore = 0.35 * checksScore + 0.15 * checked.readability_score + 0.2 * structureScore + 0.15 * requiredDataScore + 0.15 * platformScore;
+  const rawScore = 0.35 * checksScore + 0.15 * readabilityScore + 0.2 * structureScore + 0.15 * requiredDataScore + 0.15 * platformScore;
   const confidenceScore = Math.round(Math.max(0, Math.min(100, rawScore)));
 
-  const checklist: AdCopyChecklistItem[] = [
+  const checks: AdCopyCheckItem[] = [
     { label: "Проверка структуры (заголовок/описание/CTA)", pass: structureOk },
     { label: "Проверка обязательных данных (цена/площадь/комнатность/тип)", pass: requiredDataOk },
     { label: "Проверка требований площадок (длина, запрещённые символы)", pass: platformOk },
     { label: `Оценка уверенности: Confidence Score ${confidenceScore}%`, pass: confidenceScore >= CONFIDENCE_THRESHOLD },
   ];
-  return { checklist, confidenceScore };
+  return { output: { confidenceScore }, status: confidenceScore >= CONFIDENCE_THRESHOLD ? "ok" : "warn", checks };
 }
 
-export async function runAdCopyTestBench(rawInput: string, onUpdate: (stages: readonly AdCopyStageResult[]) => void): Promise<AdCopyRunResult> {
-  const startAll = Date.now();
-  let stages: AdCopyStageResult[] = AD_COPY_STAGE_DEFINITIONS.map((def) => ({ id: def.id, status: "idle" as AdCopyStageStatus }));
-  let totalTokens = 0;
-  let totalCostUsd = 0;
-
-  const emit = () => onUpdate(stages);
-  const setStage = (id: AdCopyStageId, patch: Partial<AdCopyStageResult>) => {
-    stages = stages.map((stage) => (stage.id === id ? { ...stage, ...patch } : stage));
-    emit();
+function fnGate({ ctx }: CodeFnInput, meta: CodeFnMeta): CodeFnResult {
+  const confidenceScore = typeof (ctx.quality as { confidenceScore?: number } | undefined)?.confidenceScore === "number" ? (ctx.quality as { confidenceScore: number }).confidenceScore : 0;
+  const pass = confidenceScore >= CONFIDENCE_THRESHOLD;
+  const willRetry = !pass && meta.attempt < meta.maxAttempts;
+  const decision = pass ? "SAVE" : willRetry ? "RETRY" : "SAVE_LOW_CONFIDENCE";
+  return {
+    output: { decision, confidenceScore },
+    status: pass ? "ok" : "warn",
+    checks: [{ label: `Confidence ${confidenceScore}% ${pass ? ">= 90%" : "< 90%"}`, pass }],
+    metrics: [{ label: "Решение", value: decision === "SAVE" ? "Сохранить" : decision === "RETRY" ? `Повторная генерация (попытка ${meta.attempt + 1})` : "Сохранить с пометкой low-confidence" }],
   };
-  const startStage = (id: AdCopyStageId, input?: unknown, attempt?: number): number => {
-    setStage(id, { status: "running", startedAt: new Date().toISOString(), input, attempt });
-    return Date.now();
-  };
-  const failRun = (remaining: readonly AdCopyStageId[]): AdCopyRunResult => {
-    for (const id of remaining) setStage(id, { status: "skipped" });
-    return { stages, success: false, totalTokensEstimate: Math.round(totalTokens), totalCostUsd, totalDurationMs: Date.now() - startAll };
-  };
-  const remainingAfter = (id: AdCopyStageId): AdCopyStageId[] => {
-    const index = AD_COPY_STAGE_DEFINITIONS.findIndex((def) => def.id === id);
-    return AD_COPY_STAGE_DEFINITIONS.slice(index + 1).map((def) => def.id);
-  };
+}
 
-  emit();
-
-  // 1. Validate
-  let startedMs = startStage("validate", rawInput);
-  const validation = runValidateStage(rawInput);
-  if (!validation.data) {
-    setStage("validate", { status: "failed", error: validation.errors?.join("; "), durationMs: Date.now() - startedMs });
-    return failRun(remainingAfter("validate"));
-  }
-  setStage("validate", { status: "succeeded", output: validation.data, durationMs: Date.now() - startedMs });
-
-  // 2. Normalize
-  startedMs = startStage("normalize", validation.data);
-  const normalized = runNormalizeStage(validation.data);
-  setStage("normalize", { status: "succeeded", output: normalized, durationMs: Date.now() - startedMs });
-
-  // 3. Benefits (LLM)
-  startedMs = startStage("benefits", normalized);
-  let benefitsOutcome: LlmCallOutcome<AdCopyBenefits>;
-  try {
-    benefitsOutcome = await runBenefitsStage(normalized);
-  } catch (error) {
-    setStage("benefits", { status: "failed", error: errorMessage(error), durationMs: Date.now() - startedMs });
-    return failRun(remainingAfter("benefits"));
-  }
-  totalTokens += benefitsOutcome.tokens;
-  totalCostUsd += benefitsOutcome.costUsd;
-  setStage("benefits", {
-    status: benefitsOutcome.data ? "succeeded" : "failed",
-    output: benefitsOutcome.data ?? benefitsOutcome.raw,
-    error: benefitsOutcome.data ? undefined : "Модель вернула ответ, не соответствующий ожидаемой JSON Schema преимуществ.",
-    metrics: [
-      { label: "Модель", value: `${benefitsOutcome.vendor}/${benefitsOutcome.model}` },
-      { label: "Токены (оценка)", value: String(Math.round(benefitsOutcome.tokens)) },
-      { label: "Стоимость (оценка)", value: `$${benefitsOutcome.costUsd.toFixed(4)}` },
-    ],
-    durationMs: Date.now() - startedMs,
-  });
-  if (!benefitsOutcome.data) return failRun(remainingAfter("benefits"));
-  const benefits = benefitsOutcome.data;
-
-  // 4. Storage (real merge, not a passthrough)
-  startedMs = startStage("storage", { normalized, benefits });
-  const storedContext = { ...normalized, ...benefits };
-  setStage("storage", { status: "succeeded", output: storedContext, durationMs: Date.now() - startedMs });
-
-  // 5-8. Generate -> Check -> Quality -> Gate, real confidence-gated retry loop
-  let attempt = 0;
-  let finalAd: AdCopy | undefined;
-  let finalCheck: AdCopyQualityCheck | undefined;
-  let confidenceScore = 0;
-  let usedVendor = "";
-  let usedModel = "";
-  let gatePassed = false;
-
-  while (attempt <= MAX_RETRIES) {
-    attempt += 1;
-
-    startedMs = startStage("generate", storedContext, attempt);
-    let generateOutcome: LlmCallOutcome<AdCopy>;
-    try {
-      generateOutcome = await runGenerateStage(normalized, benefits);
-    } catch (error) {
-      setStage("generate", { status: "failed", error: errorMessage(error), attempt, durationMs: Date.now() - startedMs });
-      return failRun(remainingAfter("generate"));
-    }
-    totalTokens += generateOutcome.tokens;
-    totalCostUsd += generateOutcome.costUsd;
-    setStage("generate", {
-      status: generateOutcome.data ? "succeeded" : "failed",
-      output: generateOutcome.data ?? generateOutcome.raw,
-      error: generateOutcome.data ? undefined : "Модель вернула ответ, не соответствующий ожидаемой JSON Schema объявления.",
-      metrics: [
-        { label: "Модель", value: `${generateOutcome.vendor}/${generateOutcome.model}` },
-        { label: "Токены (оценка)", value: String(Math.round(generateOutcome.tokens)) },
-        { label: "Стоимость (оценка)", value: `$${generateOutcome.costUsd.toFixed(4)}` },
-      ],
-      attempt,
-      durationMs: Date.now() - startedMs,
-    });
-    if (!generateOutcome.data) return failRun(remainingAfter("generate"));
-    usedVendor = generateOutcome.vendor;
-    usedModel = generateOutcome.model;
-
-    startedMs = startStage("check", generateOutcome.data, attempt);
-    let checkOutcome: LlmCallOutcome<AdCopyQualityCheck>;
-    try {
-      checkOutcome = await runCheckStage(normalized, benefits, generateOutcome.data);
-    } catch (error) {
-      setStage("check", { status: "failed", error: errorMessage(error), attempt, durationMs: Date.now() - startedMs });
-      return failRun(remainingAfter("check"));
-    }
-    totalTokens += checkOutcome.tokens;
-    totalCostUsd += checkOutcome.costUsd;
-    if (!checkOutcome.data) {
-      setStage("check", { status: "failed", output: checkOutcome.raw, error: "Модель вернула ответ, не соответствующий ожидаемой JSON Schema проверки.", attempt, durationMs: Date.now() - startedMs });
-      return failRun(remainingAfter("check"));
-    }
-    setStage("check", {
-      status: "succeeded",
-      output: checkOutcome.data,
-      metrics: [
-        { label: "Модель", value: `${checkOutcome.vendor}/${checkOutcome.model}` },
-        { label: "Токены (оценка)", value: String(Math.round(checkOutcome.tokens)) },
-        { label: "Стоимость (оценка)", value: `$${checkOutcome.costUsd.toFixed(4)}` },
-      ],
-      attempt,
-      durationMs: Date.now() - startedMs,
-    });
-
-    startedMs = startStage("quality", checkOutcome.data, attempt);
-    const circuit = runQualityCircuit(normalized, checkOutcome.data);
-    confidenceScore = circuit.confidenceScore;
-    setStage("quality", { status: "succeeded", output: { confidenceScore }, checklist: circuit.checklist, attempt, durationMs: Date.now() - startedMs });
-
-    startedMs = startStage("gate", { confidenceScore }, attempt);
-    gatePassed = confidenceScore >= CONFIDENCE_THRESHOLD;
-    const willRetry = !gatePassed && attempt <= MAX_RETRIES;
-    setStage("gate", {
-      status: "succeeded",
-      output: { decision: gatePassed ? "SAVE" : willRetry ? "RETRY" : "SAVE_LOW_CONFIDENCE", confidenceScore, attempt },
-      metrics: [{ label: "Решение", value: gatePassed ? "Сохранить" : willRetry ? `Повторная генерация (попытка ${attempt + 1})` : "Сохранить с пометкой low-confidence" }],
-      attempt,
-      durationMs: Date.now() - startedMs,
-    });
-
-    finalAd = generateOutcome.data;
-    finalCheck = checkOutcome.data;
-
-    if (gatePassed || attempt > MAX_RETRIES) break;
-  }
-
-  // 9. Save Ad
-  startedMs = startStage("saveAd", { ad: finalAd, confidenceScore });
-  const finalRecord: AdCopyFinalRecord = {
-    title: finalCheck?.title ?? finalAd?.title ?? "",
-    description: finalCheck?.description ?? finalAd?.description ?? "",
-    cta: finalCheck?.cta ?? finalAd?.cta ?? "",
-    confidenceScore,
-    model: usedVendor && usedModel ? `${usedVendor}/${usedModel}` : "неизвестно",
+function fnSaveAd({ ctx }: CodeFnInput, meta: CodeFnMeta): CodeFnResult {
+  const checked = (ctx.checked ?? {}) as Record<string, unknown>;
+  const ad = (ctx.ad ?? {}) as Record<string, unknown>;
+  const gate = (ctx.gate ?? {}) as { decision?: string; confidenceScore?: number };
+  const record: AdCopyFinalRecord = {
+    title: (checked.title as string) ?? (ad.title as string) ?? "",
+    description: (checked.description as string) ?? (ad.description as string) ?? "",
+    cta: (checked.cta as string) ?? (ad.cta as string) ?? "",
+    confidenceScore: gate.confidenceScore ?? 0,
+    model: meta.lastModelUsed || "неизвестно",
     promptVersion: "1.0.0",
     generatedAt: new Date().toISOString(),
-    lowConfidence: !gatePassed,
-    retryCount: attempt - 1,
+    lowConfidence: gate.decision !== "SAVE",
+    retryCount: meta.attempt - 1,
   };
-  setStage("saveAd", { status: "succeeded", output: finalRecord, durationMs: Date.now() - startedMs });
+  return { output: record, status: "ok", checks: [{ label: "Объявление и метаданные сформированы", pass: true }] };
+}
 
-  // 10. Save to CRM + publish (no real CRM integration exists, per §10 SB-1 / real-stage.ts's own "no-real-tool-integration" precedent)
-  startedMs = startStage("saveCrm", finalRecord);
-  const crmResult = {
-    savedToCrm: true,
-    note: "Симуляция записи в CRM — реальной интеграции с внешней CRM в этом MVP нет.",
-    publishedPlatform: normalized.generation_settings?.platform ?? "не указана",
+function fnSaveCrm({ ctx }: CodeFnInput): CodeFnResult {
+  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyCrmInput>;
+  const platform = normalized.generation_settings?.platform ?? "не указана";
+  return {
+    output: { savedToCrm: true, note: "Симуляция записи в CRM — реальной интеграции с внешней CRM в этом MVP нет.", publishedPlatform: platform },
+    status: "ok",
+    checks: [{ label: "Запись в CRM выполнена (симуляция)", pass: true }],
   };
-  setStage("saveCrm", { status: "succeeded", output: crmResult, durationMs: Date.now() - startedMs });
+}
 
-  return { stages, success: true, finalRecord, totalTokensEstimate: Math.round(totalTokens), totalCostUsd, totalDurationMs: Date.now() - startAll };
+const CODE_FUNCS: Record<string, (input: CodeFnInput, meta: CodeFnMeta) => CodeFnResult> = {
+  validate: fnValidate,
+  normalize: fnNormalize,
+  storage: fnStorage,
+  quality: fnQuality,
+  gate: fnGate,
+  saveAd: fnSaveAd,
+  saveCrm: fnSaveCrm,
+};
+
+// ── Default, fully editable 10-stage configuration ──
+const BENEFITS_PROMPT = `Ты — эксперт по анализу объектов недвижимости и продающему копирайтингу.
+Проанализируй структурированные данные объекта недвижимости и определи преимущества, уникальное торговое предложение, целевую аудиторию и продающие тезисы.
+
+Данные объекта:
+Тип сделки: {{crm.deal_type}}
+Тип объекта: {{crm.object_type}}
+Город: {{crm.city}}
+Район: {{crm.district}}
+Улица: {{crm.street}}
+Комнат: {{crm.rooms}}
+Площадь: {{crm.area}} м²
+Этаж: {{crm.floor}} из {{crm.total_floors}}
+Цена: {{crm.price}}
+Описание: {{crm.description}}
+Особенности: {{crm.features}}
+Ремонт: {{crm.renovation}}
+Балкон: {{crm.balcony}}
+Санузел: {{crm.bathroom}}
+Вид из окна: {{crm.view}}
+Инфраструктура: {{crm.infrastructure}}
+Парковка: {{crm.parking}}
+Ипотека: {{crm.mortgage}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений с полями:
+{
+  "advantages": string[] (3-6 конкретных преимуществ объекта на основе реальных данных выше, ничего не выдумывай),
+  "usp": string (одно уникальное торговое предложение — главный аргумент в пользу покупки),
+  "strengths": string[] (сильные стороны локации, дома, планировки),
+  "target_audience": string (для кого этот объект подходит лучше всего),
+  "selling_points": string[] (3-5 продающих тезисов для текста объявления),
+  "style": string (рекомендуемый стиль объявления)
+}`;
+
+const GENERATION_PROMPT = `Ты — профессиональный копирайтер объявлений недвижимости.
+Составь продающее объявление на основе данных объекта и его преимуществ.
+
+Данные объекта:
+Тип сделки: {{crm.deal_type}}
+Тип объекта: {{crm.object_type}}
+Город: {{crm.city}}
+Район: {{crm.district}}
+Комнат: {{crm.rooms}}, Площадь: {{crm.area}} м², Этаж {{crm.floor}} из {{crm.total_floors}}
+Цена: {{crm.price}}
+Ремонт: {{crm.renovation}}, Балкон: {{crm.balcony}}, Вид: {{crm.view}}
+
+Преимущества и позиционирование (от предыдущего этапа):
+{{ctx.benefits}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений с полями:
+{
+  "title": string (заголовок объявления, до 70 символов, содержит ключевые характеристики),
+  "description": string (текст объявления 3-6 предложений, продающая структура: зацепка -> характеристики -> преимущества -> призыв),
+  "cta": string (короткий призыв к действию)
+}
+
+Правила:
+- Используй только факты из данных объекта и преимущества выше, ничего не выдумывай.
+- Не используй канцеляризмы, штампы и избыточные превосходные степени без основания в фактах.`;
+
+const CHECKER_PROMPT = `Ты — независимый контролёр качества объявлений недвижимости (самопроверка перед публикацией, кросс-вендорная проверка).
+Сверь текст объявления с исходными данными объекта и правилами качества, исправь ошибки.
+
+Исходные данные объекта:
+Город: {{crm.city}}, Район: {{crm.district}}, Комнат: {{crm.rooms}}, Площадь: {{crm.area}} м², Цена: {{crm.price}}
+Преимущества: {{ctx.benefits}}
+
+Проверяемое объявление:
+{{ctx.ad}}
+
+Проверь и верни СТРОГО валидный JSON без markdown и пояснений:
+{
+  "facts_ok": boolean (все факты в объявлении соответствуют исходным данным),
+  "style_ok": boolean (стиль соответствует целевой аудитории, без канцеляризмов),
+  "language_ok": boolean (нет орфографических и грамматических ошибок русского языка),
+  "prohibited_words_ok": boolean (нет запрещённых слов: "лучший", "гарантия", "100%"),
+  "readability_score": number (0-100, оценка читаемости текста),
+  "seo_ok": boolean (заголовок и описание содержат релевантные для поиска характеристики),
+  "duplicates_ok": boolean (нет повторов одних и тех же характеристик),
+  "title": string (исправленный заголовок, если были ошибки — иначе тот же),
+  "description": string (исправленное описание, если были ошибки — иначе то же),
+  "cta": string (исправленный CTA, если были ошибки — иначе тот же),
+  "issues": string[] (список найденных и исправленных проблем)
+}
+
+Правила:
+- Если найдена ошибка — исправь её прямо в полях title/description/cta.
+- confidence не пересчитывай здесь — это делает следующий этап (Контур качества).`;
+
+export function defaultAdCopyStages(): AdCopyStageConfig[] {
+  return [
+    { id: "validate", enabled: true, name: "Валидация входных данных", type: "code", codeFn: "validate", vendor: "Code", outKey: "validated" },
+    { id: "normalize", enabled: true, name: "Подготовка структуры объекта", type: "code", codeFn: "normalize", vendor: "Code", outKey: "normalized" },
+    { id: "benefits", enabled: true, name: "Агент извлечения преимуществ", type: "llm", model: "gpt-5-mini", prompt: BENEFITS_PROMPT, outKey: "benefits" },
+    { id: "storage", enabled: true, name: "Единое хранилище", type: "store", codeFn: "storage", vendor: "JSON Store", outKey: "stored" },
+    { id: "generate", enabled: true, name: "Генерация объявления", type: "llm", model: "gpt-5-mini", prompt: GENERATION_PROMPT, outKey: "ad" },
+    { id: "check", enabled: true, name: "Проверка объявления", type: "check", model: "claude-sonnet-4-6", prompt: CHECKER_PROMPT, outKey: "checked" },
+    { id: "quality", enabled: true, name: "Контур качества", type: "code", codeFn: "quality", vendor: "Code", outKey: "quality" },
+    { id: "gate", enabled: true, name: "Quality Gate", type: "code", codeFn: "gate", vendor: "Code", outKey: "gate" },
+    { id: "saveAd", enabled: true, name: "Сохранение объявления", type: "svc", codeFn: "saveAd", vendor: "Ad Store", outKey: "saved_ad" },
+    { id: "saveCrm", enabled: true, name: "Сохранение в CRM", type: "svc", codeFn: "saveCrm", vendor: "CRM", outKey: "saved_crm" },
+  ];
+}
+
+let newStageCounter = 0;
+export function createBlankStage(): AdCopyStageConfig {
+  newStageCounter += 1;
+  return { id: `custom_${Date.now()}_${newStageCounter}`, enabled: true, name: "Новый шаг", type: "code", codeFn: undefined, vendor: "Code", outKey: `step_${newStageCounter}` };
+}
+
+/** Every `ctx.KEY` a prompt can currently reference, for the "Переменные в промтах" reference panel. */
+export function availableContextKeys(stages: readonly AdCopyStageConfig[]): readonly string[] {
+  return stages.filter((stage) => stage.enabled).map((stage) => stage.outKey);
+}
+
+export async function runAdCopyPipeline(
+  stages: readonly AdCopyStageConfig[],
+  rawInput: string,
+  onUpdate: (reports: Readonly<Record<string, AdCopyStageReport>>) => void,
+): Promise<AdCopyPipelineResult> {
+  const startAll = Date.now();
+  let reports: Record<string, AdCopyStageReport> = Object.fromEntries(stages.map((stage) => [stage.id, { stageId: stage.id, status: "idle" as const }]));
+  const ctx: Record<string, unknown> = {};
+  let totalTokens = 0;
+  let totalCostUsd = 0;
+  let lastModelUsed = "";
+
+  const emit = () => onUpdate({ ...reports });
+  const setReport = (id: string, patch: Partial<AdCopyStageReport>) => {
+    reports = { ...reports, [id]: { ...reports[id], ...patch, stageId: id } };
+    emit();
+  };
+  emit();
+
+  const enabled = stages.filter((stage) => stage.enabled);
+
+  const runOne = async (stage: AdCopyStageConfig, attempt: number | undefined): Promise<void> => {
+    const startedMs = Date.now();
+    setReport(stage.id, { status: "running", attempt });
+    try {
+      const crm = (ctx.normalized ?? ctx.validated ?? {}) as Record<string, unknown>;
+      let result: CodeFnResult;
+      if (stage.type === "llm" || stage.type === "check") {
+        const prompt = tmpl(stage.prompt ?? "", { crm, ctx });
+        const model = stage.model || (stage.type === "check" ? "claude-sonnet-4-6" : "gpt-5-mini");
+        const text = await callModelByName(prompt, model);
+        const tokens = estimateTokens(prompt) + estimateTokens(text);
+        const cost = estimateCost(model, tokens);
+        totalTokens += tokens;
+        totalCostUsd += cost;
+        lastModelUsed = model;
+        let parsed: unknown;
+        try {
+          parsed = parseJsonResponse(text);
+        } catch {
+          parsed = { raw: text };
+        }
+        result = {
+          output: parsed,
+          status: "ok",
+          metrics: [
+            { label: "Модель", value: `${MODEL_VENDOR[model] ?? "?"}/${model}` },
+            { label: "Токены (оценка)", value: String(Math.round(tokens)) },
+            { label: "Стоимость (оценка)", value: `$${cost.toFixed(4)}` },
+          ],
+        };
+      } else {
+        const fn = stage.codeFn ? CODE_FUNCS[stage.codeFn] : undefined;
+        result = fn
+          ? fn({ crm, ctx, rawInput }, { attempt: attempt ?? 1, maxAttempts: MAX_ATTEMPTS, lastModelUsed })
+          : { output: ctx, status: "warn", checks: [{ label: "Не задана известная код-функция — шаг пропущен", pass: false, warn: true }] };
+      }
+      ctx[stage.outKey] = result.output;
+      setReport(stage.id, { status: result.status, output: result.output, checks: result.checks, metrics: result.metrics, attempt, durationMs: Date.now() - startedMs });
+    } catch (error) {
+      setReport(stage.id, { status: "bad", error: errorMessage(error), attempt, durationMs: Date.now() - startedMs });
+    }
+  };
+
+  let lastStoreIndex = -1;
+  enabled.forEach((stage, index) => {
+    if (stage.type === "store") lastStoreIndex = index;
+  });
+  const gateIndex = enabled.findIndex((stage) => stage.codeFn === "gate");
+
+  for (let i = 0; i <= lastStoreIndex; i += 1) await runOne(enabled[i], undefined);
+
+  let finalAttempt: number | undefined;
+  if (gateIndex === -1) {
+    for (let i = lastStoreIndex + 1; i < enabled.length; i += 1) await runOne(enabled[i], undefined);
+  } else {
+    let attempt = 1;
+    for (;;) {
+      for (let i = lastStoreIndex + 1; i <= gateIndex; i += 1) await runOne(enabled[i], attempt);
+      const gateOutput = ctx[enabled[gateIndex].outKey] as { decision?: string } | undefined;
+      if (gateOutput?.decision !== "RETRY" || attempt >= MAX_ATTEMPTS) break;
+      attempt += 1;
+    }
+    finalAttempt = attempt;
+    // Save/service stages after the gate must still know the final
+    // attempt count (so e.g. `saveAd`'s `retryCount = attempt - 1` is
+    // correct) even though they only ever run once themselves, per
+    // stage -- not once per retry.
+    for (let i = gateIndex + 1; i < enabled.length; i += 1) await runOne(enabled[i], finalAttempt);
+  }
+
+  const saveAdStage = enabled.find((stage) => stage.codeFn === "saveAd");
+  const finalRecord = saveAdStage ? (ctx[saveAdStage.outKey] as AdCopyFinalRecord | undefined) : undefined;
+
+  return { reports, ctx, totalTokensEstimate: Math.round(totalTokens), totalCostUsd, totalDurationMs: Date.now() - startAll, finalRecord };
 }

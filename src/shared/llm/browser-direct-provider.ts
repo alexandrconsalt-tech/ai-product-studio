@@ -128,6 +128,28 @@ export async function callConfiguredLlm(prompt: string): Promise<ConfiguredLlmRe
   throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в разделе «Настройки».");
 }
 
+/** Same vendor mapping public/pipeline-lab-v3.html's own MODEL_VENDOR uses -- kept in sync by name. */
+export const MODEL_VENDOR: Readonly<Record<string, "openai" | "anthropic">> = { "gpt-5-mini": "openai", "claude-sonnet-4-6": "anthropic" };
+
+export const MODEL_OPTIONS: readonly { value: string; label: string }[] = [
+  { value: "gpt-5-mini", label: "GPT-5 mini (OpenAI)" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Anthropic)" },
+];
+
+/**
+ * Calls the vendor a specific model name belongs to (per `MODEL_VENDOR`),
+ * unlike `callConfiguredLlm` which picks whichever vendor's key happens
+ * to be configured. Needed when a stage's configured model matters --
+ * e.g. a cross-vendor "Проверщик" stage deliberately using a different
+ * vendor than the stage it's checking, the same real-world reason
+ * Pipeline Lab v3's own Check Agent defaults to Claude while the
+ * Fact/Need/Outcome/Summary agents default to GPT-5 mini.
+ */
+export async function callModelByName(prompt: string, model: string): Promise<string> {
+  const vendor = MODEL_VENDOR[model] ?? "anthropic";
+  return vendor === "openai" ? callOpenAi(prompt, model) : callAnthropic(prompt, model);
+}
+
 /** Same tolerant parsing Pipeline Lab v3's own parseJSON does (strips ```json fences, trims to the outer braces). */
 export function parseJsonResponse<T>(raw: string): T {
   let text = raw.trim().replace(/```json/gi, "").replace(/```/g, "").trim();
