@@ -32,3 +32,10 @@ Validation rules:
   not be conflated.
 - Both `confidence` and `qualityScore` are optional: a custom stage configuration (user
   removed the Quality Gate or Check Agent stage in Pipeline Lab v3) legitimately has neither.
+
+**`transcript`/`report` (added 2026-07-05, same-day follow-up)** -- the raw input tested and
+the full per-stage report, in the exact shape Pipeline Lab v3's own "Скачать полный отчёт
+(JSON)" button already builds (`{pipeline, result, usage}`). Added so Dashboard's run history
+can reopen one *specific* historical test's full result, not just its aggregate numbers --
+`unknown`/untyped (no Zod shape beyond that), because Pipeline Lab v3 is plain untyped JS on
+the other side of the `postMessage` boundary, not a schema-validated one.

@@ -18,6 +18,8 @@ export function createPlaygroundTestRun(
     confidence: input.confidence,
     qualityScore: input.qualityScore,
     decision: input.decision,
+    transcript: input.transcript,
+    report: input.report,
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
     version: input.version ?? "1.0.0",

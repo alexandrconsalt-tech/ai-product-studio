@@ -54,6 +54,8 @@ export function PlaygroundScreen() {
           confidence: payload.confidence,
           qualityScore: payload.qualityScore,
           decision: payload.decision,
+          transcript: payload.transcript,
+          report: payload.report,
           startedAt: payload.startedAt,
           finishedAt: payload.finishedAt,
         }),
@@ -65,8 +67,8 @@ export function PlaygroundScreen() {
   return (
     <Page className="max-w-none">
       <div>
-        <h1 className="text-2xl font-semibold">Playground</h1>
-        <p className="text-sm text-text-muted">Выберите продукт и протестируйте его pipeline в Pipeline Lab v3 — загрузка данных, запуск, промежуточные результаты и отчёт.</p>
+        <h1 className="text-2xl font-semibold">Песочница</h1>
+        <p className="text-sm text-text-muted">Выберите продукт и протестируйте его пайплайн в Pipeline Lab v3 — загрузка данных, запуск, промежуточные результаты и отчёт.</p>
       </div>
 
       <Section>
@@ -76,7 +78,7 @@ export function PlaygroundScreen() {
         </div>
         <Search value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск продукта" aria-label="Поиск продукта" />
         {filtered.length === 0 ? (
-          <EmptyState>Продукты не найдены. Создайте продукт в разделе Product.</EmptyState>
+          <EmptyState>Продукты не найдены. Создайте продукт в разделе «Продукт».</EmptyState>
         ) : (
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             {filtered.map((project) => (

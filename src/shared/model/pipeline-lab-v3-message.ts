@@ -19,6 +19,12 @@ export type PipelineLabV3RunPayload = Readonly<{
   confidence?: number;
   decision?: string;
   qualityScore?: number;
+  // Raw input tested and the full per-stage report (same shape as
+  // Pipeline Lab v3's own "Скачать полный отчёт (JSON)" download) --
+  // kept so a specific historical test result can be reopened later
+  // from Dashboard, not just its aggregate numbers.
+  transcript?: string;
+  report?: unknown;
 }>;
 
 export type PipelineLabV3RunMessage = Readonly<{

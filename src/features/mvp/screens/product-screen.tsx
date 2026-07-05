@@ -273,9 +273,9 @@ function AiAssistPanel({ onApply }: Readonly<{ onApply: (draft: Record<string, u
     <Card className="grid gap-3">
       <div className="flex items-center gap-2">
         <Sparkles className="size-4 text-primary" aria-hidden="true" />
-        <h2 className="text-lg font-semibold">AI Assist</h2>
+        <h2 className="text-lg font-semibold">ИИ-помощник</h2>
       </div>
-      <p className="text-sm text-text-muted">Надиктуйте или опишите идею продукта — AI оформит карточку по шаблону Product Manager, вы только скорректируете нужные разделы.</p>
+      <p className="text-sm text-text-muted">Надиктуйте или опишите идею продукта — ИИ оформит карточку по шаблону Product Manager, вы только скорректируете нужные разделы.</p>
       <Textarea className="min-h-24" placeholder="Например: хочу продукт, который слушает звонки менеджеров и…" value={idea} onChange={(event) => setIdea(event.target.value)} />
       <div className="flex flex-wrap items-center gap-2">
         <Button variant={listening ? "primary" : "secondary"} onClick={toggleDictation}>
@@ -284,19 +284,19 @@ function AiAssistPanel({ onApply }: Readonly<{ onApply: (draft: Record<string, u
         </Button>
         <Button variant="primary" onClick={handleAiFill} disabled={!idea.trim() || loading}>
           <Sparkles className="size-4" aria-hidden="true" />
-          {loading ? "Заполняем карточку…" : "Заполнить карточку с помощью AI"}
+          {loading ? "Заполняем карточку…" : "Заполнить карточку с помощью ИИ"}
         </Button>
         {!speechSupported ? <span className="text-xs text-text-muted">Голосовой ввод недоступен в этом браузере.</span> : null}
       </div>
       {!keyConfigured ? (
-        <Alert tone="info">Чтобы AI мог заполнить карточку, задайте API-ключ Anthropic или OpenAI в Playground → Pipeline Lab v3 → «API-ключи» (используется тот же ключ).</Alert>
+        <Alert tone="info">Чтобы ИИ мог заполнить карточку, задайте API-ключ Anthropic или OpenAI в разделе «Песочница» → Pipeline Lab v3 → «API-ключи» (используется тот же ключ).</Alert>
       ) : null}
       {error ? <Alert tone="warning">{error}</Alert> : null}
     </Card>
   );
 }
 
-const PRODUCT_TABS = ["Общая информация", "Discovery", "MVP", "AI", "Метрики", "Acceptance Criteria", "Roadmap", "Notes"] as const;
+const PRODUCT_TABS = ["Общая информация", "Исследование", "MVP", "ИИ", "Метрики", "Критерии приёмки", "Дорожная карта", "Заметки"] as const;
 type ProductTab = (typeof PRODUCT_TABS)[number];
 
 type ProjectDialogState =
@@ -426,7 +426,7 @@ export function ProductScreen() {
       <Page>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold">Product</h1>
+            <h1 className="text-2xl font-semibold">Продукт</h1>
             <p className="text-sm text-text-muted">Список продуктов. Откройте продукт, чтобы увидеть карточку, или создайте новый.</p>
           </div>
           <div className="flex items-center gap-2">
@@ -491,7 +491,7 @@ export function ProductScreen() {
                 <div className="grid gap-4">
                   <div>
                     <h2 className="text-lg font-semibold">{dialog.type === "create" ? "Создать продукт" : dialog.type === "rename" ? "Переименовать продукт" : "Дублировать продукт"}</h2>
-                    <p className="text-sm text-text-muted">Название обязательно. Описание — краткая идея продукта, можно уточнить AI Assist после создания.</p>
+                    <p className="text-sm text-text-muted">Название обязательно. Описание — краткая идея продукта, можно уточнить с помощью ИИ-помощника после создания.</p>
                   </div>
                   <label className="grid gap-1 text-sm">
                     Название
@@ -573,7 +573,7 @@ export function ProductScreen() {
         </div>
       ) : null}
 
-      {activeTab === "Discovery" ? (
+      {activeTab === "Исследование" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <label className="grid gap-1 text-sm lg:col-span-2">
             Discovery
@@ -615,7 +615,7 @@ export function ProductScreen() {
         </div>
       ) : null}
 
-      {activeTab === "AI" ? (
+      {activeTab === "ИИ" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <label className="grid gap-1 text-sm">
             Используемые модели
@@ -626,7 +626,7 @@ export function ProductScreen() {
             <Textarea className="min-h-20" value={form.aiAgents} onChange={(event) => updateField("aiAgents", event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm lg:col-span-2">
-            Pipeline
+            Пайплайн
             <Textarea className="min-h-20" value={form.aiPipelineNotes} onChange={(event) => updateField("aiPipelineNotes", event.target.value)} />
           </label>
         </div>
@@ -635,37 +635,37 @@ export function ProductScreen() {
       {activeTab === "Метрики" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <label className="grid gap-1 text-sm">
-            Success Metrics (name: target, по одной на строку)
+            Метрики успеха (название: целевое значение, по одной на строку)
             <Textarea className="min-h-24" value={form.successMetricsText} onChange={(event) => updateField("successMetricsText", event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
-            Quality Metrics
+            Метрики качества
             <Textarea className="min-h-24" value={form.qualityMetricsText} onChange={(event) => updateField("qualityMetricsText", event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
-            Cost Metrics
+            Метрики стоимости
             <Textarea className="min-h-24" value={form.costMetricsText} onChange={(event) => updateField("costMetricsText", event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
-            Speed Metrics
+            Метрики скорости
             <Textarea className="min-h-24" value={form.speedMetricsText} onChange={(event) => updateField("speedMetricsText", event.target.value)} />
           </label>
         </div>
       ) : null}
 
-      {activeTab === "Acceptance Criteria" ? (
+      {activeTab === "Критерии приёмки" ? (
         <Card>
           <Textarea className="min-h-32" value={form.acceptanceCriteria} onChange={(event) => updateField("acceptanceCriteria", event.target.value)} />
         </Card>
       ) : null}
 
-      {activeTab === "Roadmap" ? (
+      {activeTab === "Дорожная карта" ? (
         <Card>
           <Textarea className="min-h-32" value={form.roadmap} onChange={(event) => updateField("roadmap", event.target.value)} />
         </Card>
       ) : null}
 
-      {activeTab === "Notes" ? (
+      {activeTab === "Заметки" ? (
         <div className="grid gap-4">
           <Card>
             <Textarea className="min-h-32" value={form.notes} onChange={(event) => updateField("notes", event.target.value)} />

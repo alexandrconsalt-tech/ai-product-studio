@@ -824,6 +824,11 @@ async function runPipeline(){
 function reportRunToParent(run){
   try{
     const gate=ctx.gate, check=ctx.summary_check;
+    // Same shape as the "Скачать полный отчёт (JSON)" button builds
+    // (dlReport, see renderFinal) -- so a test opened later from
+    // Dashboard's run history shows exactly what that download would
+    // have shown, not a lighter summary.
+    const report={ pipeline: pipeline.map(sanitize), result: ctx, usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
     window.parent.postMessage({
       source:'pipeline-lab-v3', type:'run-complete', productId: PRODUCT_ID,
       payload:{
@@ -839,6 +844,8 @@ function reportRunToParent(run){
         confidence: gate ? gate.confidence : undefined,
         decision: gate ? gate.decision : undefined,
         qualityScore: check ? check.score : undefined,
+        transcript: ctx.__transcript,
+        report: report,
       },
     }, '*');
   }catch(e){ /* no parent listening, or postMessage unsupported -- harmless */ }

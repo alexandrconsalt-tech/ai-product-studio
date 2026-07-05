@@ -1,11 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, Gauge, LineChart as LineChartIcon, Timer, Wallet } from "lucide-react";
-import { Badge, Card, EmptyState, LineChart, Page, Section, SegmentedControl, Select } from "@/shared/ui";
+import { AlertTriangle, CheckCircle2, Download, Gauge, History, LineChart as LineChartIcon, Timer, Wallet, XCircle } from "lucide-react";
+import { Badge, Button, Card, Dialog, EmptyState, LineChart, Page, Section, SegmentedControl, Select, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
 import { computeDashboardStats } from "@/shared/evaluation/playground-dashboard-analytics";
+import { downloadJson } from "@/shared/lib/download-json";
+import type { PlaygroundTestRun } from "@/entities/PlaygroundTestRun/model/types";
 
 const RANGE_OPTIONS = [5, 10, 20, 50, 100] as const;
 type RangeOption = (typeof RANGE_OPTIONS)[number];
@@ -14,10 +16,13 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(4)}`;
 }
 function formatMs(value: number): string {
-  return value >= 1000 ? `${(value / 1000).toFixed(1)} s` : `${Math.round(value)} ms`;
+  return value >= 1000 ? `${(value / 1000).toFixed(1)} с` : `${Math.round(value)} мс`;
 }
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("ru-RU");
 }
 
 function StatCard({ icon, label, value, hint }: Readonly<{ icon: React.ReactNode; label: string; value: string; hint?: string }>) {
@@ -30,6 +35,86 @@ function StatCard({ icon, label, value, hint }: Readonly<{ icon: React.ReactNode
       <p className="text-xl font-semibold">{value}</p>
       {hint ? <p className="text-xs text-text-muted">{hint}</p> : null}
     </Card>
+  );
+}
+
+// Full detail of one historical test run -- so the user can "в любое
+// время вернуться и посмотреть результаты конкретного теста", not just
+// the aggregate stats above. Shows the raw transcript tested and the
+// full per-stage report Pipeline Lab v3's postMessage bridge captured
+// (same shape as its own "Скачать полный отчёт" download).
+function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; onClose: () => void }>) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4 backdrop-blur-sm">
+      <Dialog className="grid max-h-[85vh] w-full max-w-3xl gap-3 overflow-hidden">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Результат теста</h2>
+            <p className="text-sm text-text-muted">{formatDateTime(run.finishedAt)}</p>
+          </div>
+          <Status tone={run.status === "succeeded" ? "success" : "error"}>{run.status === "succeeded" ? "успешно" : "с ошибкой"}</Status>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+          <Card><p className="text-xs text-text-muted">Стоимость</p><p className="font-medium">{formatUsd(run.costUsd)}</p></Card>
+          <Card><p className="text-xs text-text-muted">Время</p><p className="font-medium">{formatMs(run.durationMs)}</p></Card>
+          <Card><p className="text-xs text-text-muted">Уверенность</p><p className="font-medium">{run.confidence !== undefined ? run.confidence.toFixed(2) : "—"}</p></Card>
+          <Card><p className="text-xs text-text-muted">Оценка качества</p><p className="font-medium">{run.qualityScore !== undefined ? `${Math.round(run.qualityScore)}%` : "—"}</p></Card>
+        </div>
+        {run.decision ? <p className="text-sm text-text-muted">Решение: <span className="text-foreground">{run.decision}</span></p> : null}
+        {run.transcript ? (
+          <div className="grid gap-1">
+            <p className="text-sm font-medium">Входные данные</p>
+            <pre className="max-h-40 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{run.transcript}</pre>
+          </div>
+        ) : null}
+        <div className="grid min-h-0 flex-1 gap-1">
+          <p className="text-sm font-medium">Полный отчёт по этапам</p>
+          <pre className="max-h-72 min-h-0 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{JSON.stringify(run.report ?? "Отчёт не сохранён для этого запуска.", null, 2)}</pre>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => downloadJson(`test-run-${run.id}.json`, run)}>
+            <Download className="size-4" aria-hidden="true" />
+            Скачать JSON
+          </Button>
+          <Button variant="primary" onClick={onClose}>Закрыть</Button>
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun[] }>) {
+  const [selectedRun, setSelectedRun] = React.useState<PlaygroundTestRun | null>(null);
+
+  return (
+    <Section>
+      <div className="flex items-center gap-2">
+        <History className="size-4 text-text-muted" aria-hidden="true" />
+        <h2 className="text-lg font-semibold">История запусков</h2>
+      </div>
+      <p className="text-sm text-text-muted">Нажмите на запуск, чтобы посмотреть его полный результат.</p>
+      <div className="grid gap-2">
+        {runs.map((run) => (
+          <button
+            key={run.id}
+            type="button"
+            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-6"
+            onClick={() => setSelectedRun(run)}
+          >
+            <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
+            <span className="flex items-center gap-1">
+              {run.status === "succeeded" ? <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" /> : <XCircle className="size-3.5 text-error" aria-hidden="true" />}
+              {run.status === "succeeded" ? "успешно" : "с ошибкой"}
+            </span>
+            <span>{formatUsd(run.costUsd)}</span>
+            <span>{formatMs(run.durationMs)}</span>
+            <span>{run.qualityScore !== undefined ? `качество ${Math.round(run.qualityScore)}%` : "—"}</span>
+            <span className="truncate text-text-muted">{run.decision ?? ""}</span>
+          </button>
+        ))}
+      </div>
+      {selectedRun ? <RunDetailDialog run={selectedRun} onClose={() => setSelectedRun(null)} /> : null}
+    </Section>
   );
 }
 
@@ -53,8 +138,8 @@ export function DashboardScreen() {
   return (
     <Page className="max-w-none">
       <div>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-text-muted">Агрегированная статистика тестирования продукта в Playground — по многим запускам, а не по одному отчёту.</p>
+        <h1 className="text-2xl font-semibold">Дашборд</h1>
+        <p className="text-sm text-text-muted">Агрегированная статистика тестирования продукта в Песочнице — по многим запускам, а не по одному отчёту.</p>
       </div>
 
       <Section>
@@ -89,21 +174,21 @@ export function DashboardScreen() {
       </Section>
 
       {stats.runCount === 0 ? (
-        <EmptyState>Для этого продукта ещё нет протестированных запусков. Откройте Playground и запустите Pipeline Lab v3.</EmptyState>
+        <EmptyState>Для этого продукта ещё нет протестированных запусков. Откройте «Песочницу» и запустите Pipeline Lab v3.</EmptyState>
       ) : (
         <>
           <div className="grid gap-4 md:grid-cols-4">
-            <StatCard icon={<Gauge className="size-4" aria-hidden="true" />} label="Accuracy (avg quality score)" value={stats.averageQualityScore ? `${Math.round(stats.averageQualityScore)}%` : "—"} />
+            <StatCard icon={<Gauge className="size-4" aria-hidden="true" />} label="Точность (средняя оценка качества)" value={stats.averageQualityScore ? `${Math.round(stats.averageQualityScore)}%` : "—"} />
             <StatCard
               icon={<Wallet className="size-4" aria-hidden="true" />}
-              label="Cost"
+              label="Стоимость"
               value={formatUsd(stats.lastCostUsd)}
-              hint={`avg ${formatUsd(stats.averageCostUsd)} · min ${formatUsd(stats.minCostUsd)} · max ${formatUsd(stats.maxCostUsd)}`}
+              hint={`среднее ${formatUsd(stats.averageCostUsd)} · мин ${formatUsd(stats.minCostUsd)} · макс ${formatUsd(stats.maxCostUsd)}`}
             />
-            <StatCard icon={<Timer className="size-4" aria-hidden="true" />} label="Average Time" value={formatMs(stats.averageDurationMs)} />
-            <StatCard icon={<CheckCircle2 className="size-4" aria-hidden="true" />} label="Success Rate" value={formatPercent(stats.successRate)} hint={`${stats.successCount} успешно · ${stats.failureCount} с ошибкой`} />
-            <StatCard icon={<Gauge className="size-4" aria-hidden="true" />} label="Average Confidence" value={stats.averageConfidence ? stats.averageConfidence.toFixed(2) : "—"} />
-            <StatCard icon={<AlertTriangle className="size-4" aria-hidden="true" />} label="Avg Errors / Warnings" value={`${stats.averageErrorCount.toFixed(1)} / ${stats.averageWarningCount.toFixed(1)}`} />
+            <StatCard icon={<Timer className="size-4" aria-hidden="true" />} label="Среднее время" value={formatMs(stats.averageDurationMs)} />
+            <StatCard icon={<CheckCircle2 className="size-4" aria-hidden="true" />} label="Доля успешных" value={formatPercent(stats.successRate)} hint={`${stats.successCount} успешно · ${stats.failureCount} с ошибкой`} />
+            <StatCard icon={<Gauge className="size-4" aria-hidden="true" />} label="Средняя уверенность" value={stats.averageConfidence ? stats.averageConfidence.toFixed(2) : "—"} />
+            <StatCard icon={<AlertTriangle className="size-4" aria-hidden="true" />} label="Ошибки / предупреждения (среднее)" value={`${stats.averageErrorCount.toFixed(1)} / ${stats.averageWarningCount.toFixed(1)}`} />
             <StatCard icon={<CheckCircle2 className="size-4" aria-hidden="true" />} label="Успешные запуски" value={String(stats.successCount)} />
             <StatCard icon={<AlertTriangle className="size-4" aria-hidden="true" />} label="Неуспешные запуски" value={String(stats.failureCount)} />
           </div>
@@ -115,7 +200,7 @@ export function DashboardScreen() {
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <Card className="grid gap-2">
-                <p className="text-sm font-medium">Accuracy по времени</p>
+                <p className="text-sm font-medium">Точность по времени</p>
                 <LineChart points={stats.qualityScoreSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--success))" formatValue={(value) => `${Math.round(value)}%`} />
               </Card>
               <Card className="grid gap-2">
@@ -127,11 +212,13 @@ export function DashboardScreen() {
                 <LineChart points={stats.durationSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--info))" formatValue={formatMs} />
               </Card>
               <Card className="grid gap-2">
-                <p className="text-sm font-medium">Confidence по времени</p>
+                <p className="text-sm font-medium">Уверенность по времени</p>
                 <LineChart points={stats.confidenceSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--primary))" formatValue={(value) => value.toFixed(2)} />
               </Card>
             </div>
           </Section>
+
+          <RunHistorySection runs={runs} />
         </>
       )}
     </Page>

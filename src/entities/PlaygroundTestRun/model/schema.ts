@@ -28,6 +28,13 @@ export const PlaygroundTestRunSchema = z.object({
   // intentionally (it grades the summary text, not routing confidence).
   qualityScore: z.number().min(0).max(100).optional(),
   decision: z.string().optional(),
+  // Raw input tested and the full per-stage report (Pipeline Lab v3's own
+  // "Скачать полный отчёт" shape: {pipeline, result, usage}) -- kept so a
+  // specific historical run can be reopened later, not just its aggregate
+  // numbers. `unknown` (not a typed schema) because Pipeline Lab v3 is
+  // plain untyped JS, same reasoning as PipelineLabV3RunPayload.
+  transcript: z.string().optional(),
+  report: z.unknown().optional(),
   startedAt: IsoDateTimeSchema,
   finishedAt: IsoDateTimeSchema,
   version: VersionSchema,
