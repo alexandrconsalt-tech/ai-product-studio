@@ -5,6 +5,8 @@ import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, KeyRound, 
 import { Alert, Badge, Button, Card, Input, Section, Select, Switch, Textarea } from "@/shared/ui";
 import { AD_COPY_CRM_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
 import { hasBrowserLlmKeyConfigured, MODEL_OPTIONS } from "@/shared/llm/browser-direct-provider";
+import { storedFilesForContext, type StoredInputFile } from "@/shared/lib/input-file-storage";
+import { InputFileStoragePanel } from "./input-file-storage-panel";
 import {
   AD_COPY_CODE_FN_LIST,
   AD_COPY_TYPE_LABELS,
@@ -239,6 +241,8 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
   const [running, setRunning] = React.useState(false);
   const [runError, setRunError] = React.useState<string | null>(null);
   const [lastResult, setLastResult] = React.useState<AdCopyPipelineResult | null>(null);
+  const [pipelineExpanded, setPipelineExpanded] = React.useState(false);
+  const [inputFiles, setInputFiles] = React.useState<readonly StoredInputFile[]>([]);
   const keyConfigured = hasBrowserLlmKeyConfigured();
 
   React.useEffect(() => {
@@ -283,7 +287,7 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
     setLastResult(null);
     setReports({});
     try {
-      const result = await runAdCopyPipeline(stages, rawInput, setReports);
+      const result = await runAdCopyPipeline(stages, rawInput, setReports, storedFilesForContext(inputFiles));
       setLastResult(result);
       onRunComplete(result, rawInput);
     } catch (error) {
@@ -307,7 +311,7 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
       ) : null}
 
       <Card className="grid gap-2">
-        <p className="text-sm font-medium">Вход · данные объекта недвижимости (CRM JSON)</p>
+        <p className="text-sm font-medium">Вход</p>
         <Textarea className="min-h-40 font-mono text-xs" value={rawInput} onChange={(event) => setRawInput(event.target.value)} />
         <div className="flex items-center justify-between gap-2">
           <Button variant="ghost" onClick={handleInsertExample}>
@@ -315,38 +319,44 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
           </Button>
           <span className="text-xs text-text-muted">{rawInput.length} символов</span>
         </div>
+        <InputFileStoragePanel productId={productId} onFilesChange={setInputFiles} />
       </Card>
 
       <Section>
-        <div className="flex items-center justify-between gap-4">
+        <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setPipelineExpanded((value) => !value)}>
+          {pipelineExpanded ? <ChevronDown className="size-4 shrink-0 text-text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-text-muted" aria-hidden="true" />}
           <h3 className="text-lg font-semibold">Пайплайн</h3>
           <Badge tone="info">{stages.length}</Badge>
-        </div>
-        <div className="grid gap-2">
-          {stages.map((stage, index) => (
-            <StageEditor
-              key={stage.id}
-              stage={stage}
-              index={index}
-              total={stages.length}
-              report={reports[stage.id]}
-              onChange={(next) => updateStage(stage.id, next)}
-              onMove={(direction) => moveStage(index, direction)}
-              onSave={persistAll}
-              onDelete={() => deleteStage(stage.id)}
-            />
-          ))}
-        </div>
-        <Button variant="ghost" onClick={addStage} className="w-fit">
-          <Plus className="size-4" aria-hidden="true" />+ Добавить шаг
-        </Button>
+        </button>
+        {pipelineExpanded ? (
+          <>
+            <div className="grid gap-2">
+              {stages.map((stage, index) => (
+                <StageEditor
+                  key={stage.id}
+                  stage={stage}
+                  index={index}
+                  total={stages.length}
+                  report={reports[stage.id]}
+                  onChange={(next) => updateStage(stage.id, next)}
+                  onMove={(direction) => moveStage(index, direction)}
+                  onSave={persistAll}
+                  onDelete={() => deleteStage(stage.id)}
+                />
+              ))}
+            </div>
+            <Button variant="ghost" onClick={addStage} className="w-fit">
+              <Plus className="size-4" aria-hidden="true" />+ Добавить шаг
+            </Button>
+          </>
+        ) : null}
       </Section>
 
       <Card className="grid gap-1">
         <p className="text-sm font-medium">Переменные в промтах</p>
         <p className="text-xs text-text-muted">
           {"{{crm.поле}}"} — данные объекта (deal_type, object_type, city, district, street, rooms, area, floor, total_floors, price, description, features, renovation, balcony, bathroom, view, infrastructure, parking, mortgage). {"{{ctx.КЛЮЧ}}"} — результат
-          любого предыдущего этапа по его «Ключу результата»: {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}.
+          любого предыдущего этапа по его «Ключу результата»: {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}. {"{{ctx.stored_files}}"} — файлы из «Хранилище входящих данных» (имя, формат; текст доступен только для .txt/.svg).
         </p>
       </Card>
 

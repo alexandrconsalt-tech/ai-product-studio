@@ -13,16 +13,21 @@ import { isPipelineLabV3RunMessage, type PipelineLabV3RunPayload } from "@/share
  * history. Rendered via `<iframe>` so its own inline scripts/styles run
  * in an isolated document, untouched by this app's CSS/React tree.
  *
- * `productId` and `onRunComplete` are both optional: without them this
- * renders byte-for-byte the same as before (the hidden standalone
- * "Pipeline Lab v3" route still uses it that way).
+ * `productId`, `productName` and `onRunComplete` are all optional:
+ * without them this renders byte-for-byte the same as before (the
+ * hidden standalone "Pipeline Lab v3" route still uses it that way).
+ * `productName` is shown in the tool's own header instead of its
+ * previous hardcoded "Тестовый стенд AI-пайплайнов" branding, so the
+ * embedded tool reads consistently as "this product's test bench"
+ * rather than a fixed call-analysis-flavored name.
  */
 export type PipelineLabV3ScreenProps = Readonly<{
   productId?: string;
+  productName?: string;
   onRunComplete?: (payload: PipelineLabV3RunPayload) => void;
 }>;
 
-export function PipelineLabV3Screen({ productId, onRunComplete }: PipelineLabV3ScreenProps) {
+export function PipelineLabV3Screen({ productId, productName, onRunComplete }: PipelineLabV3ScreenProps) {
   React.useEffect(() => {
     if (!onRunComplete) return;
     const handleMessage = (event: MessageEvent) => {
@@ -34,7 +39,11 @@ export function PipelineLabV3Screen({ productId, onRunComplete }: PipelineLabV3S
     return () => window.removeEventListener("message", handleMessage);
   }, [productId, onRunComplete]);
 
-  const src = productId ? `/pipeline-lab-v3.html?productId=${encodeURIComponent(productId)}` : "/pipeline-lab-v3.html";
+  const params = new URLSearchParams();
+  if (productId) params.set("productId", productId);
+  if (productName) params.set("productName", productName);
+  const query = params.toString();
+  const src = query ? `/pipeline-lab-v3.html?${query}` : "/pipeline-lab-v3.html";
 
   return (
     <div className="h-full min-h-0 w-full">

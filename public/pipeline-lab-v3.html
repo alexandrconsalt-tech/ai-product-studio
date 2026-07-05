@@ -43,6 +43,7 @@
   .card.collapsible .card-b{display:none}
   .card.collapsible.open .card-b{display:block}
   .card.collapsible.open .card-h.toggle-h .chev{transform:rotate(90deg)}
+  .card.collapsible.open #pipelineToggle .chev{transform:rotate(90deg)}
 
   label.fld{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
     font-weight:700;margin:0 0 6px}
@@ -159,8 +160,8 @@
 <div class="app">
   <header>
     <div>
-      <p class="eyebrow">AI Pipeline Lab · Платформа VT</p>
-      <h1>Тестовый стенд <span class="g">AI-пайплайнов</span></h1>
+      <p class="eyebrow" id="productEyebrow">AI Product Studio</p>
+      <h1 id="productTitle">Тестовый стенд</h1>
     </div>
   </header>
 
@@ -207,7 +208,7 @@
     <!-- СЛЕВА: вход + конфигурация пайплайна -->
     <div>
       <div class="card" style="margin-bottom:16px">
-        <div class="card-h"><span class="n">ВХ</span> Вход · улучшенная транскрипция</div>
+        <div class="card-h"><span class="n">ВХ</span> Вход</div>
         <div class="card-b">
           <label class="fld">Текст транскрипции (роли: Агент / Оператор / Клиент)</label>
           <textarea id="transcript" placeholder="Клиент: Здравствуйте, интересует квартира...&#10;Агент: Добрый день! Да, конечно...&#10;Клиент: Рассматриваю до восьми миллионов, ипотека в процессе...&#10;Агент: Отлично, давайте назначим показ на пятницу 15-го в 14:00..."></textarea>
@@ -217,12 +218,29 @@
             <div class="spacer"></div>
             <span class="status" id="charCount">0 символов</span>
           </div>
+
+          <!-- Хранилище входящих данных (AI Product Studio v2 follow-up):
+               документы (чек-лист, карточка объекта и т.п.) загружаются и
+               сохраняются в браузере, доступны любому промту как
+               {{ctx.stored_files}} -- см. runPipeline()'s ctx.stored_files
+               и «Переменные в промтах» ниже. Текст читается напрямую для
+               .txt/.svg; для .docx/.pdf/.jpg/.png содержимое честно не
+               распознаётся автоматически (нет OCR/парсера в этом MVP) --
+               файл всё равно сохраняется и доступен по имени. -->
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+            <label class="fld" style="margin:0 0 6px">Хранилище входящих данных</label>
+            <div class="hintbar" style="margin:0 0 8px">Загрузите документы (чек-лист, карточку объекта и т.п.) — они станут доступны пайплайну как входные данные ({{ctx.stored_files}}). Форматы: .txt, .docx, .pdf, .jpg, .png, .svg (до 2 МБ).</div>
+            <label class="btn ghost sm" style="margin:0">Загрузить файл<input type="file" id="inputFile" accept=".txt,.docx,.pdf,.jpg,.jpeg,.png,.svg" multiple style="display:none"></label>
+            <div id="inputFilesList" style="margin-top:8px"></div>
+          </div>
         </div>
       </div>
 
-      <div class="card">
+      <div class="card collapsible" id="pipelineCard">
         <div class="card-h">
-          <span class="n">П</span> Пайплайн
+          <span class="toggle-h" id="pipelineToggle" style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;min-width:0">
+            <span class="n">П</span> Пайплайн<span class="chev">▶</span>
+          </span>
           <div class="spacer"></div>
           <select id="preset" style="width:auto;padding:5px 10px;font-size:12px">
             <option value="default">Полный пайплайн VT</option>
@@ -238,6 +256,7 @@
               <code class="inl">{{transcript}}</code> — текст транскрипции<br>
               <code class="inl">{{ctx.КЛЮЧ}}</code> — результат шага с этим ключом (JSON)<br>
               <code class="inl">{{ctx.facts.budget}}</code> — путь внутри результата<br>
+              <code class="inl">{{ctx.stored_files}}</code> — файлы из «Хранилище входящих данных» (имя, формат; текст доступен только для .txt/.svg)<br>
               Сервисные и код-шаги (<code class="inl">stt</code>, <code class="inl">validate</code>, <code class="inl">store</code>, <code class="inl">gate</code>, <code class="inl">crm</code>) выполняются детерминированно, без модели.
             </div>
           </details>
@@ -256,8 +275,8 @@
       <div id="reports">
         <div class="empty" id="emptyState">
           <div class="big">⚙️</div>
-          Загрузите транскрипцию и нажмите «Прогнать пайплайн».<br>
-          После каждого этапа появится мини-отчёт, в конце — итоговое саммари.
+          Заполните входные данные и нажмите «Прогнать пайплайн».<br>
+          После каждого этапа появится мини-отчёт, в конце — итоговый результат.
         </div>
       </div>
     </div>
@@ -444,6 +463,15 @@ const PIPELINE_CONFIG_STORAGE='pipelineLabV3.pipelineConfig';
 // (no query param, e.g. the app's hidden "Pipeline Lab v3" route) keeps
 // using the original global key unchanged -- fully backward compatible.
 const PRODUCT_ID = new URLSearchParams(location.search).get('productId') || null;
+// Shown in the header instead of a hardcoded call-analysis-flavored
+// name, so this tool reads as "this product's test bench" consistently
+// across every product Playground embeds it for (AI Product Studio v2
+// follow-up). Falls back to a neutral label when opened standalone.
+const PRODUCT_NAME = new URLSearchParams(location.search).get('productName') || null;
+if(PRODUCT_NAME){
+  document.getElementById('productTitle').textContent = PRODUCT_NAME;
+  document.title = PRODUCT_NAME + ' — AI Product Studio';
+}
 const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID : PIPELINE_CONFIG_STORAGE;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(pipeline.map(sanitize)));
@@ -460,6 +488,74 @@ function loadPipelineConfig(){
 
 let pipeline = loadPipelineConfig() || defaultPipeline();
 let ctx = {};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ХРАНИЛИЩЕ ВХОДЯЩИХ ДАННЫХ (AI Product Studio v2 follow-up)
+//  Документы (чек-лист, карточка объекта и т.п.) -- загружаются и хранятся
+//  в localStorage этого браузера per-product (тот же ключ, что и у React-
+//  версии этой панели, src/shared/lib/input-file-storage.ts, для полной
+//  консистентности), доступны любому промту как {{ctx.stored_files}}.
+// ═══════════════════════════════════════════════════════════════════════════
+const INPUT_FILES_STORAGE = 'aiProductStudio.inputFiles.'+(PRODUCT_ID||'standalone');
+const MAX_INPUT_FILE_BYTES = 2*1024*1024;
+const INPUT_FILE_EXTENSIONS = ['txt','docx','pdf','jpg','jpeg','png','svg'];
+const TEXT_EXTRACTABLE_EXTENSIONS = ['txt','svg'];
+
+function loadInputFiles(){
+  try{ const raw=localStorage.getItem(INPUT_FILES_STORAGE); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch(e){ return []; }
+}
+function saveInputFiles(){ localStorage.setItem(INPUT_FILES_STORAGE, JSON.stringify(inputFiles)); }
+let inputFiles = loadInputFiles();
+
+function detectInputFileFormat(name){
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  return INPUT_FILE_EXTENSIONS.includes(ext) ? ext : null;
+}
+function readFileAsText(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result)); r.onerror=()=>rej(r.error||new Error('read error')); r.readAsText(file); }); }
+function readFileAsDataUrl(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result)); r.onerror=()=>rej(r.error||new Error('read error')); r.readAsDataURL(file); }); }
+
+async function handleInputFileUpload(fileList){
+  for(const file of fileList){
+    const format=detectInputFileFormat(file.name);
+    if(!format){ toast('Неподдерживаемый формат: '+file.name); continue; }
+    if(file.size>MAX_INPUT_FILE_BYTES){ toast('Файл «'+file.name+'» больше 2 МБ'); continue; }
+    const textExtractable = TEXT_EXTRACTABLE_EXTENSIONS.includes(format);
+    try{
+      const content = textExtractable ? await readFileAsText(file) : await readFileAsDataUrl(file);
+      inputFiles.push({id:'file_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), name:file.name, format, sizeBytes:file.size, content, textExtractable, uploadedAt:new Date().toISOString()});
+    }catch(e){ toast('Не удалось прочитать файл: '+file.name); }
+  }
+  saveInputFiles();
+  renderInputFiles();
+}
+
+// Что реально передаётся пайплайну: для .txt/.svg -- реальный текст
+// содержимого; для .docx/.pdf/.jpg/.png -- честно без content (в этом
+// MVP нет OCR/парсера), только имя и формат, чтобы промт мог сослаться
+// на приложенный файл, не выдумывая его содержимое.
+function storedFilesForCtx(){
+  return inputFiles.map(f=>({name:f.name, format:f.format, textExtractable:f.textExtractable, content: f.textExtractable? f.content : undefined}));
+}
+
+function renderInputFiles(){
+  const el=document.getElementById('inputFilesList');
+  if(!inputFiles.length){ el.innerHTML='<div class="hintbar" style="margin:0">Файлы не загружены.</div>'; return; }
+  el.innerHTML = inputFiles.map(f=>
+    '<div class="row" style="justify-content:space-between;padding:6px 0;border-top:1px solid var(--line)">'
+    +'<span style="font-size:12px;color:var(--ink)">'+escapeHtml(f.name)+' <span style="color:var(--dim)">· .'+f.format+(f.textExtractable?'':' · содержимое не распознаётся')+'</span></span>'
+    +'<button class="btn ghost sm" data-remove-file="'+f.id+'">Удалить</button>'
+    +'</div>'
+  ).join('');
+  el.querySelectorAll('[data-remove-file]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      inputFiles = inputFiles.filter(f=>f.id!==btn.getAttribute('data-remove-file'));
+      saveInputFiles();
+      renderInputFiles();
+    });
+  });
+}
+document.getElementById('inputFile').addEventListener('change', (e)=>{ handleInputFileUpload([...e.target.files]); e.target.value=''; });
+renderInputFiles();
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  ДЕТЕРМИНИРОВАННЫЕ ФУНКЦИИ (сервисы и код-шаги)
@@ -789,7 +885,7 @@ async function runPipeline(){
   if(needsAnthropic && !loadApiKey()){ toast('Задайте API-ключ Anthropic вверху страницы (нужен для шагов с Claude)'); return; }
   if(needsOpenai && !loadOpenaiKey()){ toast('Задайте API-ключ OpenAI вверху страницы (нужен для шагов с GPT-5 mini)'); return; }
 
-  ctx={ __transcript:transcript };
+  ctx={ __transcript:transcript, stored_files: storedFilesForCtx() };
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
   let totalTokens=0, totalCost=0, errorCount=0, warningCount=0;
@@ -1116,6 +1212,13 @@ document.getElementById('sampleBtn').addEventListener('click',()=>{
 // ── карточка API-ключей: сворачивается по клику, по умолчанию закрыта ──────
 document.getElementById('apiKeysToggle').addEventListener('click',()=>{
   document.getElementById('apiKeysCard').classList.toggle('open');
+});
+
+// ── карточка «Пайплайн»: сворачивается по клику, по умолчанию закрыта ──────
+// (AI Product Studio v2 follow-up: consistent with "Этапы пайплайна" being
+// collapsed by default in every product's Playground.)
+document.getElementById('pipelineToggle').addEventListener('click',()=>{
+  document.getElementById('pipelineCard').classList.toggle('open');
 });
 
 // ── ключ API: wiring ──────────────────────────────────────────────────────

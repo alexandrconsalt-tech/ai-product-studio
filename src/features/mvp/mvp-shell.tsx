@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AppShell, Header, Inspector, NavigationItem, Sidebar, Workspace, Button, IconButton, Badge, Breadcrumb, AIRecommendation } from "@/shared/ui";
+import { AppShell, Header, NavigationItem, Sidebar, Workspace, IconButton, Badge, Breadcrumb } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { getProjectBundle } from "./selectors";
@@ -86,7 +86,7 @@ export function MvpShell() {
   // whole visible app now.
   const view: MvpView = isMvpView(requestedView) ? requestedView : "product";
   const { snapshot, selectedProjectId, load } = useRepositoryStore();
-  const { theme, setTheme, sidebarCollapsed, toggleSidebar, assistantOpen, toggleAssistant } = useUiStore();
+  const { theme, setTheme, sidebarCollapsed, toggleSidebar } = useUiStore();
 
   React.useEffect(() => {
     load();
@@ -139,7 +139,6 @@ export function MvpShell() {
           <IconButton aria-label="Переключить тему" variant="ghost" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Sun className="size-4" aria-hidden="true" /> : <Moon className="size-4" aria-hidden="true" />}
           </IconButton>
-          <Button variant="secondary" onClick={toggleAssistant}>Панель ИИ</Button>
         </Header>
         <div className="flex min-h-0 flex-1">
           <Workspace>
@@ -155,16 +154,6 @@ export function MvpShell() {
             {view === "dashboard" ? <DashboardScreen /> : null}
             {view === "settings" ? <SettingsScreen /> : null}
           </Workspace>
-          {assistantOpen ? (
-            <Inspector className="p-4">
-              <AIRecommendation>
-                <p className="mb-2 text-sm font-medium">ИИ-ассистент</p>
-                <p className="text-sm text-text-muted">
-                  Текущий контекст: {viewTitles[view]}. Следующий шаг определяется правилами Orchestrator и текущими артефактами продукта.
-                </p>
-              </AIRecommendation>
-            </Inspector>
-          ) : null}
         </div>
       </div>
     </AppShell>

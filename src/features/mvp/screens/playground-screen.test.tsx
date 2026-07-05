@@ -17,12 +17,15 @@ describe("PlaygroundScreen", () => {
     useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: firstProject.id });
     render(<PlaygroundScreen />);
 
-    expect(screen.getByText(firstProject.name)).toBeInTheDocument();
-    expect(screen.getByText(secondProject.name)).toBeInTheDocument();
+    const picker = screen.getByRole("combobox", { name: "Выбрать продукт" }) as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: firstProject.name })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: secondProject.name })).toBeInTheDocument();
     const iframe = screen.getByTitle("Pipeline Lab v3") as HTMLIFrameElement;
-    expect(iframe.src).toContain(`productId=${encodeURIComponent(firstProject.id)}`);
+    const iframeUrl = new URL(iframe.src);
+    expect(iframeUrl.searchParams.get("productId")).toBe(firstProject.id);
+    expect(iframeUrl.searchParams.get("productName")).toBe(firstProject.name);
 
-    fireEvent.click(screen.getByText(secondProject.name));
+    fireEvent.change(picker, { target: { value: secondProject.id } });
     expect(useRepositoryStore.getState().selectedProjectId).toBe(secondProject.id);
   });
 

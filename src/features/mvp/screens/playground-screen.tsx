@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, FlaskConical, Layers, Play, XCircle } from "lucide-react";
-import { Badge, Button, Card, Dialog, EmptyState, NodeCard, Page, Search, Section, Status, Textarea } from "@/shared/ui";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Layers, Play, XCircle } from "lucide-react";
+import { Badge, Button, Card, Dialog, EmptyState, NodeCard, Page, Section, Select, Status, Textarea } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
 import { useExecutionTraceStore } from "@/shared/stores/execution-trace-store";
@@ -130,34 +130,40 @@ function StageDetailDialog({ node, model, stage, onClose }: Readonly<{ node: Nod
 // primitive rather than inventing a new stage-card component.
 function PipelineStagesSection({ pipeline, models, trace }: Readonly<{ pipeline: Pipeline; models: readonly Model[]; trace: ExecutionTrace | undefined }>) {
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
+  const [expanded, setExpanded] = React.useState(false);
   const selectedNode = pipeline.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedStage = trace?.stages.find((stage) => stage.nodeId === selectedNodeId);
 
   return (
     <Section>
-      <div className="flex items-center gap-2">
+      <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setExpanded((value) => !value)}>
+        {expanded ? <ChevronDown className="size-4 shrink-0 text-text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-text-muted" aria-hidden="true" />}
         <Layers className="size-4 text-text-muted" aria-hidden="true" />
         <h2 className="text-lg font-semibold">Этапы пайплайна</h2>
         <Badge tone="info">{pipeline.nodes.length}</Badge>
-      </div>
-      <p className="text-sm text-text-muted">Нажмите на этап, чтобы увидеть описание, тип, модель, вход, выход, prompt, JSON Schema и статус последнего запуска.</p>
-      <div className="flex flex-wrap gap-3">
-        {pipeline.nodes.map((node) => {
-          const stage = trace?.stages.find((item) => item.nodeId === node.id);
-          const model = models.find((item) => item.id === node.modelId);
-          return (
-            <NodeCard key={node.id} selected={selectedNodeId === node.id} className="w-56 cursor-pointer" onClick={() => setSelectedNodeId(node.id)}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <Badge tone="neutral">{NODE_TYPE_LABELS[node.type]}</Badge>
-                {stage ? <Badge tone={stageStatusTone(stage.status)}>{STAGE_STATUS_LABELS[stage.status]}</Badge> : null}
-              </div>
-              <p className="text-sm font-medium">{node.name}</p>
-              <p className="mt-1 line-clamp-2 text-xs text-text-muted">{node.description}</p>
-              {model ? <p className="mt-2 text-xs text-text-muted">Модель: {model.name}</p> : null}
-            </NodeCard>
-          );
-        })}
-      </div>
+      </button>
+      {expanded ? (
+        <>
+          <p className="text-sm text-text-muted">Нажмите на этап, чтобы увидеть описание, тип, модель, вход, выход, prompt, JSON Schema и статус последнего запуска.</p>
+          <div className="flex flex-wrap gap-3">
+            {pipeline.nodes.map((node) => {
+              const stage = trace?.stages.find((item) => item.nodeId === node.id);
+              const model = models.find((item) => item.id === node.modelId);
+              return (
+                <NodeCard key={node.id} selected={selectedNodeId === node.id} className="w-56 cursor-pointer" onClick={() => setSelectedNodeId(node.id)}>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <Badge tone="neutral">{NODE_TYPE_LABELS[node.type]}</Badge>
+                    {stage ? <Badge tone={stageStatusTone(stage.status)}>{STAGE_STATUS_LABELS[stage.status]}</Badge> : null}
+                  </div>
+                  <p className="text-sm font-medium">{node.name}</p>
+                  <p className="mt-1 line-clamp-2 text-xs text-text-muted">{node.description}</p>
+                  {model ? <p className="mt-2 text-xs text-text-muted">Модель: {model.name}</p> : null}
+                </NodeCard>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
       {selectedNode ? <StageDetailDialog node={selectedNode} model={models.find((item) => item.id === selectedNode.modelId)} stage={selectedStage} onClose={() => setSelectedNodeId(null)} /> : null}
     </Section>
   );
@@ -178,7 +184,6 @@ export function PlaygroundScreen() {
   const { snapshot, selectedProjectId, selectProject } = useRepositoryStore();
   const { recordRun } = usePlaygroundTestRunStore();
   const { recordTrace, getTrace } = useExecutionTraceStore();
-  const [query, setQuery] = React.useState("");
   const [runInput, setRunInput] = React.useState("");
   const [executing, setExecuting] = React.useState(false);
   const [lastRunId, setLastRunId] = React.useState<string | null>(null);
@@ -186,7 +191,6 @@ export function PlaygroundScreen() {
 
   const projects = snapshot?.projects ?? [];
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
-  const filtered = projects.filter((project) => `${project.name} ${project.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const { pipeline } = getProjectBundle(snapshot, selectedProjectId);
   const models = snapshot?.models ?? [];
   const lastTrace = pipeline && lastRunId ? buildExecutionTrace(pipeline, getTrace(lastRunId) ?? []) : undefined;
@@ -311,27 +315,24 @@ export function PlaygroundScreen() {
 
       <Section>
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">Продукты</h2>
+          <h2 className="text-lg font-semibold">Продукт</h2>
           <Status tone="info">{projects.length}</Status>
         </div>
-        <Search value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск продукта" aria-label="Поиск продукта" />
-        {filtered.length === 0 ? (
+        {projects.length === 0 ? (
           <EmptyState>Продукты не найдены. Создайте продукт в разделе «Продукт».</EmptyState>
         ) : (
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-            {filtered.map((project) => (
-              <Card key={project.id} className={project.id === selectedProjectId ? "border-focus" : undefined}>
-                <button type="button" className="w-full text-left" onClick={() => selectProject(project.id)}>
-                  <p className="truncate text-sm font-medium">{project.name}</p>
-                  <p className="mt-1 truncate text-xs text-text-muted">{project.description}</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Badge tone={project.id === selectedProjectId ? "info" : "neutral"}>{project.status}</Badge>
-                  </div>
-                </button>
-              </Card>
-            ))}
-          </div>
+          <label className="grid max-w-md gap-1 text-sm">
+            Выберите продукт
+            <Select value={selectedProjectId ?? ""} onChange={(event) => selectProject(event.target.value)} aria-label="Выбрать продукт">
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </Select>
+          </label>
         )}
+        {selectedProject ? <p className="text-sm text-text-muted">{selectedProject.description}</p> : null}
       </Section>
 
       {!selectedProject ? (
@@ -342,11 +343,9 @@ export function PlaygroundScreen() {
         <Section>
           <div className="flex items-center gap-2">
             <Layers className="size-4 text-text-muted" aria-hidden="true" />
-            <h2 className="text-lg font-semibold">Тестовый стенд: {selectedProject.name}</h2>
+            <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
           </div>
-          <p className="text-sm text-text-muted">
-            Полноценный прогон 10-этапного пайплайна с реальными вызовами модели (ключ из «Настройки») и реальной детерминированной логикой — как в Pipeline Lab v3, но по конфигурации этого продукта.
-          </p>
+          <p className="text-sm text-text-muted">Загрузите входные данные и нажмите «Прогнать пайплайн». Каждый этап реально выполняется — с реальными вызовами модели (ключ из «Настройки») и реальной детерминированной логикой.</p>
           <AdCopyTestBenchPanel productId={selectedProject.id} onRunComplete={handleAdCopyRunComplete} />
         </Section>
       ) : (
@@ -382,11 +381,11 @@ export function PlaygroundScreen() {
 
           <Section className="flex min-h-0 flex-1 flex-col gap-2">
             <div className="flex items-center gap-2">
-              <FlaskConical className="size-4 text-text-muted" aria-hidden="true" />
-              <h2 className="text-lg font-semibold">Pipeline Lab v3 — {selectedProject.name}</h2>
+              <Layers className="size-4 text-text-muted" aria-hidden="true" />
+              <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
             </div>
             <Card className="h-[75vh] min-h-[560px] overflow-hidden p-0">
-              <PipelineLabV3Screen productId={selectedProject.id} onRunComplete={handleRunComplete} />
+              <PipelineLabV3Screen productId={selectedProject.id} productName={selectedProject.name} onRunComplete={handleRunComplete} />
             </Card>
           </Section>
         </>

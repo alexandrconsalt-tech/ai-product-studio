@@ -23,6 +23,7 @@
 
 import { AdCopyCrmInputSchema, type AdCopyCrmInput } from "@/shared/model/ad-copy-crm-input";
 import { callModelByName, MODEL_VENDOR, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
+import type { StoredFileContext } from "@/shared/lib/input-file-storage";
 
 export type AdCopyStageType = "svc" | "llm" | "check" | "code" | "store";
 
@@ -385,10 +386,11 @@ export async function runAdCopyPipeline(
   stages: readonly AdCopyStageConfig[],
   rawInput: string,
   onUpdate: (reports: Readonly<Record<string, AdCopyStageReport>>) => void,
+  storedFiles: readonly StoredFileContext[] = [],
 ): Promise<AdCopyPipelineResult> {
   const startAll = Date.now();
   let reports: Record<string, AdCopyStageReport> = Object.fromEntries(stages.map((stage) => [stage.id, { stageId: stage.id, status: "idle" as const }]));
-  const ctx: Record<string, unknown> = {};
+  const ctx: Record<string, unknown> = { stored_files: storedFiles };
   let totalTokens = 0;
   let totalCostUsd = 0;
   let lastModelUsed = "";
