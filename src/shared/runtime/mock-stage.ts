@@ -51,8 +51,28 @@ async function mockHumanReview({ node, payload }: StageInput): Promise<StageOutp
   return { payload: { ...asRecord(payload), reviewed: true, reviewedBy: "mock", reviewNodeId: node.id } };
 }
 
+/**
+ * Merges a fan-in array payload's object fields into one flat record
+ * (mirrors real-stage.ts's `asRecord`, kept separate rather than
+ * shared since each module's `asRecord` intentionally has different
+ * behavior for the non-store handlers here). A `store` node's whole
+ * purpose is to hold merged context for downstream stages -- the
+ * default `asRecord` above wraps an array wholesale in `{value:[...]}}`,
+ * which would leave a store fed by more than one incoming edge unable
+ * to actually merge its sources.
+ */
+function mergeForStore(payload: unknown): Record<string, unknown> {
+  if (Array.isArray(payload)) {
+    return payload.reduce<Record<string, unknown>>((merged, item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) return { ...merged, ...item };
+      return merged;
+    }, {});
+  }
+  return asRecord(payload);
+}
+
 async function mockStore({ node, payload }: StageInput): Promise<StageOutput> {
-  return { payload: { ...asRecord(payload), stored: true, storeNodeId: node.id } };
+  return { payload: { ...mergeForStore(payload), stored: true, storeNodeId: node.id } };
 }
 
 export const mockStageHandlers: Readonly<Record<NodeType, StageHandler>> = {

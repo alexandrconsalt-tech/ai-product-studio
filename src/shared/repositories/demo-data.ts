@@ -10,6 +10,7 @@ import type { Project } from "@/entities/Project/model/types";
 import type { Prompt } from "@/entities/Prompt/model/types";
 import type { Review } from "@/entities/Review/model/types";
 import type { Run } from "@/entities/Run/model/types";
+import { AD_COPY_CRM_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
 import type { RepositorySnapshot } from "./types";
 
 const createdAt = "2026-06-29T10:00:00.000Z";
@@ -135,6 +136,34 @@ const prompts: Prompt[] = [
     name: "Check Agent (Pipeline Lab v3, cross-vendor)",
     purpose: "evaluation",
     description: "Независимая (другой вендор) проверка саммари на галлюцинации и утечку PII относительно данных хранилища и транскрипции.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  // ── "Генерация текстов объявлений" (Ad Copy Generation) demo pipeline ──
+  {
+    id: "prompt_ad_benefits",
+    name: "Benefit Extraction Agent (Генерация текстов объявлений)",
+    purpose: "extraction",
+    description: "Определяет преимущества объекта недвижимости, УТП, сильные стороны, целевую аудиторию, продающие тезисы и стиль объявления по данным CRM.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_ad_generation",
+    name: "Ad Generation Agent (Генерация текстов объявлений)",
+    purpose: "generation",
+    description: "Генерирует Title/Description/CTA продающего объявления на основе данных объекта, преимуществ и правил компании.",
+    status: "ready",
+    ownerModuleId: "knowledge_architect",
+    version: "1.0.0",
+  },
+  {
+    id: "prompt_ad_checker",
+    name: "Self-Check Agent (Генерация текстов объявлений)",
+    purpose: "review",
+    description: "Самопроверка готового объявления: факты, стиль, русский язык, запрещённые слова, читаемость, SEO, повторы -- с исправлением найденных ошибок.",
     status: "ready",
     ownerModuleId: "knowledge_architect",
     version: "1.0.0",
@@ -590,6 +619,368 @@ const pipelinePipelineLab: Pipeline = {
   version: "1.0.0",
 };
 
+/**
+ * Fifth demo product -- "Генерация текстов объявлений" (Ad Copy
+ * Generation for real-estate listings). Added 2026-07-05 to
+ * demonstrate a full Product -> Architecture -> Pipeline -> Playground
+ * -> Dashboard cycle end to end for a genuinely new AI feature, not
+ * just the call-analysis reference case (CLAUDE.md §3.4 still prefers
+ * the call-analysis case as the *primary* reference; this is an
+ * additional, independent demo, not a replacement for it).
+ *
+ * Node types follow the exact same mapping precedent already
+ * established by `productLead`/`productChat` above: a single-call LLM
+ * step is `type: "llm"` (not `"agent"` -- CLAUDE.md §20.2 "Workflow
+ * before Agent", no genuinely dynamic planning happens here), and no
+ * node uses `type: "validation"` for the same reason `productLead`
+ * doesn't: `real-stage.ts`'s deterministic validation handler only
+ * recognizes `CallAnalysisSummarySchema`, so a `validation` node here
+ * would always show `validated: false` -- misleading rather than
+ * informative. The "Контур качества" stage is `type: "function"`
+ * instead (matches its own task-specified "Тип: Code" label exactly),
+ * and branches purely on the `confidence` field every `llm` stage
+ * already carries (`real-stage.ts`'s `confidenceFromTemperature`).
+ *
+ * "Quality Gate" retry policy (confidence >= 0.90 -> save, else retry
+ * up to 2 times) is documented on `node_ad_gate.metadata`, not executed
+ * as a graph cycle: `topology.ts`'s `topologicalOrder` explicitly
+ * throws `CyclicPipelineError` for a cyclic graph, and the task's own
+ * "Количество этапов — 9" requirement rules out adding a 10th
+ * human-review-style fallback node the way `pipeline` (call-analysis)
+ * does. This is stated plainly rather than silently pretending a loop
+ * is being executed.
+ */
+const productAdCopy: Product = {
+  id: "product_ad_copy_generation",
+  projectId: "project_ad_copy_generation",
+  status: "ready",
+  idea: {
+    statement: "AI автоматически создаёт продающее объявление объекта недвижимости на основе структурированных данных CRM — без ручного написания текста агентом.",
+    source: "Product Discovery",
+  },
+  discovery:
+    "Агенты недвижимости вручную пишут объявления по каждому объекту. Наблюдения: объявления сильно отличаются по качеству между агентами, отсутствует единый стиль компании, тексты часто неполные и не отражают все преимущества объекта, встречаются ошибки русского языка, подготовка занимает много времени и требует большого объёма ручной работы контент-менеджеров.",
+  problem: {
+    statement:
+      "Агенты недвижимости вручную пишут объявления: качество текстов сильно различается, нет единого стиля компании, объявления часто неполные и теряют преимущества объекта, встречаются ошибки языка, скорость подготовки низкая, а объём ручной работы велик.",
+    evidenceIds: [],
+  },
+  users: [
+    { id: "user_ad_realtor", name: "Агент недвижимости", segment: "Продажи" },
+    { id: "user_ad_sales_lead", name: "Руководитель отдела продаж", segment: "Управление продажами" },
+    { id: "user_ad_content_manager", name: "Контент-менеджер", segment: "Контент и публикации" },
+    { id: "user_ad_marketer", name: "Маркетолог", segment: "Маркетинг" },
+  ],
+  jtbd: [
+    {
+      statement: "Когда у меня появился новый объект в CRM, я хочу автоматически получить готовое продающее объявление, чтобы не тратить время на ручное написание текста.",
+      context: "После добавления объекта в CRM",
+      desiredOutcome: "Объявление готово к публикации за секунды, без потери преимуществ объекта",
+    },
+    {
+      statement: "Когда я руковожу отделом продаж, я хочу, чтобы все объявления соответствовали единому стилю компании, чтобы бренд выглядел профессионально на всех площадках.",
+      context: "Контроль качества публикаций",
+      desiredOutcome: "Единый узнаваемый стиль объявлений во всей компании",
+    },
+  ],
+  features: [
+    { id: "feature_ad_validation", name: "Валидация CRM-данных", description: "Проверка обязательных полей, типов и диапазонов перед генерацией.", priority: "high" },
+    { id: "feature_ad_benefits", name: "Извлечение преимуществ", description: "Автоматическое определение УТП, сильных сторон и целевой аудитории объекта.", priority: "high" },
+    { id: "feature_ad_generation", name: "Генерация объявления", description: "Формирование заголовка, описания и CTA на основе данных и преимуществ.", priority: "high" },
+    { id: "feature_ad_selfcheck", name: "Самопроверка качества", description: "LLM Checker проверяет факты, стиль, язык, SEO и запреты перед сохранением.", priority: "high" },
+    { id: "feature_ad_quality_gate", name: "Quality Gate", description: "Confidence-based решение: сохранить результат или запросить повторную генерацию (до 2 попыток).", priority: "medium" },
+  ],
+  mvp:
+    "Приём CRM JSON одного объекта, валидация и нормализация данных, извлечение преимуществ, генерация Title/Description/CTA, самопроверка качества, confidence-based Quality Gate, сохранение результата с метаданными (модель, версия промпта, дата).",
+  mvpOut:
+    "Массовая пакетная генерация по всей базе объектов, поддержка нескольких языков, A/B-тестирование вариантов объявлений, автоматическая публикация на внешние площадки (Avito, Циан) без участия контент-менеджера, генерация изображений/визуального контента.",
+  metrics: [
+    { name: "Среднее время генерации", target: "< 8 сек на объявление", category: "speed" },
+    { name: "Стоимость генерации", target: "< $0.05 за объявление", category: "cost" },
+    { name: "Средний Confidence", target: ">= 0.90", category: "quality" },
+    { name: "Количество Retry", target: "<= 2 на объявление", category: "quality" },
+    { name: "Доля успешных генераций", target: ">= 95%", category: "success" },
+    { name: "Средняя длина объявления", target: "400-700 символов", category: "quality" },
+    { name: "Процент прохождения Quality Gate", target: ">= 90% с первой попытки", category: "success" },
+    { name: "Стоимость: Code (детерминированные этапы)", target: "$0 (без вызовов модели)", category: "cost" },
+    { name: "Стоимость: LLM (3 вызова GPT-5 mini)", target: "≈ $0.02–0.04 за объявление", category: "cost" },
+    { name: "Стоимость: Storage", target: "$0 (in-memory контекст, без внешнего хранилища)", category: "cost" },
+    { name: "Стоимость: Service (сохранение в CRM)", target: "$0 (внутренний вызов)", category: "cost" },
+    { name: "Итоговая стоимость на объявление", target: "≈ $0.02–0.05", category: "cost" },
+  ],
+  prd:
+    "Продукт принимает структурированный CRM JSON одного объекта недвижимости и возвращает готовое продающее объявление (заголовок, описание, CTA) с оценкой уверенности (Confidence Score). Пайплайн включает валидацию входных данных, нормализацию, извлечение преимуществ через LLM, единое хранилище контекста, генерацию текста, самопроверку качества и confidence-based Quality Gate перед сохранением результата в CRM.",
+  frameworkIds: ["framework_jtbd", "framework_prd"],
+  valueProposition:
+    "Сократить время создания объявления с часов до секунд, повысить и стандартизировать качество текста по единому стилю компании и увеличить конверсию просмотров за счёт более продающих и полных описаний.",
+  targetAudience: "Агентства недвижимости и отделы продаж, ведущие объекты в CRM и публикующие объявления на нескольких площадках.",
+  userStory:
+    "Как агент недвижимости, я хочу, чтобы после заполнения карточки объекта в CRM AI автоматически подготовил продающее объявление, чтобы я мог сразу опубликовать его без ручного написания текста.",
+  mainScenario:
+    "Агент заполняет карточку объекта в CRM (тип сделки, адрес, площадь, цена, особенности и т.д.) и запускает генерацию. Pipeline проверяет и нормализует данные, извлекает преимущества объекта, формирует заголовок/описание/CTA, проверяет качество текста и, если уверенность модели достаточна, сохраняет объявление вместе с метаданными (модель, версия промпта, дата генерации) обратно в CRM для публикации.",
+  assumptions:
+    "CRM предоставляет структурированные данные объекта в формате JSON. Компания имеет единые правила стиля и запрещённые формулировки, которые можно закодировать в промптах. GPT-5 mini достаточно для извлечения преимуществ, генерации и самопроверки без потери качества.",
+  aiModels: "GPT-5 mini используется на трёх LLM-этапах: извлечение преимуществ, генерация объявления и самопроверка (LLM Checker).",
+  aiAgents: "Агент извлечения преимуществ (Benefit Extraction Agent), агент генерации объявления (Ad Generation Agent), агент самопроверки (Self-Check Agent / LLM Checker).",
+  aiPipelineNotes:
+    "9-этапный pipeline: (1) валидация входных данных, (2) подготовка структуры объекта, (3) агент извлечения преимуществ (LLM), (4) единое хранилище, (5) генерация объявления (LLM), (6) проверка объявления (LLM Checker), (7) контур качества (код), (8) Quality Gate (confidence >= 90, до 2 retry), (9) сохранение.",
+  acceptanceCriteria:
+    "Объявление содержит заголовок, описание и CTA, основанные только на реальных данных объекта. Confidence Score рассчитан и отображается. При confidence >= 90% результат сохраняется автоматически; при более низком — предусмотрена повторная попытка (до 2 раз). Объявление не содержит запрещённых слов, ошибок русского языка и повторов. Все этапы пайплайна видны и кликабельны в Playground.",
+  roadmap:
+    "Этап 1 (MVP): одиночная генерация по одному объекту с ручным запуском в Playground. Этап 2: пакетная генерация по всей базе объектов CRM. Этап 3: A/B-тестирование вариантов объявлений и автоматический выбор лучшего по конверсии. Этап 4: прямая публикация на внешние площадки (Avito, Циан, Домклик).",
+  notes:
+    "Категория: AI Product · Статус: MVP. Демонстрационный продукт AI Product Studio, показывающий полный цикл разработки AI-функции: Product -> Architecture -> Pipeline -> Playground -> Dashboard.",
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const architectureAdCopy: Architecture = {
+  id: "architecture_ad_copy_generation",
+  projectId: "project_ad_copy_generation",
+  productId: "product_ad_copy_generation",
+  status: "ready",
+  capabilities: [
+    { id: "cap_ad_ingest", name: "CRM Data Ingestion", description: "Приём структурированных данных объекта из CRM (JSON).", required: true },
+    { id: "cap_ad_validate", name: "Input Validation", description: "Проверка обязательных полей, типов и диапазонов входных данных.", required: true },
+    { id: "cap_ad_benefits", name: "Benefit Extraction", description: "Определение преимуществ, УТП и целевой аудитории объекта.", required: true },
+    { id: "cap_ad_generation", name: "Ad Copy Generation", description: "Генерация заголовка, описания и CTA объявления.", required: true },
+    { id: "cap_ad_quality", name: "Quality Gate", description: "Самопроверка и confidence-based решение о сохранении или retry.", required: true },
+  ],
+  aiComponents: [
+    { id: "component_ad_benefits_llm", name: "Benefit Extraction Agent", type: "llm", description: "GPT-5 mini формирует преимущества, УТП и целевую аудиторию объекта." },
+    { id: "component_ad_generation_llm", name: "Ad Generation Agent", type: "llm", description: "GPT-5 mini генерирует Title/Description/CTA объявления." },
+    { id: "component_ad_checker_llm", name: "Self-Check Agent", type: "llm", description: "GPT-5 mini проверяет факты, стиль, язык и SEO готового объявления." },
+    { id: "component_ad_quality_gate", name: "Quality Gate", type: "rules_engine", description: "Детерминированная логика: confidence >= 90 -> сохранить, иначе retry (до 2 попыток)." },
+  ],
+  modelIds: ["model_gpt5_mini"],
+  dataFlow: [
+    { id: "flow_ad_1", source: "CRM", target: "Validation", dataType: "crm_json" },
+    { id: "flow_ad_2", source: "Validation", target: "Normalization", dataType: "validated_json" },
+    { id: "flow_ad_3", source: "Normalization", target: "LLM Analysis", dataType: "normalized_json" },
+    { id: "flow_ad_4", source: "LLM Analysis", target: "Storage", dataType: "benefits_json" },
+    { id: "flow_ad_5", source: "Storage", target: "Generation", dataType: "stored_context" },
+    { id: "flow_ad_6", source: "Generation", target: "Checker", dataType: "ad_draft_json" },
+    { id: "flow_ad_7", source: "Checker", target: "Quality", dataType: "checked_ad_json" },
+    { id: "flow_ad_8", source: "Quality", target: "CRM", dataType: "final_ad_json" },
+  ],
+  quality: [
+    { name: "Confidence threshold", threshold: ">= 0.90" },
+    { name: "Retry limit", threshold: "<= 2" },
+    { name: "Required fields completeness", threshold: "100%" },
+  ],
+  evaluation: [
+    { metric: "Ad quality score", method: "LLM self-check + human sampling", threshold: ">= 90" },
+    { metric: "Generation latency", method: "Pipeline Run metrics", threshold: "< 8000ms" },
+    { metric: "Cost per ad", method: "Token estimate", threshold: "< $0.05" },
+  ],
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
+const CRM_INPUT_JSON_SCHEMA_TEXT = `{
+  "deal_type": "sale" | "rent",
+  "object_type": "string",
+  "city": "string",
+  "district": "string?",
+  "street": "string?",
+  "rooms": "number",
+  "area": "number",
+  "floor": "number?",
+  "total_floors": "number?",
+  "price": "number",
+  "description": "string?",
+  "features": "string[]?",
+  "renovation": "string?",
+  "balcony": "boolean?",
+  "bathroom": "string?",
+  "view": "string?",
+  "infrastructure": "string[]?",
+  "parking": "string?",
+  "mortgage": "boolean?",
+  "directories": "Record<string,string>?",
+  "generation_settings": "{tone?, length?, platform?}?"
+}`;
+
+const BENEFITS_JSON_SCHEMA_TEXT = `{
+  "advantages": "string[]",
+  "usp": "string",
+  "strengths": "string[]",
+  "target_audience": "string",
+  "selling_points": "string[]",
+  "style": "string"
+}`;
+
+const AD_OUTPUT_JSON_SCHEMA_TEXT = `{
+  "title": "string",
+  "description": "string",
+  "cta": "string",
+  "confidence": "number (0-1, добавляется автоматически)"
+}`;
+
+const QUALITY_CHECK_JSON_SCHEMA_TEXT = `{
+  "facts_ok": "boolean",
+  "style_ok": "boolean",
+  "language_ok": "boolean",
+  "prohibited_words_ok": "boolean",
+  "readability_score": "number (0-100)",
+  "seo_ok": "boolean",
+  "duplicates_ok": "boolean",
+  "title": "string",
+  "description": "string",
+  "cta": "string",
+  "issues": "string[]",
+  "confidence": "number (0-1, добавляется автоматически)"
+}`;
+
+const nodesAdCopy: Node[] = [
+  {
+    id: "node_ad_validate",
+    type: "function",
+    name: "Валидация входных данных",
+    description: "Проверка обязательных полей CRM JSON, типов, диапазонов и пустых значений перед дальнейшей обработкой.",
+    inputPorts: [],
+    outputPorts: [{ id: "port_ad_validate_out", name: "validated_json" }],
+    tools: [],
+    metadata: { stage: "ingest", checks: "required_fields,types,ranges,empty_values", jsonSchema: CRM_INPUT_JSON_SCHEMA_TEXT },
+    position: { x: 0, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_normalize",
+    type: "function",
+    name: "Подготовка структуры объекта",
+    description: "Нормализация CRM-данных: очистка текста, удаление HTML, объединение полей, стандартизация структуры объекта недвижимости.",
+    inputPorts: [{ id: "port_ad_normalize_in", name: "validated_json" }],
+    outputPorts: [{ id: "port_ad_normalize_out", name: "normalized_json" }],
+    tools: [],
+    metadata: { checks: "html_strip,text_clean,field_merge,structure_standardization" },
+    position: { x: 260, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_benefits",
+    type: "llm",
+    name: "Агент извлечения преимуществ",
+    description: "Определяет преимущества объекта, УТП, сильные стороны, целевую аудиторию, продающие тезисы и стиль объявления.",
+    inputPorts: [{ id: "port_ad_benefits_in", name: "normalized_json" }],
+    outputPorts: [{ id: "port_ad_benefits_out", name: "benefits_json" }],
+    modelId: "model_gpt5_mini",
+    promptId: "prompt_ad_benefits",
+    temperature: 0.4,
+    tools: [],
+    metadata: { output: "structured", jsonSchema: BENEFITS_JSON_SCHEMA_TEXT },
+    position: { x: 520, y: 60 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_storage",
+    type: "store",
+    name: "Единое хранилище",
+    description: "Сохраняет структурированные данные (нормализованный объект + преимущества) для использования всеми последующими агентами.",
+    inputPorts: [{ id: "port_ad_storage_in", name: "context" }],
+    outputPorts: [{ id: "port_ad_storage_out", name: "stored_context" }],
+    tools: [],
+    metadata: { retention: "session" },
+    position: { x: 780, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_generate",
+    type: "llm",
+    name: "Генерация объявления",
+    description: "Создаёт Title, Description и CTA на основе CRM, справочников, структуры объекта, преимуществ и правил компании.",
+    inputPorts: [{ id: "port_ad_generate_in", name: "stored_context" }],
+    outputPorts: [{ id: "port_ad_generate_out", name: "ad_draft_json" }],
+    modelId: "model_gpt5_mini",
+    promptId: "prompt_ad_generation",
+    temperature: 0.5,
+    tools: [],
+    metadata: { output: "structured", jsonSchema: AD_OUTPUT_JSON_SCHEMA_TEXT },
+    position: { x: 1040, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_checker",
+    type: "llm",
+    name: "Проверка объявления",
+    description: "Самопроверка объявления: факты, стиль, русский язык, запреты, читаемость, SEO, повторы. Исправляет найденные ошибки.",
+    inputPorts: [{ id: "port_ad_checker_in", name: "ad_draft_json" }],
+    outputPorts: [{ id: "port_ad_checker_out", name: "checked_ad_json" }],
+    modelId: "model_gpt5_mini",
+    promptId: "prompt_ad_checker",
+    temperature: 0.2,
+    tools: [],
+    metadata: { output: "structured", jsonSchema: QUALITY_CHECK_JSON_SCHEMA_TEXT },
+    position: { x: 1300, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_quality",
+    type: "function",
+    name: "Контур качества",
+    description: "Проверка структуры, обязательных полей, требований площадок (длина, запрещённые символы) и расчёт итогового Confidence Score. Каждая проверка отображается отдельно (см. поля checked_ad_json).",
+    inputPorts: [{ id: "port_ad_quality_in", name: "checked_ad_json" }],
+    outputPorts: [{ id: "port_ad_quality_out", name: "quality_report_json" }],
+    tools: [],
+    metadata: { checks: "structure,required_fields,platform_requirements,confidence_score" },
+    position: { x: 1560, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_gate",
+    type: "router",
+    name: "Quality Gate",
+    description:
+      "Если confidence >= 90 — сохранить результат. Иначе — до 2 повторных попыток генерации (retry), затем сохранение с пометкой low-confidence. Граф этого MVP реализован как DAG (без циклов), поэтому retry-политика задокументирована в metadata, а не выполняется как цикл исполнения.",
+    inputPorts: [{ id: "port_ad_gate_in", name: "quality_report_json" }],
+    outputPorts: [{ id: "port_ad_gate_out", name: "gated_json" }],
+    tools: [],
+    metadata: { threshold: "0.90", maxRetries: "2", retryTarget: "node_ad_generate" },
+    position: { x: 1820, y: 160 },
+    version: "1.0.0",
+  },
+  {
+    id: "node_ad_save",
+    type: "output",
+    name: "Сохранение",
+    description: "Сохраняет объявление, CTA, Confidence, использованную модель, версию промпта и дату генерации.",
+    inputPorts: [{ id: "port_ad_save_in", name: "gated_json" }],
+    outputPorts: [],
+    tools: [],
+    metadata: { format: "json", fields: "ad,cta,confidence,model,promptVersion,generatedAt" },
+    position: { x: 2080, y: 160 },
+    version: "1.0.0",
+  },
+];
+
+const edgesAdCopy: Edge[] = [
+  { id: "edge_ad_validate_normalize", sourceNodeId: "node_ad_validate", targetNodeId: "node_ad_normalize", sourcePortId: "port_ad_validate_out", targetPortId: "port_ad_normalize_in", version: "1.0.0" },
+  { id: "edge_ad_normalize_benefits", sourceNodeId: "node_ad_normalize", targetNodeId: "node_ad_benefits", sourcePortId: "port_ad_normalize_out", targetPortId: "port_ad_benefits_in", version: "1.0.0" },
+  { id: "edge_ad_normalize_storage", sourceNodeId: "node_ad_normalize", targetNodeId: "node_ad_storage", sourcePortId: "port_ad_normalize_out", targetPortId: "port_ad_storage_in", version: "1.0.0" },
+  { id: "edge_ad_benefits_storage", sourceNodeId: "node_ad_benefits", targetNodeId: "node_ad_storage", sourcePortId: "port_ad_benefits_out", targetPortId: "port_ad_storage_in", version: "1.0.0" },
+  { id: "edge_ad_storage_generate", sourceNodeId: "node_ad_storage", targetNodeId: "node_ad_generate", sourcePortId: "port_ad_storage_out", targetPortId: "port_ad_generate_in", version: "1.0.0" },
+  { id: "edge_ad_storage_checker", sourceNodeId: "node_ad_storage", targetNodeId: "node_ad_checker", sourcePortId: "port_ad_storage_out", targetPortId: "port_ad_checker_in", version: "1.0.0" },
+  { id: "edge_ad_generate_checker", sourceNodeId: "node_ad_generate", targetNodeId: "node_ad_checker", sourcePortId: "port_ad_generate_out", targetPortId: "port_ad_checker_in", version: "1.0.0" },
+  { id: "edge_ad_checker_quality", sourceNodeId: "node_ad_checker", targetNodeId: "node_ad_quality", sourcePortId: "port_ad_checker_out", targetPortId: "port_ad_quality_in", version: "1.0.0" },
+  { id: "edge_ad_quality_gate", sourceNodeId: "node_ad_quality", targetNodeId: "node_ad_gate", sourcePortId: "port_ad_quality_out", targetPortId: "port_ad_gate_in", version: "1.0.0" },
+  { id: "edge_ad_gate_save", sourceNodeId: "node_ad_gate", targetNodeId: "node_ad_save", sourcePortId: "port_ad_gate_out", targetPortId: "port_ad_save_in", version: "1.0.0" },
+];
+
+const pipelineAdCopy: Pipeline = {
+  id: "pipeline_ad_copy_generation",
+  projectId: "project_ad_copy_generation",
+  architectureId: "architecture_ad_copy_generation",
+  status: "ready",
+  nodes: nodesAdCopy,
+  edges: edgesAdCopy,
+  layout: { viewport: { x: 0, y: 0, zoom: 0.5 } },
+  createdAt,
+  updatedAt: createdAt,
+  version: "1.0.0",
+};
+
 const reviews: Review[] = [
   { id: "review_product_demo", targetType: "product", targetId: "product_demo_call_analysis", status: "approved", score: 91, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
   { id: "review_architecture_demo", targetType: "architecture", targetId: "architecture_demo_call_analysis", status: "approved", score: 93, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
@@ -603,6 +994,9 @@ const reviews: Review[] = [
   { id: "review_product_pl", targetType: "product", targetId: "product_demo_pipeline_lab_v3", status: "approved", score: 92, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
   { id: "review_architecture_pl", targetType: "architecture", targetId: "architecture_demo_pipeline_lab_v3", status: "approved", score: 94, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
   { id: "review_pipeline_pl", targetType: "pipeline", targetId: "pipeline_demo_pipeline_lab_v3", status: "approved", score: 90, issues: [], createdAt, version: "1.0.0" },
+  { id: "review_product_ad", targetType: "product", targetId: "product_ad_copy_generation", status: "approved", score: 90, issues: [], reviewerModuleId: "knowledge_spm", createdAt, version: "1.0.0" },
+  { id: "review_architecture_ad", targetType: "architecture", targetId: "architecture_ad_copy_generation", status: "approved", score: 91, issues: [], reviewerModuleId: "knowledge_architect", createdAt, version: "1.0.0" },
+  { id: "review_pipeline_ad", targetType: "pipeline", targetId: "pipeline_ad_copy_generation", status: "approved", score: 89, issues: [], createdAt, version: "1.0.0" },
 ];
 
 const runs: Run[] = [
@@ -728,6 +1122,39 @@ const runs: Run[] = [
     finishedAt: createdAt,
     version: "1.0.0",
   },
+  {
+    id: "run_ad_copy_seed",
+    pipelineId: "pipeline_ad_copy_generation",
+    status: "succeeded",
+    input: AD_COPY_CRM_INPUT_EXAMPLE,
+    output: {
+      title: "2-комн. квартира 54.5 м² с видом на парк — Пресненский район",
+      description:
+        "Светлая квартира с дизайнерским ремонтом и панорамными окнами в тихом дворе рядом с парком. Два санузла и кладовая — редкость для этой площади. Развитая инфраструктура в шаговой доступности: школа, детский сад, метро в 5 минутах. Ипотека одобрена банками-партнёрами.",
+      cta: "Записаться на просмотр сегодня",
+      confidence: 0.92,
+    },
+    metrics: [
+      { name: "tokens", value: 2380, unit: "tokens" },
+      { name: "cost", value: 0.031, unit: "usd" },
+      { name: "latency", value: 4120, unit: "ms" },
+      { name: "confidence", value: 0.92 },
+    ],
+    evidence: [],
+    latencyMs: 4120,
+    costUsd: 0.031,
+    logs: [
+      { timestamp: createdAt, level: "info", message: "Pipeline run started." },
+      { timestamp: createdAt, level: "info", message: "Валидация и нормализация CRM JSON пройдены." },
+      { timestamp: createdAt, level: "info", message: "Benefit Extraction Agent (GPT-5 mini) определил 4 преимущества и УТП." },
+      { timestamp: createdAt, level: "info", message: "Ad Generation Agent (GPT-5 mini) сформировал Title/Description/CTA." },
+      { timestamp: createdAt, level: "info", message: "Self-Check Agent (GPT-5 mini) подтвердил факты, стиль и SEO без правок." },
+      { timestamp: createdAt, level: "info", message: "Quality Gate: confidence 0.92 >= 0.90 -> сохранение." },
+    ],
+    startedAt: createdAt,
+    finishedAt: createdAt,
+    version: "1.0.0",
+  },
 ];
 
 const projects: Project[] = [
@@ -787,13 +1214,27 @@ const projects: Project[] = [
     updatedAt: createdAt,
     version: "1.0.0",
   },
+  {
+    id: "project_ad_copy_generation",
+    name: "Генерация текстов объявлений",
+    description: "AI автоматически создаёт продающее объявление объекта недвижимости на основе структурированных данных CRM (9-этапный pipeline, Playground с реальным запуском).",
+    status: "testing",
+    productId: "product_ad_copy_generation",
+    architectureId: "architecture_ad_copy_generation",
+    pipelineId: "pipeline_ad_copy_generation",
+    playgroundRunIds: ["run_ad_copy_seed"],
+    reviewIds: ["review_product_ad", "review_architecture_ad", "review_pipeline_ad"],
+    createdAt,
+    updatedAt: createdAt,
+    version: "1.0.0",
+  },
 ];
 
 export const demoSnapshot: RepositorySnapshot = {
   projects,
-  products: [product, productLead, productChat, productPipelineLab],
-  architectures: [architecture, architectureLead, architectureChat, architecturePipelineLab],
-  pipelines: [pipeline, pipelineLead, pipelineChat, pipelinePipelineLab],
+  products: [product, productLead, productChat, productPipelineLab, productAdCopy],
+  architectures: [architecture, architectureLead, architectureChat, architecturePipelineLab, architectureAdCopy],
+  pipelines: [pipeline, pipelineLead, pipelineChat, pipelinePipelineLab, pipelineAdCopy],
   runs,
   reviews,
   frameworks,

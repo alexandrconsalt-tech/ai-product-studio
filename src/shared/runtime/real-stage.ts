@@ -53,20 +53,39 @@ const DEFAULT_COST_PER_1K_TOKENS = 0.002;
  * from unit tests alone -- the original single-object-only version
  * threw "missing required variable: transcript" the first time it ran
  * against real fan-in data.
+ *
+ * Every object/array payload also gets a `value` key -- the whole
+ * payload, JSON-stringified -- unless a more specific `value` already
+ * came from a raw-string array item (spread order below preserves that
+ * one). This guarantees a prompt referencing `{{value}}` always renders
+ * regardless of which upstream stage produced the payload, which
+ * matters once a prompt is chained after ANOTHER `llm` stage under the
+ * Mock LLM Provider: a mocked upstream call never returns the real
+ * field names a downstream prompt might expect (it always returns
+ * `{mock, model, echo, confidence}`), so a prompt that only references
+ * named upstream fields throws `PromptRenderError` the moment it runs
+ * with Mock Stage active -- found via an actual Playground run of the
+ * "Генерация текстов объявлений" demo pipeline (3 chained `llm` stages),
+ * not assumed. Existing prompts that never reference `{{value}}` are
+ * completely unaffected by this addition.
  */
 function asRecord(payload: unknown): Record<string, unknown> {
   if (Array.isArray(payload)) {
-    return payload.reduce<Record<string, unknown>>((merged, item) => {
+    const merged = payload.reduce<Record<string, unknown>>((acc, item) => {
       if (typeof item === "string") {
-        return { ...merged, transcript: merged.transcript ?? item, value: merged.value ?? item };
+        return { ...acc, transcript: acc.transcript ?? item, value: acc.value ?? item };
       }
       if (item && typeof item === "object") {
-        return { ...merged, ...item };
+        return { ...acc, ...item };
       }
-      return merged;
+      return acc;
     }, {});
+    return { value: JSON.stringify(payload), ...merged };
   }
-  return payload && typeof payload === "object" ? { ...(payload as Record<string, unknown>) } : { value: payload };
+  if (payload && typeof payload === "object") {
+    return { value: JSON.stringify(payload), ...(payload as Record<string, unknown>) };
+  }
+  return { value: payload };
 }
 
 /**
@@ -165,6 +184,28 @@ async function passthrough({ payload }: StageInput): Promise<StageOutput> {
   return { payload };
 }
 
+/**
+ * A `store` node's whole purpose is to hold merged context for every
+ * downstream stage ("Единое хранилище", CLAUDE.md's Ad Copy Generation
+ * demo pipeline) -- but with more than one incoming edge, the executor
+ * hands it a raw array of its sources' outputs (pipeline-executor.ts),
+ * and a plain `passthrough` would forward that array untouched. The
+ * next `llm` stage's `asStringVariables` would then try to spread each
+ * array element as an object -- and since `Array.isArray(x)` items are
+ * themselves `typeof "object"`, a *nested* array (a store fed by a
+ * store that was itself fan-in-merged) spreads into numeric-string
+ * keys ("0","1") instead of hoisting the real fields up, silently
+ * breaking every `{{field}}` reference two hops downstream. Found via
+ * an actual Playground run of the Ad Copy Generation pipeline's
+ * Checker stage (fed by Storage + Generation), not assumed. A single
+ * incoming edge (every pre-existing demo pipeline's `store` node) is
+ * unaffected: `asRecord` on a plain object behaves exactly like the
+ * passthrough it replaces.
+ */
+async function realStore({ payload }: StageInput): Promise<StageOutput> {
+  return { payload: asRecord(payload) };
+}
+
 async function realTool({ node, payload }: StageInput): Promise<StageOutput> {
   // No real tool integration exists yet -- there is nothing concrete
   // to call. Kept as an explicit, labeled stand-in rather than a
@@ -197,7 +238,7 @@ export function createRealStageHandlers(deps: RealStageDependencies): Readonly<R
   return {
     input: passthrough,
     output: passthrough,
-    store: passthrough,
+    store: realStore,
     router: passthrough,
     function: passthrough,
     llm: llmHandler,

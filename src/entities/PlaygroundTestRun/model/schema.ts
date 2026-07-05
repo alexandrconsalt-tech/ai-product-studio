@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { EntityIdSchema, IsoDateTimeSchema, VersionSchema } from "@/entities/shared";
 
-export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3"]);
+// "pipeline-executor" (added 2026-07-05) is a Playground run of the
+// domain Pipeline entity through the real Production Pipeline Runtime
+// (src/shared/runtime/pipeline-executor.ts) -- distinct from
+// "pipeline-lab-v3" (the standalone iframe tool's own postMessage
+// bridge). Both feed the same Dashboard history uniformly.
+export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor"]);
 export const PlaygroundTestRunStatusSchema = z.enum(["succeeded", "failed"]);
 
 export const PlaygroundTestRunSchema = z.object({

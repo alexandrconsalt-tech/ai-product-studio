@@ -187,6 +187,110 @@ const PIPELINE_LAB_CHECK_TEMPLATE = `Ты — независимый Check Agent
 {{transcript}}`;
 
 /**
+ * Real templates for the fifth demo pipeline, "Генерация текстов
+ * объявлений" (Ad Copy Generation, real-estate listings). Field names
+ * referenced via `{{snake_case}}` match `src/shared/model/ad-copy-*.ts`
+ * exactly -- CRM fields flow through stages 1-2 (Validation/Normalization,
+ * both passthrough) unchanged, so the Benefit Extraction prompt below
+ * sees the raw CRM fields directly; Generation and the Checker see a
+ * fan-in merge of CRM + upstream stage output (Storage, `real-stage.ts`'s
+ * `asRecord` array-merge), so they can reference both sets of variables.
+ */
+const AD_COPY_BENEFITS_TEMPLATE = `Ты — эксперт по анализу объектов недвижимости и продающему копирайтингу.
+Проанализируй структурированные данные объекта недвижимости и определи преимущества, уникальное торговое предложение, целевую аудиторию и продающие тезисы.
+
+Данные объекта:
+Тип сделки: {{deal_type}}
+Тип объекта: {{object_type}}
+Город: {{city}}
+Район: {{district}}
+Улица: {{street}}
+Комнат: {{rooms}}
+Площадь: {{area}} м²
+Этаж: {{floor}} из {{total_floors}}
+Цена: {{price}}
+Описание: {{description}}
+Особенности: {{features}}
+Ремонт: {{renovation}}
+Балкон: {{balcony}}
+Санузел: {{bathroom}}
+Вид из окна: {{view}}
+Инфраструктура: {{infrastructure}}
+Парковка: {{parking}}
+Ипотека: {{mortgage}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений с полями:
+{
+  "advantages": string[] (3-6 конкретных преимуществ объекта на основе реальных данных выше, ничего не выдумывай),
+  "usp": string (одно уникальное торговое предложение — главный аргумент в пользу покупки),
+  "strengths": string[] (сильные стороны локации, дома, планировки),
+  "target_audience": string (для кого этот объект подходит лучше всего: семья, инвестор, молодая пара и т.д.),
+  "selling_points": string[] (3-5 продающих тезисов для текста объявления),
+  "style": string (рекомендуемый стиль объявления: деловой, эмоциональный, премиальный и т.д.)
+}
+
+Правила:
+- Не выдумывай факты, которых нет в данных объекта.
+- Если площадь, цена или район выделяются на рынке — обязательно укажи это как преимущество.
+- target_audience должен логически следовать из типа объекта, площади, района и цены.`;
+
+const AD_COPY_GENERATION_TEMPLATE = `Ты — профессиональный копирайтер объявлений недвижимости.
+Составь продающее объявление на основе данных объекта и его преимуществ.
+
+Данные объекта:
+Тип сделки: {{deal_type}}
+Тип объекта: {{object_type}}
+Город: {{city}}
+Район: {{district}}
+Комнат: {{rooms}}, Площадь: {{area}} м², Этаж {{floor}} из {{total_floors}}
+Цена: {{price}}
+Ремонт: {{renovation}}, Балкон: {{balcony}}, Вид: {{view}}
+
+Преимущества, УТП, целевая аудитория и стиль объявления (JSON от предыдущего этапа "Агент извлечения преимуществ" — используй поля advantages/usp/selling_points/target_audience/style, если они присутствуют):
+{{value}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений с полями:
+{
+  "title": string (заголовок объявления, до 70 символов, содержит ключевые характеристики — тип объекта, район/город, ключевое преимущество),
+  "description": string (текст объявления 3-6 предложений, продающая структура: зацепка -> характеристики -> преимущества -> призыв, без канцеляризмов и воды, на грамотном русском языке),
+  "cta": string (короткий призыв к действию — записаться на просмотр, позвонить, оставить заявку)
+}
+
+Правила:
+- Используй только факты из данных объекта и преимущества из JSON-контекста выше, ничего не выдумывай.
+- Пиши в стиле и для целевой аудитории, указанных в JSON-контексте, если они там присутствуют.
+- Не используй канцеляризмы, штампы и избыточные превосходные степени ("уникальный", "эксклюзивный") без основания в фактах.
+- CTA должен быть конкретным действием, а не общей фразой.`;
+
+const AD_COPY_CHECKER_TEMPLATE = `Ты — независимый контролёр качества объявлений недвижимости (самопроверка перед публикацией).
+Сверь текст объявления с исходными данными объекта и правилами качества, исправь ошибки.
+
+Исходные данные объекта:
+Город: {{city}}, Район: {{district}}, Комнат: {{rooms}}, Площадь: {{area}} м², Цена: {{price}}
+
+Проверяемое объявление и преимущества объекта (JSON от предыдущих этапов — используй поля title/description/cta и advantages, если они присутствуют):
+{{value}}
+
+Проверь и верни СТРОГО валидный JSON без markdown и пояснений:
+{
+  "facts_ok": boolean (все факты в объявлении соответствуют исходным данным, нет придуманных характеристик),
+  "style_ok": boolean (стиль соответствует целевой аудитории, без канцеляризмов и штампов),
+  "language_ok": boolean (нет орфографических и грамматических ошибок русского языка),
+  "prohibited_words_ok": boolean (нет запрещённых слов: "лучший", "гарантия", "100%", вводящих в заблуждение формулировок),
+  "readability_score": number (0-100, оценка читаемости текста),
+  "seo_ok": boolean (заголовок и описание содержат релевантные для поиска характеристики: район, тип объекта, количество комнат),
+  "duplicates_ok": boolean (нет повторов одних и тех же характеристик в заголовке и описании),
+  "title": string (исправленный заголовок, если были ошибки — иначе тот же),
+  "description": string (исправленное описание, если были ошибки — иначе то же),
+  "cta": string (исправленный CTA, если были ошибки — иначе тот же),
+  "issues": string[] (список найденных и исправленных проблем, пустой массив если проблем нет)
+}
+
+Правила:
+- Если найдена ошибка — исправь её прямо в полях title/description/cta, не проси повторной генерации.
+- confidence не пересчитывай здесь — это делает следующий этап (Контур качества), он использует confidence, который автоматически прикрепляется к твоему JSON-ответу.`;
+
+/**
  * Fixed, matching `demo-data.ts`'s own `createdAt` constant --
  * deliberately NOT `new Date().toISOString()`. This registry is a
  * module-level singleton evaluated once on the server (SSR) and once
@@ -207,7 +311,10 @@ export function withSeedPrompts(registry: PromptRegistry = emptyPromptRegistry):
     .register("prompt_pipeline_lab_needs", "1.0.0", PIPELINE_LAB_NEEDS_TEMPLATE, SEED_TIMESTAMP)
     .register("prompt_pipeline_lab_outcome", "1.0.0", PIPELINE_LAB_OUTCOME_TEMPLATE, SEED_TIMESTAMP)
     .register("prompt_pipeline_lab_summary", "1.0.0", PIPELINE_LAB_SUMMARY_TEMPLATE, SEED_TIMESTAMP)
-    .register("prompt_pipeline_lab_check", "1.0.0", PIPELINE_LAB_CHECK_TEMPLATE, SEED_TIMESTAMP);
+    .register("prompt_pipeline_lab_check", "1.0.0", PIPELINE_LAB_CHECK_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_ad_benefits", "1.0.0", AD_COPY_BENEFITS_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_ad_generation", "1.0.0", AD_COPY_GENERATION_TEMPLATE, SEED_TIMESTAMP)
+    .register("prompt_ad_checker", "1.0.0", AD_COPY_CHECKER_TEMPLATE, SEED_TIMESTAMP);
 }
 
 export const seededPromptRegistry: PromptRegistry = withSeedPrompts();

@@ -39,3 +39,13 @@ the full per-stage report, in the exact shape Pipeline Lab v3's own "Скача�
 can reopen one *specific* historical test's full result, not just its aggregate numbers --
 `unknown`/untyped (no Zod shape beyond that), because Pipeline Lab v3 is plain untyped JS on
 the other side of the `postMessage` boundary, not a schema-validated one.
+
+**`source: "pipeline-executor"` (added 2026-07-05, "Генерация текстов объявлений" demo
+product)** -- a second, independent way a `PlaygroundTestRun` gets recorded: Playground's
+"Запустить Pipeline" button runs the domain `Pipeline` entity through the real Production
+Pipeline Runtime (`executePipeline`, `src/shared/runtime/pipeline-executor.ts`) directly, no
+iframe involved. For this source, `report` holds a full `ExecutionTrace`
+(`src/shared/runtime/execution-trace.ts`) rather than Pipeline Lab v3's `{pipeline,result,usage}`
+shape, and `qualityScore`/`decision` are typically absent (those are Pipeline Lab v3-specific
+concepts with no equivalent in the generic domain Runtime). Both sources are aggregated
+identically by Dashboard (`computeDashboardStats` only reads the common fields).
