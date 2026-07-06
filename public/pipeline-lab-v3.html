@@ -302,7 +302,7 @@ const MODEL_OPTIONS = [
   {v:'gpt-5-mini',        t:'GPT-5 mini (OpenAI)'},
   {v:'claude-sonnet-4-6', t:'Claude Sonnet 4.6 (Anthropic)'},
 ];
-const CODE_FN_LIST = ['stt','validate','store','gate','crm'];
+const CODE_FN_LIST = ['stt','validate','store','gate','summaryQualityGate','crm'];
 
 // Ориентировочная стоимость за 1000 токенов -- оценка для отображения
 // расходов теста, а не точный биллинг вендора (реальная стоимость
@@ -314,9 +314,321 @@ function estimateCost(model, tokens){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  ДЕФОЛТНЫЙ ПАЙПЛАЙН — ДЕСЯТЬ ЭТАПОВ
+function summaryQualityStages(){
+  return [
+    {
+      id:s(), enabled:true, type:'check', name:'Проверка достоверности',
+      model:'claude-sonnet-4-6', outKey:'truth_check',
+      prompt:
+`Ты — независимый проверщик достоверности AI Summary для звонков по недвижимости.
+
+Твоя задача — проверить, можно ли доверять саммари.
+
+Проверяй только факты, которые есть в саммари.
+Не оценивай качество звонка агента.
+Не штрафуй саммари за отсутствие данных, которых не было в разговоре.
+
+Проверь:
+1. Есть ли в саммари факты, которых нет в транскрипции.
+2. Есть ли искажения фактов.
+3. Не перепутаны ли роли клиента, оператора и агента.
+4. Нет ли выдуманных выводов.
+5. Нет ли неверно переданных денег, сроков, договорённостей или следующего шага.
+
+Верни строго валидный JSON без markdown:
+
+{
+  "score": <0-100>,
+  "status": "pass" | "warning" | "fail",
+  "has_hallucinations": true | false,
+  "has_fact_distortions": true | false,
+  "has_role_confusion": true | false,
+  "critical_errors": [
+    {
+      "type": "hallucination" | "fact_distortion" | "role_confusion",
+      "summary_fragment": "<фрагмент саммари>",
+      "problem": "<что неверно>",
+      "evidence_from_transcript": "<цитата из транскрипции или null>"
+    }
+  ],
+  "explanation": "<краткое объяснение оценки>"
+}
+
+Правила оценки:
+- Если есть галлюцинация — score не выше 70.
+- Если искажён источник средств, срок, договорённость или следующий шаг — score не выше 60.
+- Если перепутаны роли — score не выше 70.
+- Если критических ошибок нет — score 90-100.
+
+Саммари:
+{{ctx.summary}}
+
+Транскрипция:
+{{transcript}}
+
+Факты:
+{{ctx.facts}}
+
+Потребности:
+{{ctx.needs}}
+
+Результат звонка:
+{{ctx.outcome}}`
+    },
+    {
+      id:s(), enabled:true, type:'check', name:'Проверка критически важных фактов',
+      model:'claude-sonnet-4-6', outKey:'critical_facts_check',
+      prompt:
+`Ты — независимый проверщик критически важных фактов AI Summary для CRM агентства недвижимости.
+
+Главный принцип:
+Саммари не обязано передавать все факты звонка. Оно должно передавать только те факты, которые нужны агенту для продолжения работы с клиентом.
+
+Твоя задача:
+1. Определить, какие критически важные факты реально прозвучали в звонке.
+2. Проверить, попали ли эти факты в саммари.
+3. Не штрафовать саммари за отсутствие информации, которой не было в звонке.
+
+Критически важные факты:
+- намерение клиента;
+- что именно интересует клиента;
+- ситуация клиента;
+- источник средств, если прозвучал;
+- срок покупки/сделки, если прозвучал;
+- ЛПР или участники решения, если прозвучали;
+- возражения/сомнения, если прозвучали;
+- договорённости, если были;
+- следующий шаг, если был;
+- важные ограничения клиента.
+
+Не считать критически важными:
+- полный адрес объекта;
+- цену объекта;
+- номер телефона;
+- этаж, площадь, характеристики объекта, если они есть или должны быть в карточке объекта;
+- приветствия и служебные реплики.
+
+Верни строго валидный JSON без markdown:
+
+{
+  "score": <0-100>,
+  "status": "pass" | "warning" | "fail",
+  "critical_facts_found": [
+    {
+      "fact_type": "<тип факта>",
+      "fact": "<факт>",
+      "evidence_from_transcript": "<цитата>",
+      "is_reflected_in_summary": true | false,
+      "summary_fragment": "<фрагмент саммари или null>",
+      "importance": "high" | "medium"
+    }
+  ],
+  "missed_critical_facts": [
+    {
+      "fact_type": "<тип факта>",
+      "fact": "<пропущенный факт>",
+      "evidence_from_transcript": "<цитата>",
+      "why_important": "<почему это важно для агента>"
+    }
+  ],
+  "explanation": "<краткое объяснение оценки>"
+}
+
+Правила оценки:
+- Если все high-факты отражены — score 90-100.
+- Если пропущен один medium-факт — score 80-89.
+- Если пропущен high-факт — score не выше 75.
+- Если пропущены договорённость или следующий шаг, которые были в звонке — score не выше 65.
+- Если критически важных фактов в звонке мало, оцени только те, которые реально были.
+
+Саммари:
+{{ctx.summary}}
+
+Транскрипция:
+{{transcript}}
+
+Факты:
+{{ctx.facts}}
+
+Потребности:
+{{ctx.needs}}
+
+Результат звонка:
+{{ctx.outcome}}`
+    },
+    {
+      id:s(), enabled:true, type:'check', name:'Проверка полезности для агента',
+      model:'claude-sonnet-4-6', outKey:'context_utility_check',
+      prompt:
+`Ты — независимый проверщик продуктовой полезности AI Summary.
+
+Главный вопрос:
+Может ли следующий агент после прочтения саммари за 5-10 секунд понять контекст звонка и продолжить работу с клиентом без прослушивания записи?
+
+Оцени не литературное качество текста, а рабочую полезность для CRM.
+
+Проверь:
+1. Понятно ли, зачем клиент обратился.
+2. Понятно ли, какая ситуация у клиента.
+3. Понятно ли, что клиент хочет дальше.
+4. Понятно ли, какие важные ограничения или условия есть.
+5. Нужно ли агенту слушать запись, чтобы продолжить работу.
+
+Верни строго валидный JSON без markdown:
+
+{
+  "score": <0-100>,
+  "status": "pass" | "warning" | "fail",
+  "can_continue_without_recording": true | false,
+  "context_clarity": <0-100>,
+  "business_usefulness": <0-100>,
+  "missing_for_next_agent": [
+    "<что не хватает агенту для продолжения работы>"
+  ],
+  "useful_summary_elements": [
+    "<что в саммари полезно>"
+  ],
+  "explanation": "<краткое объяснение оценки>"
+}
+
+Правила оценки:
+- Если агент может продолжить работу без записи — score 90-100.
+- Если запись нужна только для уточнения деталей — score 75-89.
+- Если без записи невозможно понять ситуацию — score не выше 60.
+- Если саммари формально корректное, но бесполезное — score не выше 70.
+
+Саммари:
+{{ctx.summary}}
+
+Транскрипция:
+{{transcript}}
+
+Факты:
+{{ctx.facts}}
+
+Потребности:
+{{ctx.needs}}
+
+Результат звонка:
+{{ctx.outcome}}`
+    },
+    {
+      id:s(), enabled:true, type:'check', name:'Проверка договорённостей и следующего шага',
+      model:'claude-sonnet-4-6', outKey:'action_check',
+      prompt:
+`Ты — независимый проверщик результата звонка, договорённостей и следующего шага.
+
+Твоя задача — проверить, правильно ли саммари передало, чем закончился звонок и что нужно делать дальше.
+
+Проверяй:
+1. Был ли в звонке конкретный результат.
+2. Были ли договорённости.
+3. Был ли следующий шаг.
+4. Кто должен выполнить следующий шаг.
+5. Есть ли срок/дедлайн, если он прозвучал.
+6. Не завысило ли саммари степень договорённости.
+
+Не штрафуй саммари, если договорённости или следующего шага в звонке реально не было.
+Но если они были и саммари их пропустило — это ошибка.
+
+Верни строго валидный JSON без markdown:
+
+{
+  "score": <0-100>,
+  "status": "pass" | "warning" | "fail",
+  "call_result_in_transcript": "<результат звонка или null>",
+  "agreement_in_transcript": "<договорённость или null>",
+  "next_step_in_transcript": "<следующий шаг или null>",
+  "is_result_reflected": true | false,
+  "is_agreement_reflected": true | false,
+  "is_next_step_reflected": true | false,
+  "action_errors": [
+    {
+      "type": "missed_agreement" | "missed_next_step" | "wrong_deadline" | "overstated_agreement",
+      "problem": "<описание проблемы>",
+      "evidence_from_transcript": "<цитата>"
+    }
+  ],
+  "explanation": "<краткое объяснение оценки>"
+}
+
+Правила оценки:
+- Если следующий шаг был в звонке и корректно отражён — score 90-100.
+- Если следующий шаг был, но не отражён — score не выше 65.
+- Если саммари придумало договорённость — score не выше 60.
+- Если договорённости не было, но саммари корректно описывает отсутствие явной договорённости — не штрафовать.
+
+Саммари:
+{{ctx.summary}}
+
+Транскрипция:
+{{transcript}}
+
+Результат звонка:
+{{ctx.outcome}}`
+    },
+    {
+      id:s(), enabled:true, type:'check', name:'Проверка формата и правил',
+      model:'claude-sonnet-4-6', outKey:'presentation_check',
+      prompt:
+`Ты — независимый проверщик формата, лаконичности и CRM-правил для AI Summary.
+
+Проверь:
+1. Саммари не длиннее 700 символов.
+2. Текст читается быстро.
+3. Нет воды и повторов.
+4. Нет полного адреса объекта.
+5. Нет цены объекта.
+6. Нет бюджета или ценовой вилки клиента.
+7. Нет номеров телефонов.
+8. Нет характеристик объекта, которые должны быть в карточке.
+9. Нет оценочных суждений: “горячий клиент”, “холодный клиент”, “перспективный клиент”.
+10. Нет отрицательных фактов типа “источник средств не определён”, если это не нужно в Summary.
+11. Структура соответствует стандарту: краткий основной текст + статус/договорённость или следующий шаг.
+
+Верни строго валидный JSON без markdown:
+
+{
+  "score": <0-100>,
+  "status": "pass" | "warning" | "fail",
+  "length_chars": <число символов>,
+  "is_too_long": true | false,
+  "forbidden_card_duplicates": [
+    "<фрагменты, которые дублируют карточку объекта>"
+  ],
+  "pii_found": [
+    "<найденные телефоны или контакты>"
+  ],
+  "forbidden_phrases": [
+    "<запрещённые или оценочные формулировки>"
+  ],
+  "readability_issues": [
+    "<проблемы читаемости>"
+  ],
+  "explanation": "<краткое объяснение оценки>"
+}
+
+Правила оценки:
+- Если есть телефон или контакт — score не выше 60.
+- Если есть полный адрес, цена, бюджет или характеристики объекта — score не выше 80.
+- Если длина больше 700 символов — score не выше 85.
+- Если текст трудно читать — score не выше 75.
+- Если нарушений нет — score 90-100.
+
+Саммари:
+{{ctx.summary}}`
+    },
+    {
+      id:s(), enabled:true, type:'code', vendor:'Code',
+      name:'Summary Quality Gate',
+      codeFn:'summaryQualityGate', outKey:'summary_quality_gate', prompt:''
+    },
+  ];
+}
+
+//  ДЕФОЛТНЫЙ ПАЙПЛАЙН — ЧЕТЫРНАДЦАТЬ ЭТАПОВ
 //  Nexara → Валидация → Факты → Хранилище → Потребности → Результат →
-//  Саммари → Проверка → Quality Gate → CRM
+//  Саммари → 5 специализированных проверщиков → Summary Quality Gate → CRM
 // ═══════════════════════════════════════════════════════════════════════════
 function defaultPipeline(){
   return [
@@ -507,42 +819,7 @@ function defaultPipeline(){
 Факты:
 {{ctx.facts}}`
     },
-    {
-      id:s(), enabled:true, type:'check', name:'Проверка саммари',
-      model:'claude-sonnet-4-6', outKey:'summary_check',
-      prompt:
-`Ты — независимый Check Agent (кросс-вендорная проверка).
-Сверь саммари с данными хранилища и транскрипцией. Верни СТРОГО валидный JSON без markdown:
-{
-  "score": <0-100, точность и полнота саммари>,
-  "hallucinations": [<утверждения саммари, которых НЕТ в данных или транскрипции>],
-  "forbidden_card_duplicates": [<фрагменты саммари, которые дублируют поля карточки заявки: полный адрес объекта, площадь, этаж, этажность, стоимость объекта, бюджет/ценовая вилка, характеристики объекта, номера телефонов>],
-  "pii_found": [<телефоны и другие персональные контакты, просочившиеся в саммари>],
-  "issues": [<прочие проблемы строками>]
-}
-
-Исключения (V8.1, НЕ считать ошибкой/галлюцинацией/PII):
-1) Строка «Статус: …» — не считается галлюцинацией или ошибкой оценки, если использует ТОЛЬКО словарь: полноценный контакт, краткий контакт, реальный интерес, готов к просмотру, готов к сделке, ждёт подтверждения, сравнивает варианты, сомневается, взял паузу, теряет интерес — и каждый дескриптор подтверждается транскрипцией.
-
-Жёсткое правило:
-Саммари НЕ должно дублировать поля карточки заявки. Любой полный адрес объекта, площадь, этаж, этажность, стоимость объекта, бюджет/ценовая вилка, характеристики объекта (ремонт, отделка, состояние пола и т.п.) или номер телефона в саммари добавляй в forbidden_card_duplicates, даже если это подтверждено транскрипцией и полезно для CRM. Эти данные должны храниться в структурированных полях карточки, а не в тексте саммари.
-
-Оценка:
-- Если есть hallucinations, score не выше 80.
-- Если есть forbidden_card_duplicates, score не выше 85.
-- Если есть телефон или другой персональный контакт в саммари, score не выше 70.
-
-Саммари: {{ctx.summary}}
-Данные хранилища: {{ctx.store}}
-
-Транскрипция:
-{{transcript}}`
-    },
-    {
-      id:s(), enabled:true, type:'code', vendor:'Code',
-      name:'Quality Gate',
-      codeFn:'gate', outKey:'gate', prompt:''
-    },
+    ...summaryQualityStages(),
     {
       id:s(), enabled:true, type:'svc', vendor:'CRM',
       name:'Сохранение в CRM',
@@ -584,7 +861,10 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // duplicates so useful runs do not get stuck in REVIEW for one phrase.
 // V8.4 makes saved user configs durable across deploys: version is now
 // migration metadata, never a reason to discard a user's saved edits.
-const PIPELINE_VERSION = 5;
+// V8.5 replaces the single summary checker with five specialized Russian
+// judges and a dedicated Summary Quality Gate. Saved user configs are
+// migrated in place instead of being reset.
+const PIPELINE_VERSION = 6;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
@@ -601,8 +881,40 @@ function loadPipelineConfig(){
     // or run. Legacy bare-array exports are accepted for the same reason.
     const stages=Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.stages) ? parsed.stages : null;
     if(!stages || !stages.length) return null;
-    return stages.map(x=>({id:s(), ...x}));
+    return migratePipelineConfig(stages.map(x=>({id:s(), ...x})));
   }catch(e){ return null; }
+}
+
+function isOldSummaryCheck(stage){
+  return stage && (stage.outKey==='summary_check' || /Проверка саммари/i.test(stage.name||''));
+}
+function isOldGate(stage){
+  return stage && stage.codeFn==='gate' && (stage.outKey==='gate' || /Quality Gate/i.test(stage.name||''));
+}
+function hasSummaryQualityArchitecture(stages){
+  return stages.some(stage=>stage.outKey==='summary_quality_gate' || stage.codeFn==='summaryQualityGate')
+    && ['truth_check','critical_facts_check','context_utility_check','action_check','presentation_check']
+      .every(key=>stages.some(stage=>stage.outKey===key));
+}
+function migratePipelineConfig(stages){
+  if(!Array.isArray(stages) || !stages.length) return stages;
+  if(hasSummaryQualityArchitecture(stages)) return stages;
+
+  const summaryIdx=stages.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
+  const crmIdx=stages.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
+  const cleaned=stages.filter(stage=>!isOldSummaryCheck(stage) && !isOldGate(stage));
+  const migrated=summaryQualityStages();
+
+  let insertAt=cleaned.length;
+  const cleanedCrmIdx=cleaned.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
+  const cleanedSummaryIdx=cleaned.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
+  if(cleanedCrmIdx>=0) insertAt=cleanedCrmIdx;
+  else if(cleanedSummaryIdx>=0) insertAt=cleanedSummaryIdx+1;
+  else if(crmIdx>=0) insertAt=Math.min(crmIdx, cleaned.length);
+  else if(summaryIdx>=0) insertAt=Math.min(summaryIdx+1, cleaned.length);
+
+  cleaned.splice(insertAt, 0, ...migrated);
+  return cleaned;
 }
 
 let pipeline = loadPipelineConfig() || defaultPipeline();
@@ -762,6 +1074,60 @@ function cleanupSummaryText(summary, forbiddenDetails){
     .replace(/(?:^|\n)\s*[.;]\s*/g,'\n')
     .trim();
   return {summary:text, changed:text!==String(summary||''), notes:[...new Set(notes)]};
+}
+
+function toList(value){
+  if(Array.isArray(value)) return value;
+  if(value===undefined || value===null || value==='') return [];
+  return [value];
+}
+
+function formatIssue(issue){
+  if(issue===undefined || issue===null) return '';
+  if(typeof issue==='string') return issue;
+  if(typeof issue==='number' || typeof issue==='boolean') return String(issue);
+  const parts=[];
+  if(issue.type) parts.push(issue.type);
+  if(issue.problem) parts.push(issue.problem);
+  if(issue.fact_type || issue.fact) parts.push([issue.fact_type, issue.fact].filter(Boolean).join(': '));
+  if(issue.summary_fragment) parts.push('фрагмент: '+issue.summary_fragment);
+  if(issue.why_important) parts.push(issue.why_important);
+  if(issue.evidence_from_transcript) parts.push('цитата: '+issue.evidence_from_transcript);
+  return parts.filter(Boolean).join(' · ') || JSON.stringify(issue);
+}
+
+function failedSummaryJudgeOutput(stage, reason){
+  return {
+    score:0,
+    status:'fail',
+    explanation:reason || 'Проверщик не вернул валидный результат.',
+    critical_errors:[{
+      type:'checker_error',
+      problem:reason || 'Проверщик не отработал',
+      evidence_from_transcript:null
+    }]
+  };
+}
+
+function normalizeStatus(status, score){
+  const s=String(status||'').toLowerCase();
+  if(s==='pass' || s==='warning' || s==='fail') return s;
+  if(score>=90) return 'pass';
+  if(score>=70) return 'warning';
+  return 'fail';
+}
+
+function normalizeSummaryJudge(raw, key, label){
+  const value = raw && typeof raw==='object' ? raw : failedSummaryJudgeOutput({outKey:key}, label+' не вернул JSON.');
+  const scoreRaw=Number(value.score);
+  const score=Number.isFinite(scoreRaw) ? Math.max(0, Math.min(100, scoreRaw)) : 0;
+  const status=normalizeStatus(value.status, score);
+  const explanation=value.explanation || (status==='pass' ? 'Критических проблем не найдено.' : 'Проверщик не дал объяснение.');
+  const missing=[
+    ...toList(value.missing_for_next_agent),
+    ...toList(value.readability_issues)
+  ].map(formatIssue).filter(Boolean);
+  return {score, status, explanation, raw:{...value, score, status, explanation}, missing};
 }
 
 function levenshtein(a,b){
@@ -965,9 +1331,120 @@ const CODE_FUNCS = {
       checks:reasonChecks.concat(extraChecks)};
   },
 
+  // ── Summary Quality Gate: агрегирует 5 специализированных judge-агентов ──
+  summaryQualityGate(stage,ctx){
+    const weights={
+      truth_check:.30,
+      critical_facts_check:.25,
+      context_utility_check:.20,
+      action_check:.15,
+      presentation_check:.10
+    };
+    const labels={
+      truth_check:'Проверка достоверности',
+      critical_facts_check:'Проверка критически важных фактов',
+      context_utility_check:'Проверка полезности для агента',
+      action_check:'Проверка договорённостей и следующего шага',
+      presentation_check:'Проверка формата и правил'
+    };
+    const judgeKeys=Object.keys(weights);
+    const judges=Object.fromEntries(judgeKeys.map(key=>[key, normalizeSummaryJudge(ctx[key], key, labels[key])]));
+    const scores=Object.fromEntries(judgeKeys.map(key=>[key, judges[key].score]));
+    const summary_quality_score=judgeKeys.reduce((sum,key)=>sum+scores[key]*weights[key],0);
+
+    const truth=judges.truth_check.raw;
+    const criticalFacts=judges.critical_facts_check.raw;
+    const utility=judges.context_utility_check.raw;
+    const action=judges.action_check.raw;
+    const presentation=judges.presentation_check.raw;
+
+    const critical_errors=[];
+    const warnings=[];
+    const recommendations=[];
+    for(const key of judgeKeys){
+      const judge=judges[key];
+      if(judge.status==='fail') critical_errors.push(labels[key]+': '+judge.explanation);
+      else if(judge.status==='warning') warnings.push(labels[key]+': '+judge.explanation);
+      if(judge.missing) recommendations.push(...judge.missing.map(x=>labels[key]+': '+x));
+    }
+    critical_errors.push(...toList(truth.critical_errors).map(formatIssue));
+    critical_errors.push(...toList(action.action_errors).map(formatIssue));
+    critical_errors.push(...toList(criticalFacts.missed_critical_facts).map(formatIssue));
+    warnings.push(...toList(presentation.forbidden_card_duplicates).map(x=>'Дубли карточки в саммари: '+formatIssue(x)));
+    warnings.push(...toList(presentation.pii_found).map(x=>'PII/контакт в саммари: '+formatIssue(x)));
+    warnings.push(...toList(presentation.forbidden_phrases).map(x=>'Запрещённая формулировка: '+formatIssue(x)));
+    warnings.push(...toList(presentation.readability_issues).map(x=>'Читаемость: '+formatIssue(x)));
+    recommendations.push(...toList(utility.missing_for_next_agent).map(x=>'Добавить для следующего агента: '+formatIssue(x)));
+    recommendations.push(...toList(criticalFacts.missed_critical_facts).map(x=>'Отразить критический факт: '+formatIssue(x)));
+    recommendations.push(...toList(action.action_errors).map(x=>'Уточнить договорённость/следующий шаг: '+formatIssue(x)));
+    recommendations.push(...toList(presentation.forbidden_card_duplicates).map(x=>'Убрать из саммари поле карточки: '+formatIssue(x)));
+    recommendations.push(...toList(presentation.pii_found).map(x=>'Убрать контактные данные: '+formatIssue(x)));
+
+    const hasWarning=judgeKeys.some(key=>judges[key].status==='warning');
+    const hasForbidden=toList(presentation.forbidden_card_duplicates).length>0;
+    const hasPii=toList(presentation.pii_found).length>0;
+    const retry =
+      summary_quality_score < 70 ||
+      truth.has_hallucinations===true ||
+      truth.has_fact_distortions===true ||
+      truth.has_role_confusion===true ||
+      action.status==='fail' ||
+      criticalFacts.status==='fail';
+    const autoSave =
+      summary_quality_score >= 90 &&
+      truth.status==='pass' &&
+      criticalFacts.status==='pass' &&
+      action.status!=='fail' &&
+      !hasPii &&
+      !hasForbidden &&
+      truth.has_hallucinations===false &&
+      truth.has_fact_distortions===false;
+    let decision='MANUAL_REVIEW';
+    if(retry) decision='RETRY';
+    else if(autoSave) decision='AUTO_SAVE';
+    const stt=decision==='AUTO_SAVE'?'ok':(decision==='MANUAL_REVIEW'?'warn':'bad');
+    const uniqueCritical=[...new Set(critical_errors.filter(Boolean))];
+    const uniqueWarnings=[...new Set(warnings.filter(Boolean))];
+    const uniqueRecommendations=[...new Set(recommendations.filter(Boolean))];
+    const explanation = decision==='AUTO_SAVE'
+      ? 'Саммари прошло все критические проверки и может быть сохранено автоматически.'
+      : decision==='RETRY'
+        ? 'Найдены критические проблемы качества Summary: нужен повтор генерации или исправление промта.'
+        : 'Критического провала нет, но качество или правила требуют ручной проверки.';
+
+    return {
+      output:{
+        summary_quality_score:+summary_quality_score.toFixed(1),
+        decision,
+        scores,
+        critical_errors:uniqueCritical,
+        warnings:uniqueWarnings,
+        recommendations:uniqueRecommendations,
+        explanation,
+        judges:Object.fromEntries(judgeKeys.map(key=>[key, judges[key].raw]))
+      },
+      metrics:[
+        ['Summary Quality Score', summary_quality_score.toFixed(1)],
+        ['Решение', decision],
+        ['Крит. ошибок', uniqueCritical.length],
+        ['Предупреждений', uniqueWarnings.length]
+      ],
+      status:stt,
+      confidenceBreakdown:judgeKeys.map(key=>({k:key,label:labels[key],val:scores[key]/100,w:weights[key]})),
+      checks:[
+        {label:'Достоверность: '+judges.truth_check.status+' · '+scores.truth_check, pass:judges.truth_check.status==='pass', warn:judges.truth_check.status==='warning'},
+        {label:'Критически важные факты: '+judges.critical_facts_check.status+' · '+scores.critical_facts_check, pass:judges.critical_facts_check.status==='pass', warn:judges.critical_facts_check.status==='warning'},
+        {label:'Полезность для агента: '+judges.context_utility_check.status+' · '+scores.context_utility_check, pass:judges.context_utility_check.status==='pass', warn:judges.context_utility_check.status==='warning'},
+        {label:'Договорённости и следующий шаг: '+judges.action_check.status+' · '+scores.action_check, pass:judges.action_check.status==='pass', warn:judges.action_check.status==='warning'},
+        {label:'Формат и правила: '+judges.presentation_check.status+' · '+scores.presentation_check, pass:judges.presentation_check.status==='pass', warn:judges.presentation_check.status==='warning'}
+      ],
+      isSummaryQualityGate:true
+    };
+  },
+
   // ── этап CRM: сборка карточки и симуляция сохранения ─────────────────────
   crm(stage,ctx){
-    const st=ctx.store||{}, rec=st.record||ctx.facts||{}, n=ctx.needs||{}, o=ctx.outcome||{}, sm=ctx.summary||{}, g=ctx.gate||{};
+    const st=ctx.store||{}, rec=st.record||ctx.facts||{}, n=ctx.needs||{}, o=ctx.outcome||{}, sm=ctx.summary||{}, g=ctx.summary_quality_gate||ctx.gate||{};
     const card={
       client_name: rec.client_name ?? null,
       budget: rec.budget_normalized ?? rec.budget ?? null,
@@ -977,7 +1454,7 @@ const CODE_FUNCS = {
       call_result: o.call_result ?? null,
       next_step: o.next_step ?? null,
       summary: sm.summary ?? null,
-      quality: {confidence: g.confidence ?? 0, decision: g.decision ?? '—'}
+      quality: {confidence: (g.summary_quality_score ?? (g.confidence!=null ? Math.round(g.confidence*100) : 0)), decision: g.decision ?? '—'}
     };
     const saved= g.decision==='AUTO_SAVE' || g.decision==='AUTO_SAVE + лог';
     return {output:{card, saved},
@@ -1128,8 +1605,9 @@ async function runStage(stage, ctx){
     const ms=Math.round(performance.now()-t0);
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=(actualModel&&actualModel.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)')+(fallbackNote?' ('+fallbackNote+')':'');
-    return { output: parsed || {raw}, raw, parseErr, ms, tokens, cost,
-      status: parseErr?'warn':'ok',
+    const output = parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw});
+    return { output, raw, parseErr, ms, tokens, cost,
+      status: parseErr?(stage.type==='check'?'bad':'warn'):'ok',
       metrics:[['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
   }
@@ -1154,8 +1632,8 @@ async function runPipeline(){
   const modelSteps = active.filter(s=>s.type==='llm'||s.type==='check');
   const needsAnthropic = modelSteps.some(s=>(MODEL_VENDOR[s.model]||'anthropic')==='anthropic');
   const needsOpenai = modelSteps.some(s=>MODEL_VENDOR[s.model]==='openai');
-  if(needsAnthropic && !loadApiKey()){ toast('Задайте API-ключ Anthropic вверху страницы (нужен для шагов с Claude)'); return; }
-  if(needsOpenai && !loadOpenaiKey()){ toast('Задайте API-ключ OpenAI вверху страницы (нужен для шагов с GPT-5 mini)'); return; }
+  if(needsAnthropic && !loadApiKey() && !loadOpenaiKey()){ toast('Задайте API-ключ Anthropic или OpenAI: Claude-шаги могут уйти на GPT-5 mini fallback'); return; }
+  if(needsOpenai && !loadOpenaiKey() && !loadApiKey()){ toast('Задайте API-ключ OpenAI или Anthropic: GPT-шаги могут уйти на Claude fallback'); return; }
 
   ctx={ __transcript:transcript, stored_files: storedFilesForCtx() };
   reportsEl.innerHTML=''; emptyState.style.display='none';
@@ -1172,7 +1650,16 @@ async function runPipeline(){
 
     let rep;
     try{ rep=await runStage(stage, ctx); }
-    catch(e){ rep={status:'bad',error:e.message,ms:0,metrics:[['Ошибка',e.message]]}; }
+    catch(e){
+      const isChecker=stage.type==='check';
+      rep={
+        status:'bad',
+        error:e.message,
+        output:isChecker ? failedSummaryJudgeOutput(stage, 'Ошибка проверщика: '+e.message) : undefined,
+        ms:0,
+        metrics:[['Ошибка',e.message]]
+      };
+    }
 
     // сохраняем в контекст
     if(stage.outKey && rep.output!==undefined) ctx[stage.outKey]=rep.output;
@@ -1198,7 +1685,7 @@ async function runPipeline(){
 // this can never break the tool's own behavior.
 function reportRunToParent(run){
   try{
-    const gate=ctx.gate, check=ctx.summary_check;
+    const gate=ctx.summary_quality_gate||ctx.gate, check=ctx.presentation_check||ctx.summary_check;
     // Same shape as the "Скачать полный отчёт (JSON)" button builds
     // (dlReport, see renderFinal) -- so a test opened later from
     // Dashboard's run history shows exactly what that download would
@@ -1216,9 +1703,9 @@ function reportRunToParent(run){
         tokens: run.totalTokens,
         costUsd: run.totalCost,
         status: run.errorCount>0 ? 'failed' : 'succeeded',
-        confidence: gate ? gate.confidence : undefined,
+        confidence: gate ? (gate.summary_quality_score!=null ? gate.summary_quality_score/100 : gate.confidence) : undefined,
         decision: gate ? gate.decision : undefined,
-        qualityScore: check ? check.score : undefined,
+        qualityScore: gate ? (gate.summary_quality_score ?? check?.score) : check ? check.score : undefined,
         transcript: ctx.__transcript,
         report: report,
       },
@@ -1269,6 +1756,10 @@ function renderReport(stage, rep, num){
       '<div><span class="k">'+b.label+' <span class="tag">'+(b.w*100)+'%</span></span> <b>'+(b.val*100).toFixed(0)+'%</b></div>').join('')+'</div>';
   }
 
+  if(rep.isSummaryQualityGate && rep.output){
+    body+=renderSummaryQualityPanel(rep.output);
+  }
+
   if(rep.error){ body+='<div class="out" style="color:var(--bad)">Ошибка: '+escapeHtml(rep.error)+'</div>'; }
   else if(rep.parseErr){ body+='<div class="out" style="color:var(--warn)">JSON не распознан: '+escapeHtml(rep.parseErr)+'\n\n'+escapeHtml((rep.raw||'').slice(0,600))+'</div>'; }
   else if(rep.output!==undefined && !rep.isCode){
@@ -1298,12 +1789,65 @@ function fmtNeed(v){
   return Array.isArray(v) ? (v.length? v.join(', ') : 'не определено') : String(v);
 }
 
+function decisionTone(decision){
+  if(decision==='AUTO_SAVE') return 'ok';
+  if(decision==='MANUAL_REVIEW') return 'warn';
+  return 'bad';
+}
+
+function judgeTone(raw){
+  const st=raw && raw.status;
+  if(st==='pass') return 'ok';
+  if(st==='warning') return 'warn';
+  return 'bad';
+}
+
+function renderIssueList(title, items, emptyText){
+  const list=toList(items).filter(Boolean);
+  if(!list.length) return '<div class="kvlist" style="margin-top:10px"><div><span class="k">'+escapeHtml(title)+'</span> <b>'+escapeHtml(emptyText||'нет')+'</b></div></div>';
+  return '<div class="kvlist" style="margin-top:10px"><div><span class="k">'+escapeHtml(title)+'</span> <b>'+list.length+'</b></div></div>'
+    +'<ul class="chklist">'+list.map(item=>'<li class="warnli"><span class="ic">!</span><span>'+escapeHtml(formatIssue(item))+'</span></li>').join('')+'</ul>';
+}
+
+function renderSummaryQualityPanel(gate){
+  const judgeLabels={
+    truth_check:'Достоверность',
+    critical_facts_check:'Критические факты',
+    context_utility_check:'Полезность',
+    action_check:'Договорённости',
+    presentation_check:'Формат'
+  };
+  const judges=gate.judges||{};
+  const score=Number(gate.summary_quality_score||0);
+  const scoreTone=score>=90?'ok':(score>=70?'warn':'bad');
+  let html='<div class="metrics" style="margin-top:12px">'
+    +'<div class="metric"><div class="ml">Summary Quality Score</div><div class="mv '+scoreTone+'">'+score.toFixed(1)+'</div></div>'
+    +'<div class="metric"><div class="ml">Решение</div><div class="mv '+decisionTone(gate.decision)+'">'+escapeHtml(gate.decision||'—')+'</div></div>'
+    +'</div>';
+  html+='<div class="metrics">';
+  for(const key of Object.keys(judgeLabels)){
+    const raw=judges[key]||{};
+    html+='<div class="metric"><div class="ml">'+escapeHtml(judgeLabels[key])+'</div><div class="mv '+judgeTone(raw)+'">'+escapeHtml(raw.score ?? '—')+'</div></div>';
+  }
+  html+='</div>';
+  html+=renderIssueList('Критические ошибки', gate.critical_errors, 'нет');
+  html+=renderIssueList('Предупреждения', gate.warnings, 'нет');
+  html+=renderIssueList('Рекомендации', gate.recommendations, 'нет');
+  html+='<div style="margin-top:12px">';
+  for(const key of Object.keys(judgeLabels)){
+    html+='<details class="help"><summary>JSON: '+escapeHtml(judgeLabels[key])+'</summary>'
+      +'<div class="out">'+escapeHtml(JSON.stringify(judges[key]||{},null,2))+'</div></details>';
+  }
+  html+='</div>';
+  return html;
+}
+
 function renderFinal(totalTokens, totalCost){
-  const sm=ctx.summary, gate=ctx.gate, crm=ctx.crm, n=ctx.needs||{};
+  const sm=ctx.summary, gate=ctx.summary_quality_gate||ctx.gate, crm=ctx.crm, n=ctx.needs||{};
   const summary = (sm&&sm.summary) || '—';
   const el=document.createElement('div'); el.className='final';
   const decision = gate? gate.decision : '—';
-  const c = gate? (gate.confidence||0) : 0;
+  const c = gate? (gate.summary_quality_score ?? ((gate.confidence||0)*100)) : 0;
   const saved = crm? (crm.saved?'сохранена':'на ручной проверке') : '—';
 
   // «Итоговое саммари»: текст саммари (только суть/результат звонка,
@@ -1326,7 +1870,7 @@ function renderFinal(totalTokens, totalCost){
   metaEl.innerHTML=
     '<div class="card-b">'
     +'<div class="fmeta">'
-    +'<div class="fm">Уверенность системы: <b>'+c.toFixed(2)+'</b></div>'
+    +'<div class="fm">Summary Quality Score: <b>'+Number(c||0).toFixed(1)+'</b></div>'
     +'<div class="fm">Решение: <b>'+escapeHtml(decision)+'</b></div>'
     +'<div class="fm">Карточка CRM: <b>'+saved+'</b></div>'
     +'<div class="fm">Шагов пройдено: <b>'+pipeline.filter(s=>s.enabled).length+'</b></div>'
