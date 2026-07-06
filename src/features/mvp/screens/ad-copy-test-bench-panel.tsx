@@ -44,14 +44,18 @@ function configStorageKey(productId: string): string {
 
 /**
  * Bumped on 2026-07-06 when the data contract changed to the single
- * `{property, user_settings}` shape -- a stage list saved under the old
- * contract (flat `crm` fields, old prompts referencing `{{crm.deal_type}}`
- * etc.) would otherwise silently keep running instead of the fixed
- * defaults, since a saved config always takes priority over
- * `defaultAdCopyStages()`. Any config saved under a different version
- * is discarded so the current, correct defaults load instead.
+ * `{property, user_settings}` shape, and again the same day when
+ * `ctx.stored`'s benefits fields were nested under `benefits` (`usp`/
+ * `advantages`/`selling_points`, dropping the old flat `strengths`/
+ * `target_audience` duplicates) -- a stage list saved under either
+ * older contract (prompts referencing `{{crm.deal_type}}` or
+ * `{{ctx.stored.advantages}}` directly) would otherwise silently keep
+ * running instead of the fixed defaults, since a saved config always
+ * takes priority over `defaultAdCopyStages()`. Any config saved under
+ * a different version is discarded so the current, correct defaults
+ * load instead.
  */
-const CONFIG_VERSION = 2;
+const CONFIG_VERSION = 3;
 
 function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
   if (typeof window === "undefined") return null;
@@ -126,7 +130,26 @@ function StageReportBody({ report }: Readonly<{ report: AdCopyStageReport | unde
         </div>
       ) : null}
       {report.error ? <Alert tone="warning">{report.error}</Alert> : null}
-      {report.output !== undefined ? <pre className="max-h-56 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{stringifyPayload(report.output)}</pre> : null}
+      {report.rawResponse !== undefined ? (
+        <details className="rounded-md border border-border bg-muted p-2 text-xs">
+          <summary className="cursor-pointer select-none font-medium text-text-muted">
+            RAW-ответ модели{report.jsonRepaired ? <Badge tone="warning" className="ml-2">JSON исправлен</Badge> : null}
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-foreground">{report.rawResponse}</pre>
+          {report.jsonRepaired && report.repairedJson ? (
+            <>
+              <p className={`${FLD_LABEL_CLASS} mt-2`}>После JSON Repair</p>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-foreground">{report.repairedJson}</pre>
+            </>
+          ) : null}
+        </details>
+      ) : null}
+      {report.output !== undefined ? (
+        <div className="grid gap-1">
+          {report.rawResponse !== undefined ? <p className={FLD_LABEL_CLASS}>Итоговый валидный JSON</p> : null}
+          <pre className="max-h-56 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{stringifyPayload(report.output)}</pre>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -426,8 +449,8 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
         <p className="text-sm font-medium">Переменные в промтах</p>
         <p className="text-xs text-text-muted">
           {"{{crm.property}}"} / {"{{crm.user_settings}}"} — единый входной объект (сразу после Валидации/Нормализации). {"{{ctx.КЛЮЧ}}"} — результат любого предыдущего этапа по его «Ключу результата»:{" "}
-          {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}. Например, {"{{ctx.stored.property}}"} и {"{{ctx.stored.advantages}}"} — данные объекта и преимущества из «Единого хранилища». {"{{ctx.stored_files}}"} — файлы из «Хранилище входящих данных» (имя, формат; текст
-          доступен только для .txt/.svg).
+          {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}. Например, {"{{ctx.stored.property}}"}, {"{{ctx.stored.user_settings}}"} и {"{{ctx.stored.benefits}}"} ({"{{ctx.stored.benefits.usp}}"}/{"{{ctx.stored.benefits.advantages}}"}/
+          {"{{ctx.stored.benefits.selling_points}}"}) — единая запись «Хранилища» без дублирования. {"{{ctx.stored_files}}"} — файлы из «Хранилище входящих данных» (имя, формат; текст доступен только для .txt/.svg).
         </p>
       </Card>
 

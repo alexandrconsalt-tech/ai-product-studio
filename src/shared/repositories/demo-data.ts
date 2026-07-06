@@ -813,11 +813,9 @@ const CRM_INPUT_JSON_SCHEMA_TEXT = `{
 }`;
 
 const BENEFITS_JSON_SCHEMA_TEXT = `{
-  "advantages": "string[]",
   "usp": "string",
-  "strengths": "string[]",
-  "selling_points": "string[]",
-  "target_audience": "string[]"
+  "advantages": "string[] (готовые выгоды, не характеристики, min 3)",
+  "selling_points": "string[]"
 }`;
 
 const AD_OUTPUT_JSON_SCHEMA_TEXT = `{
@@ -832,9 +830,12 @@ const QUALITY_CHECK_JSON_SCHEMA_TEXT = `{
   "style_ok": "boolean",
   "language_ok": "boolean",
   "prohibited_words_ok": "boolean",
+  "ai_cliches_ok": "boolean",
   "readability_score": "number (0-100)",
   "seo_ok": "boolean",
   "duplicates_ok": "boolean",
+  "user_settings_ok": "boolean",
+  "platform_requirements_ok": "boolean",
   "title": "string",
   "description": "string",
   "cta": "string",
