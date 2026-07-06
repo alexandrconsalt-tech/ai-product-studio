@@ -446,6 +446,7 @@ function defaultPipeline(){
 — Не дублируй в саммари данные, которые уже есть или должны быть в карточке заявки: полный адрес объекта, площадь, этаж, этажность, стоимость объекта, бюджет/ценовую вилку, характеристики объекта (ремонт, отделка, состояние пола и т.п.), номера телефонов.
 — Если такие данные важны для смысла, обобщай без значений: «интересуется конкретным объектом», «уточняла параметры объекта», «обсудили бюджет», «рассматривает варианты с разным состоянием», «оставила контакт для связи».
 — Не включай характеристики объекта из объявления и точную идентификацию объекта. Допустимо только обобщение уровня «интересуется конкретной квартирой/вариантами в нужной локации».
+— Запрещённые формулировки: «по адресу …», «квартира по …», «квартирой по …», «на улице …», «на [название улицы], [номер]», «агент видит номер», «отобразился номер», «по отобразившемуся номеру», «номер клиента».
 — Не пиши отрицательные факты: «источник средств не определён», «телефон не прозвучал», «критериев не называл».
 — Не пересказывай приветствия, любезности, служебные реплики.
 — Нецензурную лексику и оскорбления не цитируй — передай смысл нейтрально.
@@ -579,10 +580,12 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // Agent rewrite, Checker exceptions, Quality Gate hallucination override).
 // V8.2 adds the CRM-card no-duplication policy for summaries and a
 // deterministic Quality Gate scan for leaked card fields.
+// V8.3 adds deterministic pre-Gate summary cleanup for removable card
+// duplicates so useful runs do not get stuck in REVIEW for one phrase.
 // A stage list saved under an older version is discarded so the fixed
 // defaults load instead of silently keeping outdated prompts forever --
 // same reasoning/pattern as CONFIG_VERSION in ad-copy-test-bench-panel.tsx.
-const PIPELINE_VERSION = 3;
+const PIPELINE_VERSION = 4;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
@@ -694,6 +697,68 @@ function detectForbiddenSummaryDetails(summary){
     if(m) found.push({kind:rule.kind, label:rule.label, value:m[0]});
   }
   return found;
+}
+
+function escapeRegExp(str){
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+}
+
+function cleanupSummaryText(summary, forbiddenDetails){
+  let text=String(summary||'');
+  if(!text.trim()) return {summary:text, changed:false, notes:[]};
+  const notes=[];
+  const replace = (rx, value, note) => {
+    const next=text.replace(rx, value);
+    if(next!==text) notes.push(note);
+    text=next;
+  };
+
+  replace(/\b(?:интересуется|интересовался|интересовалась)\s+(?:квартирой|объектом)\s+(?:по|на)\s+[^,.;\n]+(?:\s*\([^)]*\))?/gi,
+    'интересуется конкретной квартирой',
+    'точный объект заменён на обобщение');
+  replace(/\b(?:квартира|квартирой|объект|объектом)\s+(?:по|на)\s+[^,.;\n]+(?:\s*\([^)]*\))?/gi,
+    'конкретная квартира',
+    'адресная формулировка объекта заменена на обобщение');
+  replace(/\bпо\s+адресу\s+[^,.;\n]+(?:\s*\([^)]*\))?/gi,
+    'по конкретному объекту',
+    'адрес заменён на обобщение');
+  replace(/\b(?:ул\.?|улица|проспект|пр-т|шоссе|переулок|пер\.?|бульвар|б-р|проезд|площадь|пл\.?)\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z0-9 .-]*,\s*\d+[А-ЯЁA-Za-zА-Яа-я0-9./-]*/gi,
+    'конкретный объект',
+    'полный адрес удалён');
+  replace(/\b[А-ЯЁA-Z][а-яёa-z-]+(?:ая|яя|ский|ская|ное|ный|ная|ой|ий)\s*,\s*\d+[А-ЯЁA-Za-zА-Яа-я0-9./-]*/g,
+    'конкретный объект',
+    'адрес без типа улицы удалён');
+  replace(/\b(?:\+?7|8)?[\s(.-]*\d{3}[\s). -]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}\b/g,
+    'контакт клиента',
+    'номер телефона удалён');
+  replace(/агент\s+свяжется\s+по\s+отобразив[а-яё]*\s+номеру/gi,
+    'агент свяжется с клиентом',
+    'связь по номеру обобщена');
+  replace(/[^.;\n]*(?:видит|получил|записал|отобразил[а-яё]*|отобразил[а-яё]*\s+у\s+агента)[^.;\n]*(?:номер|контакт)[^.;\n]*(?:[.;]\s*)?/gi,
+    '',
+    'служебная фраза про номер удалена');
+  replace(/\b(?:агент\s+)?(?:подтвердил,?\s+что\s+)?(?:видит|получил|записал|есть|отобразился|отобразился у агента)[^.;\n]*(?:номер|контакт)[^.;\n]*(?:[.;]\s*)?/gi,
+    '',
+    'служебная фраза про номер удалена');
+
+  for(const item of forbiddenDetails||[]){
+    const raw=typeof item==='string'?item:(item&&item.value);
+    if(!raw || String(raw).length<3) continue;
+    const rx=new RegExp(escapeRegExp(raw),'g');
+    const replacement=/номер|телефон|контакт/i.test(raw) ? 'контакт клиента' : (/квартир/i.test(raw) ? 'конкретной квартирой' : 'конкретный объект');
+    replace(rx, replacement, 'фрагмент проверщика заменён: '+raw);
+  }
+
+  text=text
+    .replace(/\s+([,.;:])/g,'$1')
+    .replace(/([.!?])\s*([.!?])+/g,'$1')
+    .replace(/([.!?])(?=\S)/g,'$1 ')
+    .replace(/([.!?]\s+)([а-яё])/g, (_,p,c)=>p+c.toUpperCase())
+    .replace(/[ \t]{2,}/g,' ')
+    .replace(/\n[ \t]+/g,'\n')
+    .replace(/(?:^|\n)\s*[.;]\s*/g,'\n')
+    .trim();
+  return {summary:text, changed:text!==String(summary||''), notes:[...new Set(notes)]};
 }
 
 function levenshtein(a,b){
@@ -815,7 +880,8 @@ const CODE_FUNCS = {
   // ── Quality Gate: уверенность системы + решение — детерминированно ───────
   gate(stage,ctx){
     const W={evidence:.25, validation:.15, schema:.15, fields:.15, check:.30};
-    const st=ctx.store||{}, f=(st.record||ctx.facts||{}), n=ctx.needs||{}, o=ctx.outcome||{}, sm=ctx.summary||{}, chk=ctx.summary_check||{};
+    const st=ctx.store||{}, f=(st.record||ctx.facts||{}), n=ctx.needs||{}, o=ctx.outcome||{}, chk=ctx.summary_check||{};
+    let sm=ctx.summary||{};
     // цитаты: из хранилища + доп. проверка кодом для потребностей и результата
     const extra=[[n.timeline!=='не определено'?n.timeline:null, n.timeline_citation],[o.next_step,o.next_step_citation]];
     let ev=st.evidence? st.evidence.verified:0, et=st.evidence? st.evidence.total:0;
@@ -834,9 +900,22 @@ const CODE_FUNCS = {
     const keyFields=[f.client_name, n.timeline, o.call_result, sm.summary];
     const fields= keyFields.filter(v=>v!==undefined&&v!==null&&v!=='').length/keyFields.length;
     const checkerForbidden=Array.isArray(chk.forbidden_card_duplicates) ? chk.forbidden_card_duplicates : [];
-    const codeForbidden=detectForbiddenSummaryDetails(sm.summary);
+    let codeForbidden=detectForbiddenSummaryDetails(sm.summary);
+    let cleanup={summary:sm.summary||'', changed:false, notes:[]};
+    if((checkerForbidden.length || codeForbidden.length) && sm.summary){
+      cleanup=cleanupSummaryText(sm.summary, checkerForbidden.concat(codeForbidden));
+      if(cleanup.changed){
+        ctx.summary={...sm, summary:cleanup.summary};
+        sm=ctx.summary;
+        codeForbidden=detectForbiddenSummaryDetails(sm.summary);
+      }
+    }
+    const remainingCheckerForbidden=checkerForbidden.filter(x=>{
+      const raw=typeof x==='string'?x:JSON.stringify(x);
+      return raw && sm.summary && sm.summary.includes(raw);
+    });
     const forbiddenDetails=[
-      ...checkerForbidden.map(x=>typeof x==='string'?x:JSON.stringify(x)),
+      ...remainingCheckerForbidden.map(x=>typeof x==='string'?x:JSON.stringify(x)),
       ...codeForbidden.map(x=>x.label+': '+x.value)
     ];
     const uniqueForbidden=[...new Set(forbiddenDetails.filter(Boolean))];
@@ -864,6 +943,9 @@ const CODE_FUNCS = {
     const hardIssueCount=hallucinationCount + forbiddenCount + piiCount;
     const hardIssueOverride = hardIssueCount>0 && (decision==='AUTO_SAVE' || decision==='AUTO_SAVE + лог');
     const reasonChecks=[{label:action, pass:stt==='ok', warn:stt==='warn'}];
+    if(cleanup.changed){
+      reasonChecks.push({label:'Саммари автоматически очищено от дублей карточки: '+(cleanup.notes.join('; ')||'устранимые фрагменты удалены'), pass:true});
+    }
     if(hardIssueOverride){
       decision='REVIEW';
       action='Найдены критические проблемы саммари — обязательна ручная проверка, независимо от confidence';
@@ -873,8 +955,8 @@ const CODE_FUNCS = {
       if(piiCount>0) reasonChecks.push({label:'Причина: персональные данные/контакты в саммари: '+piiCount, pass:false});
     }
 
-    return {output:{decision, action, confidence:+conf.toFixed(3), critical_issues:critical, hallucination_override:hallucinationCount>0 && hardIssueOverride, forbidden_card_duplicates:uniqueForbidden, forbidden_override:forbiddenCount>0 && hardIssueOverride},
-      metrics:[['Решение',decision],['Уверенность системы',conf.toFixed(2)],['Крит. проблем',critical]],
+    return {output:{decision, action, confidence:+conf.toFixed(3), critical_issues:critical, hallucination_override:hallucinationCount>0 && hardIssueOverride, forbidden_card_duplicates:uniqueForbidden, forbidden_override:forbiddenCount>0 && hardIssueOverride, summary_rewritten:cleanup.changed, resolved_forbidden_card_duplicates:cleanup.changed?checkerForbidden.concat(cleanup.notes):[]},
+      metrics:[['Решение',decision],['Уверенность системы',conf.toFixed(2)],['Крит. проблем',critical],['Автоочистка саммари',cleanup.changed?'да':'нет']],
       status:stt,
       confidenceBreakdown:breakdown,
       checks:reasonChecks.concat(extraChecks)};

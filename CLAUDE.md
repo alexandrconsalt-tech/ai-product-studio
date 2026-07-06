@@ -1868,4 +1868,12 @@ Is this document still trustworthy as the single source of truth, or does it nee
 
 **Config versioning.** `PIPELINE_VERSION` was bumped from `2` to `3` so browsers with previously saved Pipeline Lab configs discard stale prompts and load the V8.2 defaults.
 
+## Addendum (2026-07-06, ninth same-day change) — Pipeline Lab V8.3: deterministic summary cleanup before CRM save
+
+**Reason.** A post-V8.2 real run proved the guardrail worked but created an avoidable manual-review case: the Summary Agent still wrote an exact object address, the Checker correctly reported `forbidden_card_duplicates`, and the Quality Gate correctly blocked `AUTO_SAVE`. The desired behavior for this class of error is not permanent REVIEW, but automatic removal/generalization of the forbidden CRM-card duplicate before the CRM step.
+
+**Changed in `public/pipeline-lab-v3.html`.** The Summary Agent prompt now explicitly bans address/contact phrasings such as "по адресу ...", "квартирой по ...", "агент видит номер", "отобразился номер", and "по отобразившемуся номеру". `PIPELINE_VERSION` was bumped from `3` to `4` so stale saved browser configs load the new defaults.
+
+**Gate behavior.** `CODE_FUNCS.gate` now runs `cleanupSummaryText()` before final critical-issue counting. It generalizes removable forbidden details in `ctx.summary.summary` itself (for example exact object/address phrases become "интересуется конкретной квартирой"; phone/contact phrases are removed or generalized). The following CRM stage reads the cleaned `ctx.summary`, so the saved card no longer contains the forbidden duplicate. If cleanup removes all detected duplicates and no hallucinations/PII remain, the normal confidence thresholds may still produce `AUTO_SAVE`/`AUTO_SAVE + лог`; if critical issues remain, the V8.2 REVIEW cap still applies.
+
 *End of document. Last synthesized 2026-07-03 from a full-repository discovery pass covering `knowledge-import/` (20 files + README + CLAUDE.md), `pdf-notes.txt`, `orchestrator/` (8 files + README), `skills/senior-ai-solution-architect/` (15 files + README), `skills/senior-product-manager/` (13 files + README), `docs/design/` (8 files), `docs/ux/` (9 files), `docs/domain/` (4 files), `docs/mvp/` (4 files), and the full `src/` tree (12 entities, 7 stores, the repository/simulation layer, `shared/ui`, and `features/mvp`). Every concrete claim above was checked against a real file at time of writing — see §31 for the terminology conflicts found and §63 for the technical debt found during that pass.*
