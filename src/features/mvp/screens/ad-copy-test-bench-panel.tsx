@@ -42,20 +42,10 @@ function configStorageKey(productId: string): string {
   return `adCopyTestBench.config.${productId}`;
 }
 
-/**
- * Bumped on 2026-07-06 when the data contract changed to the single
- * `{property, user_settings}` shape, and again the same day when
- * `ctx.stored`'s benefits fields were nested under `benefits` (`usp`/
- * `advantages`/`selling_points`, dropping the old flat `strengths`/
- * `target_audience` duplicates) -- a stage list saved under either
- * older contract (prompts referencing `{{crm.deal_type}}` or
- * `{{ctx.stored.advantages}}` directly) would otherwise silently keep
- * running instead of the fixed defaults, since a saved config always
- * takes priority over `defaultAdCopyStages()`. Any config saved under
- * a different version is discarded so the current, correct defaults
- * load instead.
- */
-const CONFIG_VERSION = 3;
+// Version is persisted as migration metadata only. User-edited stage
+// configs are authoritative and must survive deploys; a version bump must
+// never silently discard prompts/names the user saved in the app.
+const CONFIG_VERSION = 4;
 
 function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
   if (typeof window === "undefined") return null;
@@ -63,7 +53,10 @@ function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
     const raw = window.localStorage.getItem(configStorageKey(productId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.version === CONFIG_VERSION && Array.isArray(parsed.stages) && parsed.stages.length > 0) {
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.stages) && parsed.stages.length > 0) {
       return parsed.stages;
     }
     return null;
@@ -321,7 +314,11 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
   }, [productId]);
 
   const updateStage = (id: string, next: AdCopyStageConfig) => {
-    setStages((current) => current.map((stage) => (stage.id === id ? next : stage)));
+    setStages((current) => {
+      const updated = current.map((stage) => (stage.id === id ? next : stage));
+      saveStoredStages(productId, updated);
+      return updated;
+    });
   };
   const moveStage = (index: number, direction: -1 | 1) => {
     setStages((current) => {
@@ -329,6 +326,7 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
       const target = index + direction;
       if (target < 0 || target >= next.length) return current;
       [next[index], next[target]] = [next[target], next[index]];
+      saveStoredStages(productId, next);
       return next;
     });
   };
@@ -340,7 +338,11 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
     });
   };
   const persistAll = () => saveStoredStages(productId, stages);
-  const addStage = () => setStages((current) => [...current, createBlankStage()]);
+  const addStage = () => setStages((current) => {
+    const next = [...current, createBlankStage()];
+    saveStoredStages(productId, next);
+    return next;
+  });
 
   const handleInsertExample = () => setRawInput(JSON.stringify(AD_COPY_INPUT_EXAMPLE, null, 2));
   const handleClear = () => {
@@ -350,6 +352,7 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
   };
 
   const handleRun = async () => {
+    saveStoredStages(productId, stages);
     setRunning(true);
     setRunError(null);
     setLastResult(null);

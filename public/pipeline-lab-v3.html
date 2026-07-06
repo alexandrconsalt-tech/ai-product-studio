@@ -582,10 +582,9 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // deterministic Quality Gate scan for leaked card fields.
 // V8.3 adds deterministic pre-Gate summary cleanup for removable card
 // duplicates so useful runs do not get stuck in REVIEW for one phrase.
-// A stage list saved under an older version is discarded so the fixed
-// defaults load instead of silently keeping outdated prompts forever --
-// same reasoning/pattern as CONFIG_VERSION in ad-copy-test-bench-panel.tsx.
-const PIPELINE_VERSION = 4;
+// V8.4 makes saved user configs durable across deploys: version is now
+// migration metadata, never a reason to discard a user's saved edits.
+const PIPELINE_VERSION = 5;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
@@ -594,11 +593,15 @@ function loadPipelineConfig(){
     const raw=localStorage.getItem(CONFIG_STORAGE_KEY);
     if(!raw) return null;
     const parsed=JSON.parse(raw);
-    // Legacy bare-array format (pre-versioning) has no way to tell which
-    // prompt revision it was saved under -- treat as stale, not valid.
-    if(Array.isArray(parsed)) return null;
-    if(!parsed || parsed.version!==PIPELINE_VERSION || !Array.isArray(parsed.stages) || !parsed.stages.length) return null;
-    return parsed.stages.map(x=>({id:s(), ...x}));
+    // User-edited configs are authoritative. Earlier builds discarded a
+    // saved stage list when `PIPELINE_VERSION` changed, which protected
+    // shipped defaults but also erased real user work after a deploy. From
+    // V8.4 onward, version is migration metadata only: any saved stage list
+    // is loaded and then re-saved under the current version on the next save
+    // or run. Legacy bare-array exports are accepted for the same reason.
+    const stages=Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.stages) ? parsed.stages : null;
+    if(!stages || !stages.length) return null;
+    return stages.map(x=>({id:s(), ...x}));
   }catch(e){ return null; }
 }
 
@@ -1142,6 +1145,8 @@ const runStatus=document.getElementById('runStatus');
 const runBtn=document.getElementById('runBtn');
 
 async function runPipeline(){
+  syncPipelineFromEditor();
+  savePipelineConfig();
   const transcript=document.getElementById('transcript').value.trim();
   if(!transcript){ toast('Загрузите транскрипцию'); return; }
   const active=pipeline.filter(s=>s.enabled);
@@ -1347,6 +1352,30 @@ function renderFinal(totalTokens, totalCost){
 const stagesEl=document.getElementById('stages');
 function stageTypeMeta(stage){ return TYPE_META[stage.type]||TYPE_META.code; }
 
+function syncPipelineFromEditor(){
+  const cards=[...stagesEl.querySelectorAll('.stage')];
+  cards.forEach((el,i)=>{
+    const stage=pipeline[i];
+    if(!stage) return;
+    const enabled=el.querySelector('[data-en]');
+    const name=el.querySelector('[data-name]');
+    const type=el.querySelector('[data-type]');
+    const outKey=el.querySelector('[data-outkey]');
+    const prompt=el.querySelector('[data-prompt]');
+    const model=el.querySelector('[data-model]');
+    const codeFn=el.querySelector('[data-codefn]');
+    const vendor=el.querySelector('[data-vendor]');
+    if(enabled) stage.enabled=enabled.checked;
+    if(name) stage.name=name.value;
+    if(type) stage.type=type.value;
+    if(outKey) stage.outKey=outKey.value.trim();
+    if(prompt) stage.prompt=prompt.value;
+    if(model) stage.model=model.value;
+    if(codeFn) stage.codeFn=codeFn.value;
+    if(vendor) stage.vendor=vendor.value.trim();
+  });
+}
+
 function renderStages(){
   stagesEl.innerHTML='';
   pipeline.forEach((stage,i)=>{
@@ -1427,6 +1456,7 @@ function renderStages(){
     el.querySelector('[data-down]').addEventListener('click',()=>{if(i<pipeline.length-1){[pipeline[i+1],pipeline[i]]=[pipeline[i],pipeline[i+1]];renderStages();}});
     el.querySelector('[data-del]').addEventListener('click',()=>{pipeline.splice(i,1);renderStages();});
     el.querySelector('[data-save]').addEventListener('click',()=>{
+      syncPipelineFromEditor();
       savePipelineConfig();
       toast('Шаг «'+stage.name+'» сохранён — будет использоваться в следующих запусках');
     });
