@@ -473,16 +473,26 @@ if(PRODUCT_NAME){
   document.title = PRODUCT_NAME + ' — AI Product Studio';
 }
 const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID : PIPELINE_CONFIG_STORAGE;
+// Bumped whenever a shipped default prompt/rule changes (V8.1, 2026-07-06:
+// transcript passed to step 7, budget/timeline extraction rules, Summary
+// Agent rewrite, Checker exceptions, Quality Gate hallucination override).
+// A stage list saved under an older version is discarded so the fixed
+// defaults load instead of silently keeping outdated prompts forever --
+// same reasoning/pattern as CONFIG_VERSION in ad-copy-test-bench-panel.tsx.
+const PIPELINE_VERSION = 2;
 function savePipelineConfig(){
-  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(pipeline.map(sanitize)));
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
 function loadPipelineConfig(){
   try{
     const raw=localStorage.getItem(CONFIG_STORAGE_KEY);
     if(!raw) return null;
-    const arr=JSON.parse(raw);
-    if(!Array.isArray(arr) || !arr.length) return null;
-    return arr.map(x=>({id:s(), ...x}));
+    const parsed=JSON.parse(raw);
+    // Legacy bare-array format (pre-versioning) has no way to tell which
+    // prompt revision it was saved under -- treat as stale, not valid.
+    if(Array.isArray(parsed)) return null;
+    if(!parsed || parsed.version!==PIPELINE_VERSION || !Array.isArray(parsed.stages) || !parsed.stages.length) return null;
+    return parsed.stages.map(x=>({id:s(), ...x}));
   }catch(e){ return null; }
 }
 
