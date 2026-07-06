@@ -812,11 +812,27 @@ const CODE_FUNCS = {
     else if(conf>=0.80){decision='AUTO_SAVE + лог';action='Публикация + выборочный контроль';stt='ok';}
     else if(conf>=0.65){decision='RETRY';action='Повтор на Claude Sonnet 4.6';stt='warn';}
     else {decision='FALLBACK';action='Показать транскрипцию + «Проверьте вручную»';stt='bad';}
-    return {output:{decision, action, confidence:+conf.toFixed(3), critical_issues:critical},
+
+    // V8.1, жёсткое правило поверх взвешенного скоринга: критические
+    // галлюцинации (не PII — именно hallucinations) никогда не должны
+    // проходить в AUTO_SAVE, независимо от итогового confidence. Если
+    // расчёт уже дал RETRY/FALLBACK, эти решения и так строже REVIEW —
+    // их не трогаем, только понижаем AUTO_SAVE-исходы.
+    const hallucinationCount=(chk.hallucinations||[]).length;
+    const hallucinationOverride = hallucinationCount>0 && (decision==='AUTO_SAVE' || decision==='AUTO_SAVE + лог');
+    const reasonChecks=[{label:action, pass:stt==='ok', warn:stt==='warn'}];
+    if(hallucinationOverride){
+      decision='REVIEW';
+      action='Найдены галлюцинации ('+hallucinationCount+') — обязательна ручная проверка, независимо от confidence';
+      stt='bad';
+      reasonChecks.push({label:'Причина: галлюцинации: '+hallucinationCount, pass:false});
+    }
+
+    return {output:{decision, action, confidence:+conf.toFixed(3), critical_issues:critical, hallucination_override:hallucinationOverride},
       metrics:[['Решение',decision],['Уверенность системы',conf.toFixed(2)],['Крит. проблем',critical]],
       status:stt,
       confidenceBreakdown:breakdown,
-      checks:[{label:action, pass:stt==='ok', warn:stt==='warn'}].concat(extraChecks)};
+      checks:reasonChecks.concat(extraChecks)};
   },
 
   // ── этап CRM: сборка карточки и симуляция сохранения ─────────────────────
