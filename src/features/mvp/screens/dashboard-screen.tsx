@@ -25,6 +25,29 @@ function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("ru-RU");
 }
 
+function getFinalSummary(report: unknown): string | null {
+  if (!report || typeof report !== "object") return null;
+  const result = "result" in report ? (report as { result?: unknown }).result : undefined;
+  if (!result || typeof result !== "object") return null;
+
+  const summary = "summary" in result ? (result as { summary?: unknown }).summary : undefined;
+  if (summary && typeof summary === "object" && "summary" in summary) {
+    const value = (summary as { summary?: unknown }).summary;
+    if (typeof value === "string" && value.trim()) return value;
+  }
+
+  const crm = "crm" in result ? (result as { crm?: unknown }).crm : undefined;
+  if (crm && typeof crm === "object" && "card" in crm) {
+    const card = (crm as { card?: unknown }).card;
+    if (card && typeof card === "object" && "summary" in card) {
+      const value = (card as { summary?: unknown }).summary;
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+
+  return null;
+}
+
 function StatCard({ icon, label, value, hint }: Readonly<{ icon: React.ReactNode; label: string; value: string; hint?: string }>) {
   return (
     <Card className="grid gap-1">
@@ -44,6 +67,8 @@ function StatCard({ icon, label, value, hint }: Readonly<{ icon: React.ReactNode
 // full per-stage report Pipeline Lab v3's postMessage bridge captured
 // (same shape as its own "Скачать полный отчёт" download).
 function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; onClose: () => void }>) {
+  const finalSummary = getFinalSummary(run.report);
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4 backdrop-blur-sm">
       <Dialog className="grid max-h-[85vh] w-full max-w-3xl gap-3 overflow-hidden">
@@ -65,6 +90,12 @@ function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; on
           <div className="grid gap-1">
             <p className="text-sm font-medium">Входные данные</p>
             <pre className="max-h-40 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{run.transcript}</pre>
+          </div>
+        ) : null}
+        {finalSummary ? (
+          <div className="grid gap-1">
+            <p className="text-sm font-medium">Итоговое саммари</p>
+            <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-sm text-foreground">{finalSummary}</div>
           </div>
         ) : null}
         <div className="grid min-h-0 flex-1 gap-1">
@@ -98,7 +129,7 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
           <button
             key={run.id}
             type="button"
-            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-6"
+            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-7"
             onClick={() => setSelectedRun(run)}
           >
             <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
@@ -108,6 +139,7 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
             </span>
             <span>{formatUsd(run.costUsd)}</span>
             <span>{formatMs(run.durationMs)}</span>
+            <span>{run.confidence !== undefined ? `уверенность ${run.confidence.toFixed(2)}` : "—"}</span>
             <span>{run.qualityScore !== undefined ? `качество ${Math.round(run.qualityScore)}%` : "—"}</span>
             <span className="truncate text-text-muted">{run.decision ?? ""}</span>
           </button>
@@ -200,19 +232,19 @@ export function DashboardScreen() {
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <Card className="grid gap-2">
-                <p className="text-sm font-medium">Точность по времени</p>
+                <p className="text-sm font-medium">Точность</p>
                 <LineChart points={stats.qualityScoreSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--success))" formatValue={(value) => `${Math.round(value)}%`} />
               </Card>
               <Card className="grid gap-2">
-                <p className="text-sm font-medium">Стоимость по времени</p>
+                <p className="text-sm font-medium">Стоимость</p>
                 <LineChart points={stats.costSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--warning))" formatValue={formatUsd} />
               </Card>
               <Card className="grid gap-2">
-                <p className="text-sm font-medium">Скорость (длительность запуска)</p>
+                <p className="text-sm font-medium">Скорость</p>
                 <LineChart points={stats.durationSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--info))" formatValue={formatMs} />
               </Card>
               <Card className="grid gap-2">
-                <p className="text-sm font-medium">Уверенность по времени</p>
+                <p className="text-sm font-medium">Уверенность</p>
                 <LineChart points={stats.confidenceSeries.map((point) => ({ label: point.timestamp, value: point.value }))} stroke="hsl(var(--primary))" formatValue={(value) => value.toFixed(2)} />
               </Card>
             </div>
