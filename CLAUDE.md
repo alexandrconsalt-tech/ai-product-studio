@@ -1858,4 +1858,14 @@ Is this document still trustworthy as the single source of truth, or does it nee
 
 ---
 
+## Addendum (2026-07-06, eighth same-day change) — Pipeline Lab V8.2: CRM-card no-duplication summary policy
+
+**Reason.** A live Pipeline Lab report showed that the call-summary stage could produce a useful but CRM-unfit summary by repeating fields that already belong in the request/card itself: full object address, floor/floor count, object price or client budget, object condition/renovation/finishing details, and phone numbers. The business rule is now explicit: the free-text summary is for call meaning, client intent, agreements, and the next action; structured object/request fields stay outside the summary text.
+
+**Changed in `public/pipeline-lab-v3.html`.** The default "Генерация саммари" prompt now forbids duplicating CRM-card fields and instructs the model to generalize them when needed ("интересуется конкретным объектом", "обсудили бюджет", "уточняла параметры объекта") instead of writing exact values. The examples were rewritten to avoid exact addresses, prices, floors, object-condition details, and phone numbers. The "Проверка саммари" prompt now returns `forbidden_card_duplicates` separately from `pii_found` and caps the score when such duplicates are present.
+
+**Gate hardening.** `CODE_FUNCS.gate` now treats `forbidden_card_duplicates` as critical issues alongside hallucinations and PII. It also runs a deterministic summary scan for common leaked card fields (phone numbers, money ranges, area, floor/floor count, address-like patterns, object-condition terms) so an otherwise high-confidence run cannot reach `AUTO_SAVE`/`AUTO_SAVE + лог` if the checker misses a forbidden duplicate. In that case the decision is capped to `REVIEW`; `CODE_FUNCS.crm` already refuses to save anything except the two AUTO_SAVE decisions.
+
+**Config versioning.** `PIPELINE_VERSION` was bumped from `2` to `3` so browsers with previously saved Pipeline Lab configs discard stale prompts and load the V8.2 defaults.
+
 *End of document. Last synthesized 2026-07-03 from a full-repository discovery pass covering `knowledge-import/` (20 files + README + CLAUDE.md), `pdf-notes.txt`, `orchestrator/` (8 files + README), `skills/senior-ai-solution-architect/` (15 files + README), `skills/senior-product-manager/` (13 files + README), `docs/design/` (8 files), `docs/ux/` (9 files), `docs/domain/` (4 files), `docs/mvp/` (4 files), and the full `src/` tree (12 entities, 7 stores, the repository/simulation layer, `shared/ui`, and `features/mvp`). Every concrete claim above was checked against a real file at time of writing — see §31 for the terminology conflicts found and §63 for the technical debt found during that pass.*
