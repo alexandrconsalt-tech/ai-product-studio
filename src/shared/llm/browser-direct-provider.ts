@@ -103,10 +103,28 @@ async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL):
   return data?.choices?.[0]?.message?.content ?? "";
 }
 
-/** Prefers Anthropic when both keys are set (matches Pipeline Lab v3's own default vendor). */
+/**
+ * Prefers Anthropic when both keys are set (matches Pipeline Lab v3's
+ * own default vendor) -- but a *configured* key isn't the same as a
+ * *working* one (expired/revoked/mistyped still passes the `loadX()`
+ * presence check and only fails once actually called, e.g. Anthropic's
+ * "401 invalid x-api-key"). If Anthropic is configured but the call
+ * itself throws, and an OpenAI key is also available, fall back to it
+ * instead of hard-failing Product's AI Assist -- the same reasoning
+ * `callConfiguredLlm` already applies in the other direction.
+ */
 export async function callBrowserLlm(prompt: string): Promise<string> {
-  if (loadAnthropicApiKey()) return callAnthropic(prompt);
-  if (loadOpenAiApiKey()) return callOpenAi(prompt);
+  const anthropicKey = loadAnthropicApiKey();
+  const openAiKey = loadOpenAiApiKey();
+  if (anthropicKey) {
+    try {
+      return await callAnthropic(prompt);
+    } catch (error) {
+      if (!openAiKey) throw error;
+      return callOpenAi(prompt);
+    }
+  }
+  if (openAiKey) return callOpenAi(prompt);
   throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в разделе «Настройки».");
 }
 

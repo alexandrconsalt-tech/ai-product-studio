@@ -1700,6 +1700,18 @@ File(s)/module
 
 ---
 
+## Addendum (2026-07-06, fourth same-day fix) — Product's AI Assist now falls back to OpenAI when a configured Anthropic key is invalid
+
+**Bug reported.** "Заполнить карточку с помощью ИИ" (Product's `AiAssistPanel`, `product-screen.tsx`) failed outright with `Anthropic API 401: invalid x-api-key` even though a working OpenAI key was already saved in Настройки. Root cause in `src/shared/llm/browser-direct-provider.ts`'s `callBrowserLlm`: it only checked whether an Anthropic key was *present* (`loadAnthropicApiKey()` returns any saved string) before committing to it, never whether the call actually *succeeds* -- a saved-but-expired/revoked/mistyped key passes that presence check and only fails once Anthropic's API itself rejects it, by which point the function had already committed to that vendor and had no fallback path, unlike `callConfiguredLlm`/`callModelByName` which only ever check presence, not health, of the *first* vendor they try but were written OpenAI-first for a different reason (matching a stage's configured model).
+
+**Fix.** `callBrowserLlm` now wraps the Anthropic call in a `try/catch`: if Anthropic is configured but the call itself throws, and an OpenAI key is also configured, it transparently retries via OpenAI instead of surfacing the Anthropic error to the user. Falls through to the original hard-fail only when there's truly no other vendor to try (no OpenAI key either) -- in which case the original Anthropic error is rethrown unchanged, still informative.
+
+**Files changed:** `src/shared/llm/browser-direct-provider.ts` (the fix), new `src/shared/llm/browser-direct-provider.test.ts` (5 tests: Anthropic-only success, Anthropic-fails-falls-back-to-OpenAI, Anthropic-fails-no-OpenAI-rethrows, OpenAI-only success, neither-key-configured error message).
+
+**What was NOT changed.** `callConfiguredLlm`/`callModelByName` (used by the Ad Copy Generation test bench, which already has its own `resolveAvailableModel` fallback logic built on top of them) were left as is -- this fix was scoped to the specific reported break in Product's AI Assist. Verified: `npm run lint` clean, `npx vitest run` 236/236 passing, `npm run build` succeeds, and manually confirmed in-browser (an invalid Anthropic key + a mocked-working OpenAI key + a mocked Anthropic 401 response) that "Заполнить карточку с помощью ИИ" now successfully fills the product card via the OpenAI fallback instead of failing.
+
+---
+
 ## Appendix A — Remaining Templates
 
 The templates for Feature Specification, Prompt Specification, Pipeline Specification, Agent Specification, and ADR are defined in place at §37, §38, §39, §40, §41 respectively. Technical Debt and Incident templates are at §63 and §57. The remaining four templates follow.
