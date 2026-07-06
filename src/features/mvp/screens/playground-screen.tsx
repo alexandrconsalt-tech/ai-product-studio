@@ -28,6 +28,19 @@ const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
 const TEST_BENCH_SOURCE: PlaygroundTestRunSource = "product-test-bench";
 const AD_COPY_PIPELINE_ID = "pipeline_ad_copy_generation";
 
+/**
+ * Hidden per explicit request (2026-07-06): both the "Этапы пайплайна"
+ * node-card preview and the generic "Запустить Pipeline" (Mock LLM
+ * Provider) run bar were confusing next to each product's real test
+ * bench (Pipeline Lab v3 / Ad Copy's own panel) and are hidden across
+ * every product, not deleted -- same "hide navigation, never delete
+ * code" convention as `visibleNavItems` in `mvp-shell.tsx`. The domain
+ * Pipeline Executor itself, `PipelineStagesSection`, and every handler
+ * below are untouched and still exercised by tests / the hidden
+ * Analytics screen's Golden Dataset evaluation.
+ */
+const SHOW_DOMAIN_EXECUTOR_PREVIEW = false;
+
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
   agent: "Агент",
   llm: "LLM",
@@ -350,34 +363,38 @@ export function PlaygroundScreen() {
         </Section>
       ) : (
         <>
-          <PipelineStagesSection pipeline={pipeline} models={models} trace={lastTrace} />
+          {SHOW_DOMAIN_EXECUTOR_PREVIEW ? (
+            <>
+              <PipelineStagesSection pipeline={pipeline} models={models} trace={lastTrace} />
 
-          <Section>
-            <div className="flex items-center gap-2">
-              <Play className="size-4 text-text-muted" aria-hidden="true" />
-              <h2 className="text-lg font-semibold">Запустить Pipeline</h2>
-            </div>
-            <p className="text-sm text-text-muted">Реальный Pipeline Executor выполняет граф по узлам (топологический порядок, ветвление, fan-in). LLM-вызовы идут через Mock LLM Provider, если не настроен реальный provider.</p>
-            <Textarea className="min-h-40 font-mono text-xs" value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder="Входные данные пайплайна (текст или JSON)" />
-            <div className="flex items-center gap-2">
-              <Button variant="primary" onClick={handleRunPipeline} disabled={executing || !runInput.trim()}>
-                <Play className="size-4" aria-hidden="true" />
-                {executing ? "Выполняется…" : "Запустить"}
-              </Button>
-              {lastTrace ? (
-                <Badge tone={lastTrace.status === "succeeded" ? "success" : "error"}>
-                  {lastTrace.status === "succeeded" ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : <XCircle className="size-3.5" aria-hidden="true" />}
-                  {lastTrace.status === "succeeded" ? "Успешно" : "Ошибка"}
-                </Badge>
-              ) : null}
-            </div>
-            {runError ? (
-              <div className="flex items-center gap-2 text-sm text-error">
-                <AlertTriangle className="size-4" aria-hidden="true" />
-                {runError}
-              </div>
-            ) : null}
-          </Section>
+              <Section>
+                <div className="flex items-center gap-2">
+                  <Play className="size-4 text-text-muted" aria-hidden="true" />
+                  <h2 className="text-lg font-semibold">Запустить Pipeline</h2>
+                </div>
+                <p className="text-sm text-text-muted">Реальный Pipeline Executor выполняет граф по узлам (топологический порядок, ветвление, fan-in). LLM-вызовы идут через Mock LLM Provider, если не настроен реальный provider.</p>
+                <Textarea className="min-h-40 font-mono text-xs" value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder="Входные данные пайплайна (текст или JSON)" />
+                <div className="flex items-center gap-2">
+                  <Button variant="primary" onClick={handleRunPipeline} disabled={executing || !runInput.trim()}>
+                    <Play className="size-4" aria-hidden="true" />
+                    {executing ? "Выполняется…" : "Запустить"}
+                  </Button>
+                  {lastTrace ? (
+                    <Badge tone={lastTrace.status === "succeeded" ? "success" : "error"}>
+                      {lastTrace.status === "succeeded" ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : <XCircle className="size-3.5" aria-hidden="true" />}
+                      {lastTrace.status === "succeeded" ? "Успешно" : "Ошибка"}
+                    </Badge>
+                  ) : null}
+                </div>
+                {runError ? (
+                  <div className="flex items-center gap-2 text-sm text-error">
+                    <AlertTriangle className="size-4" aria-hidden="true" />
+                    {runError}
+                  </div>
+                ) : null}
+              </Section>
+            </>
+          ) : null}
 
           <Section className="flex min-h-0 flex-1 flex-col gap-2">
             <div className="flex items-center gap-2">

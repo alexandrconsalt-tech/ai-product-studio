@@ -1712,6 +1712,14 @@ File(s)/module
 
 ---
 
+## Addendum (2026-07-06, fifth same-day change) — Hid the generic "Этапы пайплайна"/"Запустить Pipeline" preview from every product's Playground
+
+**Change.** Per explicit request, `playground-screen.tsx`'s `PipelineStagesSection` (the read-only `NodeCard` grid showing each domain-graph node's type/model/input/output/prompt/JSON-Schema) and the "Запустить Pipeline" run bar (the generic domain executor via Mock LLM Provider) are no longer rendered for any product -- both sat awkwardly above each product's actual real test bench (Pipeline Lab v3's iframe, or Ad Copy Generation's own panel) and were confusing next to it. A single module-level flag, `SHOW_DOMAIN_EXECUTOR_PREVIEW = false`, gates both blocks (wrapped together in one `{SHOW_DOMAIN_EXECUTOR_PREVIEW ? (...) : null}`) -- same "hide, never delete" convention as `visibleNavItems` in `mvp-shell.tsx` and the hidden API-keys card in `public/pipeline-lab-v3.html`. `PipelineStagesSection` itself, `handleRunPipeline`, `executePipeline`/`realStageRegistry`, and every related handler are untouched code, just unreached from this screen while the flag is `false`.
+
+**What was NOT changed.** Ad Copy Generation's own branch (`pipeline.id === AD_COPY_PIPELINE_ID`) was already a separate code path and is unaffected; the Pipeline Lab v3 iframe section for every other product remains visible below where the hidden blocks used to sit. The domain Pipeline Executor itself is still real and still exercised by the hidden Analytics screen's Golden Dataset evaluation and by existing tests. Verified: `npm run lint` clean, `npx vitest run` 236/236 passing (unchanged -- no test asserted on this section's visibility), `npm run build` succeeds, and manually confirmed in-browser across AI Call Analysis, Lead Qualification, and Генерация текстов объявлений that the two blocks no longer render while every other Playground element (product picker, "Вход", the real test bench) is unaffected.
+
+---
+
 ## Appendix A — Remaining Templates
 
 The templates for Feature Specification, Prompt Specification, Pipeline Specification, Agent Specification, and ADR are defined in place at §37, §38, §39, §40, §41 respectively. Technical Debt and Incident templates are at §63 and §57. The remaining four templates follow.
