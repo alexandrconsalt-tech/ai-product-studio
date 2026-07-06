@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, KeyRound, Play, Plus, Save, Trash2, XCircle } from "lucide-react";
 import { Alert, Badge, Button, Card, Input, Section, Select, Switch, Textarea } from "@/shared/ui";
-import { AD_COPY_CRM_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
+import { AD_COPY_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
 import { hasBrowserLlmKeyConfigured, MODEL_OPTIONS } from "@/shared/llm/browser-direct-provider";
 import { storedFilesForContext, type StoredInputFile } from "@/shared/lib/input-file-storage";
 import { InputFileStoragePanel } from "./input-file-storage-panel";
@@ -42,13 +42,27 @@ function configStorageKey(productId: string): string {
   return `adCopyTestBench.config.${productId}`;
 }
 
+/**
+ * Bumped on 2026-07-06 when the data contract changed to the single
+ * `{property, user_settings}` shape -- a stage list saved under the old
+ * contract (flat `crm` fields, old prompts referencing `{{crm.deal_type}}`
+ * etc.) would otherwise silently keep running instead of the fixed
+ * defaults, since a saved config always takes priority over
+ * `defaultAdCopyStages()`. Any config saved under a different version
+ * is discarded so the current, correct defaults load instead.
+ */
+const CONFIG_VERSION = 2;
+
 function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(configStorageKey(productId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.version === CONFIG_VERSION && Array.isArray(parsed.stages) && parsed.stages.length > 0) {
+      return parsed.stages;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -56,7 +70,7 @@ function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
 
 function saveStoredStages(productId: string, stages: readonly AdCopyStageConfig[]): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(configStorageKey(productId), JSON.stringify(stages));
+  window.localStorage.setItem(configStorageKey(productId), JSON.stringify({ version: CONFIG_VERSION, stages }));
 }
 
 function stringifyPayload(payload: unknown): string {
@@ -69,6 +83,23 @@ const TYPE_OPTIONS: readonly AdCopyStageType[] = ["svc", "code", "llm", "check",
 
 /** Matches public/pipeline-lab-v3.html's `label.fld` (11px, uppercase, letter-spacing, muted) so field labels read the same on both surfaces. */
 const FLD_LABEL_CLASS = "block text-[11px] font-bold uppercase tracking-wider text-text-muted";
+
+const STAT_CHIP_TONE_CLASS: Record<"success" | "warning" | "error" | "neutral", string> = {
+  success: "text-success",
+  warning: "text-warning",
+  error: "text-error",
+  neutral: "text-foreground",
+};
+
+/** Compact label+value chip for the top run bar (Confidence/Время/Токены/Стоимость) -- replaces four separate full-width Badges with a tighter, aligned row. */
+function StatChip({ label, value, tone = "neutral" }: Readonly<{ label: string; value: string; tone?: "success" | "warning" | "error" | "neutral" }>) {
+  return (
+    <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">{label}</span>
+      <span className={`text-xs font-semibold ${STAT_CHIP_TONE_CLASS[tone]}`}>{value}</span>
+    </div>
+  );
+}
 
 function StageReportBody({ report }: Readonly<{ report: AdCopyStageReport | undefined }>) {
   if (!report || (report.status === "idle" && !report.output)) return null;
@@ -250,7 +281,7 @@ export type AdCopyTestBenchPanelProps = Readonly<{ productId: string; onRunCompl
  */
 export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBenchPanelProps) {
   const [stages, setStages] = React.useState<AdCopyStageConfig[]>(() => loadStoredStages(productId) ?? defaultAdCopyStages());
-  const [rawInput, setRawInput] = React.useState(() => JSON.stringify(AD_COPY_CRM_INPUT_EXAMPLE, null, 2));
+  const [rawInput, setRawInput] = React.useState(() => JSON.stringify(AD_COPY_INPUT_EXAMPLE, null, 2));
   const [reports, setReports] = React.useState<Readonly<Record<string, AdCopyStageReport>>>({});
   const [running, setRunning] = React.useState(false);
   const [runError, setRunError] = React.useState<string | null>(null);
@@ -288,7 +319,7 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
   const persistAll = () => saveStoredStages(productId, stages);
   const addStage = () => setStages((current) => [...current, createBlankStage()]);
 
-  const handleInsertExample = () => setRawInput(JSON.stringify(AD_COPY_CRM_INPUT_EXAMPLE, null, 2));
+  const handleInsertExample = () => setRawInput(JSON.stringify(AD_COPY_INPUT_EXAMPLE, null, 2));
   const handleClear = () => {
     setReports({});
     setLastResult(null);
@@ -336,6 +367,31 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
         <InputFileStoragePanel productId={productId} onFilesChange={setInputFiles} />
       </Card>
 
+      <Card className="grid gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="primary" onClick={handleRun} disabled={running || !rawInput.trim()}>
+            <Play className="size-4" aria-hidden="true" />
+            {running ? "Выполняется…" : "Прогнать пайплайн"}
+          </Button>
+          <Button variant="ghost" onClick={handleClear} disabled={running}>
+            Очистить
+          </Button>
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            {lastResult ? (
+              <>
+                <StatChip label="Confidence" value={lastResult.finalRecord ? `${lastResult.finalRecord.confidenceScore}%` : "—"} tone={lastResult.finalRecord ? (lastResult.finalRecord.lowConfidence ? "warning" : "success") : "error"} />
+                <StatChip label="Время" value={`${lastResult.totalDurationMs} мс`} />
+                <StatChip label="Токены" value={`≈${lastResult.totalTokensEstimate}`} />
+                <StatChip label="Стоимость" value={`≈$${lastResult.totalCostUsd.toFixed(4)}`} />
+              </>
+            ) : (
+              <Badge tone="neutral">готов</Badge>
+            )}
+          </div>
+        </div>
+        {runError ? <Alert tone="warning">{runError}</Alert> : null}
+      </Card>
+
       <Section>
         <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setPipelineExpanded((value) => !value)}>
           {pipelineExpanded ? <ChevronDown className="size-4 shrink-0 text-text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-text-muted" aria-hidden="true" />}
@@ -369,34 +425,10 @@ export function AdCopyTestBenchPanel({ productId, onRunComplete }: AdCopyTestBen
       <Card className="grid gap-1">
         <p className="text-sm font-medium">Переменные в промтах</p>
         <p className="text-xs text-text-muted">
-          {"{{crm.поле}}"} — данные объекта (deal_type, object_type, city, district, street, rooms, area, floor, total_floors, price, description, features, renovation, balcony, bathroom, view, infrastructure, parking, mortgage). {"{{ctx.КЛЮЧ}}"} — результат
-          любого предыдущего этапа по его «Ключу результата»: {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}. {"{{ctx.stored_files}}"} — файлы из «Хранилище входящих данных» (имя, формат; текст доступен только для .txt/.svg).
+          {"{{crm.property}}"} / {"{{crm.user_settings}}"} — единый входной объект (сразу после Валидации/Нормализации). {"{{ctx.КЛЮЧ}}"} — результат любого предыдущего этапа по его «Ключу результата»:{" "}
+          {contextKeys.map((key) => `{{ctx.${key}}}`).join(", ")}. Например, {"{{ctx.stored.property}}"} и {"{{ctx.stored.advantages}}"} — данные объекта и преимущества из «Единого хранилища». {"{{ctx.stored_files}}"} — файлы из «Хранилище входящих данных» (имя, формат; текст
+          доступен только для .txt/.svg).
         </p>
-      </Card>
-
-      <Card className="grid gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary" onClick={handleRun} disabled={running || !rawInput.trim()}>
-            <Play className="size-4" aria-hidden="true" />
-            {running ? "Выполняется…" : "▶ Прогнать пайплайн"}
-          </Button>
-          <Button variant="ghost" onClick={handleClear} disabled={running}>
-            Очистить
-          </Button>
-          {lastResult ? (
-            <>
-              <Badge tone={lastResult.finalRecord ? (lastResult.finalRecord.lowConfidence ? "warning" : "success") : "error"}>
-                {lastResult.finalRecord ? `Confidence ${lastResult.finalRecord.confidenceScore}%` : "Ошибка"}
-              </Badge>
-              <Badge tone="neutral">{lastResult.totalDurationMs} мс</Badge>
-              <Badge tone="neutral">≈{lastResult.totalTokensEstimate} токенов</Badge>
-              <Badge tone="neutral">≈${lastResult.totalCostUsd.toFixed(4)}</Badge>
-            </>
-          ) : (
-            <Badge tone="neutral">готов</Badge>
-          )}
-        </div>
-        {runError ? <Alert tone="warning">{runError}</Alert> : null}
       </Card>
 
       {lastResult?.finalRecord ? (

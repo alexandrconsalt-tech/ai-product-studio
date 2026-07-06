@@ -10,7 +10,7 @@ import type { Project } from "@/entities/Project/model/types";
 import type { Prompt } from "@/entities/Prompt/model/types";
 import type { Review } from "@/entities/Review/model/types";
 import type { Run } from "@/entities/Run/model/types";
-import { AD_COPY_CRM_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
+import { AD_COPY_INPUT_EXAMPLE } from "@/shared/model/ad-copy-crm-input";
 import type { RepositorySnapshot } from "./types";
 
 const createdAt = "2026-06-29T10:00:00.000Z";
@@ -780,36 +780,44 @@ const architectureAdCopy: Architecture = {
 };
 
 const CRM_INPUT_JSON_SCHEMA_TEXT = `{
-  "deal_type": "sale" | "rent",
-  "object_type": "string",
-  "city": "string",
-  "district": "string?",
-  "street": "string?",
-  "rooms": "number",
-  "area": "number",
-  "floor": "number?",
-  "total_floors": "number?",
-  "price": "number",
-  "description": "string?",
-  "features": "string[]?",
-  "renovation": "string?",
-  "balcony": "boolean?",
-  "bathroom": "string?",
-  "view": "string?",
-  "infrastructure": "string[]?",
-  "parking": "string?",
-  "mortgage": "boolean?",
-  "directories": "Record<string,string>?",
-  "generation_settings": "{tone?, length?, platform?}?"
+  "property": {
+    "deal_type": "string",
+    "property_type": "string",
+    "address": "string?",
+    "market_type": "string?",
+    "rooms": "number?",
+    "floor": "number?",
+    "floors_total": "number?",
+    "total_area": "number?",
+    "living_area": "number?",
+    "kitchen_area": "number?",
+    "ceiling_height": "number?",
+    "renovation": "string?",
+    "bathrooms": "number?",
+    "loggias": "number?",
+    "rooms_isolated": "boolean?",
+    "windows": "string[]?",
+    "building_material": "string?",
+    "heating": "string?",
+    "year_built": "number?",
+    "price": "number?"
+  },
+  "user_settings": {
+    "style": "string?",
+    "focus": "string[]?",
+    "text_length": "{min_characters?, max_characters?}?",
+    "target_audience": "string[]?",
+    "structure": "string?",
+    "emoji": "boolean?"
+  }
 }`;
 
 const BENEFITS_JSON_SCHEMA_TEXT = `{
   "advantages": "string[]",
   "usp": "string",
   "strengths": "string[]",
-  "target_audience": "string",
   "selling_points": "string[]",
-  "style": "string"
+  "target_audience": "string[]"
 }`;
 
 const AD_OUTPUT_JSON_SCHEMA_TEXT = `{
@@ -1126,7 +1134,7 @@ const runs: Run[] = [
     id: "run_ad_copy_seed",
     pipelineId: "pipeline_ad_copy_generation",
     status: "succeeded",
-    input: AD_COPY_CRM_INPUT_EXAMPLE,
+    input: AD_COPY_INPUT_EXAMPLE,
     output: {
       title: "2-комн. квартира 54.5 м² с видом на парк — Пресненский район",
       description:

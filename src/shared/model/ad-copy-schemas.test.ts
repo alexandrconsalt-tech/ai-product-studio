@@ -1,25 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { AD_COPY_CRM_INPUT_EXAMPLE, AdCopyCrmInputSchema } from "./ad-copy-crm-input";
+import { AD_COPY_INPUT_EXAMPLE, AdCopyPipelineInputSchema } from "./ad-copy-crm-input";
 import { AdCopyBenefitsSchema } from "./ad-copy-benefits";
 import { AdCopySchema } from "./ad-copy-output";
 import { AdCopyQualityCheckSchema } from "./ad-copy-quality-check";
 
-describe("AdCopyCrmInputSchema (Ad Copy Generation demo pipeline, stage 1/2)", () => {
+describe("AdCopyPipelineInputSchema ({property, user_settings} -- the pipeline's single input contract)", () => {
   it("accepts the realistic example used to seed Playground's default input", () => {
-    expect(AdCopyCrmInputSchema.safeParse(AD_COPY_CRM_INPUT_EXAMPLE).success).toBe(true);
+    expect(AdCopyPipelineInputSchema.safeParse(AD_COPY_INPUT_EXAMPLE).success).toBe(true);
   });
 
-  it("accepts the minimal required fields without the optional ones", () => {
-    const minimal = { deal_type: "rent", object_type: "квартира", city: "Казань", rooms: 1, area: 32, price: 45000 };
-    expect(AdCopyCrmInputSchema.safeParse(minimal).success).toBe(true);
+  it("accepts the minimal required fields (deal_type + property_type) without any optional ones", () => {
+    const minimal = { property: { deal_type: "Сдать", property_type: "Квартира" } };
+    expect(AdCopyPipelineInputSchema.safeParse(minimal).success).toBe(true);
   });
 
-  it("rejects an undocumented deal_type", () => {
-    expect(AdCopyCrmInputSchema.safeParse({ ...AD_COPY_CRM_INPUT_EXAMPLE, deal_type: "lease" }).success).toBe(false);
+  it("defaults user_settings to {} when the platform omits it", () => {
+    const result = AdCopyPipelineInputSchema.safeParse({ property: { deal_type: "Продать", property_type: "Дом" } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.user_settings).toEqual({});
   });
 
-  it("rejects a non-positive price", () => {
-    expect(AdCopyCrmInputSchema.safeParse({ ...AD_COPY_CRM_INPUT_EXAMPLE, price: 0 }).success).toBe(false);
+  it("rejects a property missing property_type", () => {
+    expect(AdCopyPipelineInputSchema.safeParse({ property: { deal_type: "Продать" } }).success).toBe(false);
+  });
+
+  it("never fails on a missing optional field such as price", () => {
+    const { price: _price, ...propertyWithoutPrice } = AD_COPY_INPUT_EXAMPLE.property as Record<string, unknown>;
+    expect(AdCopyPipelineInputSchema.safeParse({ property: propertyWithoutPrice, user_settings: AD_COPY_INPUT_EXAMPLE.user_settings }).success).toBe(true);
+  });
+
+  it("passes through unknown extra fields instead of failing (the platform may add fields over time)", () => {
+    const withExtra = { property: { ...AD_COPY_INPUT_EXAMPLE.property, some_future_field: "x" }, user_settings: AD_COPY_INPUT_EXAMPLE.user_settings };
+    expect(AdCopyPipelineInputSchema.safeParse(withExtra).success).toBe(true);
   });
 });
 
@@ -28,9 +40,8 @@ describe("AdCopyBenefitsSchema (stage 3, Агент извлечения пре�
     advantages: ["панорамные окна", "рядом парк"],
     usp: "Единственная квартира в доме с видом на парк на 12 этаже",
     strengths: ["локация", "инфраструктура"],
-    target_audience: "Семьи с детьми",
     selling_points: ["рядом школа", "два санузла"],
-    style: "деловой",
+    target_audience: ["Семьи с детьми"],
   };
 
   it("accepts a full valid shape", () => {
@@ -44,6 +55,10 @@ describe("AdCopyBenefitsSchema (stage 3, Агент извлечения пре�
   it("rejects a missing usp", () => {
     const { usp, ...invalid } = valid;
     expect(AdCopyBenefitsSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects an empty target_audience list", () => {
+    expect(AdCopyBenefitsSchema.safeParse({ ...valid, target_audience: [] }).success).toBe(false);
   });
 });
 

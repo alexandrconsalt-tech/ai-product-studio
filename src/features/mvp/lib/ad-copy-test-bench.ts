@@ -1,28 +1,51 @@
 /**
  * Editable, ctx-based test bench engine for "Генерация текстов
- * объявлений" -- rebuilt to match Pipeline Lab v3's own format exactly
- * (per explicit request): the same 5 stage types (`svc`/`llm`/`check`/
- * `code`/`store`), the same `{{ctx.KEY}}` template convention (here
- * generalized to `{{crm.field}}` for the raw/normalized input, since
- * this pipeline has no single "transcript" the way the call-analysis
- * one does), the same editable Название/Тип/Модель/Промт/Код-функция/
- * Ключ результата fields per stage, and the same "run every enabled
- * stage in order, never hard-abort on one stage's failure" behavior.
+ * объявлений" -- matches Pipeline Lab v3's own format (the same 5 stage
+ * types `svc`/`llm`/`check`/`code`/`store`, the same `{{ctx.KEY}}`
+ * template convention, the same editable Название/Тип/Модель/Промт/
+ * Код-функция/Ключ результата fields per stage, and the same "run
+ * every enabled stage in order, never hard-abort on one stage's
+ * failure" behavior).
  *
- * What's real, not decorative, and different from a freeform copy of
- * Pipeline Lab v3: the deterministic `codeFn` implementations
- * (validate/normalize/storage/quality/gate/saveAd/saveCrm) are this
- * product's actual business logic (real Zod validation against
- * `AdCopyCrmInputSchema`, a real weighted Confidence Score formula,
- * real HTML stripping), not stand-ins -- and the Quality Gate drives a
- * genuine confidence-gated retry loop (re-running the stages between
- * the last `store`-type stage and the `gate` stage up to 2 extra times
- * when confidence < 90%), which Pipeline Lab v3 itself does not have at
- * all (it always runs each enabled stage exactly once).
+ * Single data contract (2026-07-06 audit). Every stage reads and writes
+ * exactly one shape end to end -- there is deliberately no second,
+ * parallel `crm_data`/`crm_fields`/`property_data` structure anywhere:
+ *   1. `ctx.validated`  -- the platform's raw `{property, user_settings}`
+ *      input, Zod-validated (`AdCopyPipelineInputSchema`).
+ *   2. `ctx.normalized` -- the same shape, text-cleaned. Every stage
+ *      from here on reads `ctx.normalized`, never the raw input.
+ *   3. `ctx.benefits`   -- `AdCopyBenefitsSchema` (advantages/usp/
+ *      strengths/selling_points/target_audience), derived from
+ *      `ctx.normalized` alone.
+ *   4. `ctx.stored`     -- the single record `{property, user_settings,
+ *      advantages, strengths, selling_points, usp, target_audience}`
+ *      the Generation/Checker stages actually read from.
+ *   5. `ctx.ad` / `ctx.checked` -- `AdCopySchema`/`AdCopyQualityCheckSchema`
+ *      (`{title, description, cta}`, the Checker's version adding its
+ *      own pass/fail fields) -- never `advantages` again at this point.
+ *
+ * The three built-in `llm`/`check` stages (`benefits`/`generate`/
+ * `check`) additionally validate their own JSON response against the
+ * matching Zod schema (`STAGE_OUTPUT_SCHEMAS`) before it's written to
+ * `ctx` -- a shape mismatch (e.g. a misconfigured prompt returning
+ * `advantages` instead of `title`/`description`/`cta`) is reported as a
+ * real "bad" status with the exact Zod issues, not silently accepted.
+ *
+ * What's real, not decorative: the deterministic `codeFn`
+ * implementations (validate/normalize/storage/quality/gate/saveAd/
+ * saveCrm) are this product's actual business logic (real Zod
+ * validation, a real weighted Confidence Score, real HTML stripping),
+ * and the Quality Gate drives a genuine confidence-gated retry loop
+ * (re-running the stages between the last `store`-type stage and the
+ * `gate` stage up to 2 extra times when confidence < 90%).
  */
 
-import { AdCopyCrmInputSchema, type AdCopyCrmInput } from "@/shared/model/ad-copy-crm-input";
-import { callModelByName, MODEL_VENDOR, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
+import { z } from "zod";
+import { AdCopyPipelineInputSchema, type AdCopyPipelineInput, type AdCopyProperty, type AdCopyUserSettings } from "@/shared/model/ad-copy-crm-input";
+import { AdCopyBenefitsSchema, type AdCopyBenefits } from "@/shared/model/ad-copy-benefits";
+import { AdCopySchema } from "@/shared/model/ad-copy-output";
+import { AdCopyQualityCheckSchema } from "@/shared/model/ad-copy-quality-check";
+import { callModelByName, loadAnthropicApiKey, loadOpenAiApiKey, MODEL_VENDOR, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
 import type { StoredFileContext } from "@/shared/lib/input-file-storage";
 
 export type AdCopyStageType = "svc" | "llm" | "check" | "code" | "store";
@@ -114,6 +137,11 @@ function estimateCost(model: string, tokens: number): number {
 function stripHtml(text: string): string {
   return text.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
+function cleanValue(value: unknown): unknown {
+  if (typeof value === "string") return stripHtml(value);
+  if (Array.isArray(value)) return value.map(cleanValue);
+  return value;
+}
 
 /** Same `{{expr}}` replacement Pipeline Lab v3's own `tmpl()` does, generalized to a `{crm, ctx}` root instead of a single special-cased `transcript`. */
 export function tmpl(str: string, root: Readonly<{ crm: unknown; ctx: unknown }>): string {
@@ -128,6 +156,42 @@ export function tmpl(str: string, root: Readonly<{ crm: unknown; ctx: unknown }>
   });
 }
 
+/**
+ * `benefits`/`generate`/`check` are this pipeline's three built-in
+ * `llm`/`check` stages -- their JSON response is validated against the
+ * exact contract each one is supposed to produce, keyed by stage `id`.
+ * A custom stage a user adds has no entry here and is never subject to
+ * this check (freeform by design, same as Pipeline Lab v3 itself).
+ */
+const STAGE_OUTPUT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
+  benefits: AdCopyBenefitsSchema,
+  generate: AdCopySchema,
+  check: AdCopyQualityCheckSchema,
+};
+
+/**
+ * If a stage's configured model's vendor key isn't set but the *other*
+ * vendor's is, fall back to that vendor's default model instead of
+ * failing the whole stage -- e.g. the Checker defaults to Claude
+ * Sonnet 4.6, but a user who only configured an OpenAI key should still
+ * get a real (if same-vendor) self-check rather than a hard error.
+ * Falls through unchanged when neither key is configured (that's a
+ * genuine "no model available at all" case, not something to paper
+ * over) or when the requested vendor's key is already present.
+ */
+function resolveAvailableModel(preferredModel: string): Readonly<{ model: string; fallbackNote?: string }> {
+  const vendor = MODEL_VENDOR[preferredModel] ?? "anthropic";
+  const anthropicReady = Boolean(loadAnthropicApiKey());
+  const openAiReady = Boolean(loadOpenAiApiKey());
+  if (vendor === "anthropic" && !anthropicReady && openAiReady) {
+    return { model: "gpt-5-mini", fallbackNote: "(авто-переключение на GPT — ключ Anthropic не задан)" };
+  }
+  if (vendor === "openai" && !openAiReady && anthropicReady) {
+    return { model: "claude-sonnet-4-6", fallbackNote: "(авто-переключение на Claude — ключ OpenAI не задан)" };
+  }
+  return { model: preferredModel };
+}
+
 // ── Real, deterministic code-function implementations ──
 type CodeFnInput = Readonly<{ crm: Record<string, unknown>; ctx: Record<string, unknown>; rawInput: string }>;
 type CodeFnMeta = Readonly<{ attempt: number; maxAttempts: number; lastModelUsed: string }>;
@@ -140,7 +204,7 @@ function fnValidate({ rawInput }: CodeFnInput): CodeFnResult {
   } catch (error) {
     return { output: undefined, status: "bad", checks: [{ label: `Валидный JSON: ${errorMessage(error)}`, pass: false }] };
   }
-  const result = AdCopyCrmInputSchema.safeParse(parsedJson);
+  const result = AdCopyPipelineInputSchema.safeParse(parsedJson);
   if (!result.success) {
     const checks = result.error.issues.map((issue) => ({ label: `${issue.path.join(".") || "(root)"}: ${issue.message}`, pass: false }));
     return { output: parsedJson, status: "bad", checks, metrics: [{ label: "Ошибок валидации", value: String(checks.length) }] };
@@ -149,80 +213,104 @@ function fnValidate({ rawInput }: CodeFnInput): CodeFnResult {
     output: result.data,
     status: "ok",
     checks: [
-      { label: "Обязательные поля заполнены", pass: true },
+      { label: "property.deal_type и property.property_type заполнены", pass: true },
       { label: "Типы полей корректны", pass: true },
-      { label: "Диапазоны значений корректны", pass: true },
+      { label: "Необязательные поля (например, price) не блокируют валидацию", pass: true },
     ],
-    metrics: [{ label: "Полей проверено", value: String(Object.keys(parsedJson as Record<string, unknown>).length) }],
+    metrics: [{ label: "Полей в property", value: String(Object.keys(result.data.property).length) }],
   };
 }
 
 function fnNormalize({ crm }: CodeFnInput): CodeFnResult {
-  if (!crm || Object.keys(crm).length === 0) {
-    return { output: undefined, status: "bad", checks: [{ label: "Есть валидные данные для нормализации", pass: false }] };
+  const data = crm as unknown as AdCopyPipelineInput;
+  if (!data?.property || Object.keys(data.property).length === 0) {
+    return { output: undefined, status: "bad", checks: [{ label: "Есть валидные данные property для нормализации", pass: false }] };
   }
-  const data = crm as unknown as AdCopyCrmInput;
-  const normalized: AdCopyCrmInput = {
-    ...data,
-    object_type: data.object_type?.trim(),
-    city: data.city?.trim(),
-    district: data.district?.trim(),
-    street: data.street?.trim(),
-    description: data.description ? stripHtml(data.description) : data.description,
-  };
+  const property = Object.fromEntries(Object.entries(data.property).map(([key, value]) => [key, cleanValue(value)])) as AdCopyProperty;
+  const userSettings = Object.fromEntries(Object.entries(data.user_settings ?? {}).map(([key, value]) => [key, cleanValue(value)])) as AdCopyUserSettings;
+  const normalized: AdCopyPipelineInput = { property, user_settings: userSettings };
   return {
     output: normalized,
     status: "ok",
     checks: [
-      { label: "HTML удалён из описания", pass: true },
-      { label: "Поля объединены и стандартизированы", pass: true },
+      { label: "HTML удалён из текстовых полей", pass: true },
+      { label: "Единый объект {property, user_settings} сформирован (ctx.normalized)", pass: true },
     ],
   };
 }
 
 function fnStorage({ ctx }: CodeFnInput): CodeFnResult {
-  const normalized = (ctx.normalized ?? {}) as Record<string, unknown>;
-  const benefits = (ctx.benefits ?? {}) as Record<string, unknown>;
-  const merged = { ...normalized, ...benefits };
+  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyPipelineInput>;
+  const benefits = (ctx.benefits ?? {}) as Partial<AdCopyBenefits>;
+  const merged = {
+    property: normalized.property ?? {},
+    user_settings: normalized.user_settings ?? {},
+    advantages: benefits.advantages ?? [],
+    strengths: benefits.strengths ?? [],
+    selling_points: benefits.selling_points ?? [],
+    usp: benefits.usp ?? "",
+    target_audience: benefits.target_audience ?? [],
+  };
   return {
     output: merged,
     status: "ok",
-    checks: [{ label: "CRM-данные объединены с преимуществами в единый контекст", pass: Boolean(ctx.normalized && ctx.benefits) }],
-    metrics: [{ label: "Полей в хранилище", value: String(Object.keys(merged).length) }],
+    checks: [{ label: "property + user_settings + преимущества объединены в единую запись", pass: Boolean(normalized.property && benefits.advantages) }],
+    metrics: [{ label: "Преимуществ сохранено", value: String(merged.advantages.length) }],
   };
 }
 
 function fnQuality({ ctx }: CodeFnInput): CodeFnResult {
-  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyCrmInput>;
+  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyPipelineInput>;
+  const property = (normalized.property ?? {}) as Partial<AdCopyProperty>;
   const checked = (ctx.checked ?? {}) as Record<string, unknown>;
-  const title = typeof checked.title === "string" ? checked.title : "";
-  const description = typeof checked.description === "string" ? checked.description : "";
-  const cta = typeof checked.cta === "string" ? checked.cta : "";
+  const ad = (ctx.ad ?? {}) as Record<string, unknown>;
+
+  // Prefer the Checker's (possibly corrected) text; fall back to the raw
+  // generator output when the Checker didn't run -- matches fnSaveAd's
+  // own fallback, so a missing/disabled Checker never makes an
+  // otherwise-good ad look empty here.
+  const title = typeof checked.title === "string" && checked.title.trim() ? checked.title : typeof ad.title === "string" ? ad.title : "";
+  const description = typeof checked.description === "string" && checked.description.trim() ? checked.description : typeof ad.description === "string" ? ad.description : "";
+  const cta = typeof checked.cta === "string" && checked.cta.trim() ? checked.cta : typeof ad.cta === "string" ? ad.cta : "";
+
+  const validationOk = AdCopyPipelineInputSchema.safeParse(ctx.validated).success;
+  const benefitsOk = AdCopyBenefitsSchema.safeParse(ctx.benefits).success;
+  const generationOk = AdCopySchema.safeParse({ title, description, cta }).success;
 
   const structureOk = Boolean(title.trim() && description.trim() && cta.trim());
-  const requiredDataOk = [normalized.price, normalized.area, normalized.rooms, normalized.object_type].every((value) => value !== undefined && value !== null && value !== "");
-  const withinLength = title.length <= 70 && description.length <= 600;
+  const requiredDataOk = [property.deal_type, property.property_type, property.rooms, property.total_area].every((value) => value !== undefined && value !== null && value !== "");
+  const withinLength = title.length <= 90 && description.length <= 2200;
   const noForbiddenChars = !/[<>{}]/.test(`${title}${description}`);
   const platformOk = withinLength && noForbiddenChars;
 
-  const booleanFields = ["facts_ok", "style_ok", "language_ok", "prohibited_words_ok", "seo_ok", "duplicates_ok"] as const;
-  const booleanChecks = booleanFields.map((field) => checked[field] === true);
-  const checksScore = (booleanChecks.filter(Boolean).length / booleanChecks.length) * 100;
-  const readabilityScore = typeof checked.readability_score === "number" ? checked.readability_score : 50;
+  const checkerRan = ctx.checked !== undefined && Object.keys(checked).length > 0;
+  const checkerBooleanFields = ["facts_ok", "style_ok", "language_ok", "prohibited_words_ok", "seo_ok", "duplicates_ok"] as const;
+  const checkerOk = checkerRan && checkerBooleanFields.every((field) => checked[field] === true);
 
-  const structureScore = structureOk ? 100 : 40;
-  const requiredDataScore = requiredDataOk ? 100 : 50;
-  const platformScore = platformOk ? 100 : 60;
-  const rawScore = 0.35 * checksScore + 0.15 * readabilityScore + 0.2 * structureScore + 0.15 * requiredDataScore + 0.15 * platformScore;
-  const confidenceScore = Math.round(Math.max(0, Math.min(100, rawScore)));
-
-  const checks: AdCopyCheckItem[] = [
-    { label: "Проверка структуры (заголовок/описание/CTA)", pass: structureOk },
-    { label: "Проверка обязательных данных (цена/площадь/комнатность/тип)", pass: requiredDataOk },
-    { label: "Проверка требований площадок (длина, запрещённые символы)", pass: platformOk },
-    { label: `Оценка уверенности: Confidence Score ${confidenceScore}%`, pass: confidenceScore >= CONFIDENCE_THRESHOLD },
+  // Weighted average over whichever components actually ran -- a
+  // disabled/unavailable Checker is *excluded* from the denominator,
+  // not scored as a failure, so confidence reflects "how much of what
+  // ran succeeded" rather than being capped by an optional cross-check
+  // nobody asked to skip.
+  const components: { label: string; weight: number; ok: boolean }[] = [
+    { label: "Валидация входных данных", weight: 10, ok: validationOk },
+    { label: "Извлечение преимуществ", weight: 10, ok: benefitsOk },
+    { label: "Генерация объявления (title/description/cta)", weight: 15, ok: generationOk },
+    { label: "Структура текста (заголовок/описание/CTA заполнены)", weight: 15, ok: structureOk },
+    { label: "Обязательные данные объекта (тип сделки/объекта, комнаты, площадь)", weight: 15, ok: requiredDataOk },
+    { label: "Требования площадок (длина, запрещённые символы)", weight: 10, ok: platformOk },
   ];
-  return { output: { confidenceScore }, status: confidenceScore >= CONFIDENCE_THRESHOLD ? "ok" : "warn", checks };
+  if (checkerRan) components.push({ label: "Проверка объявления (Checker: факты/стиль/язык/SEO/повторы)", weight: 25, ok: checkerOk });
+
+  const totalWeight = components.reduce((sum, component) => sum + component.weight, 0);
+  const scored = components.reduce((sum, component) => sum + (component.ok ? component.weight : 0), 0);
+  const confidenceScore = Math.round((scored / totalWeight) * 100);
+
+  const checks: AdCopyCheckItem[] = components.map((component) => ({ label: component.label, pass: component.ok }));
+  if (!checkerRan) checks.push({ label: "Checker не выполнялся (отключён или недоступен) — не учитывается в расчёте", pass: true, warn: true });
+  checks.push({ label: `Confidence Score ${confidenceScore}%`, pass: confidenceScore >= CONFIDENCE_THRESHOLD });
+
+  return { output: { confidenceScore }, status: confidenceScore >= CONFIDENCE_THRESHOLD ? "ok" : "warn", checks, metrics: [{ label: "Confidence Score", value: `${confidenceScore}%` }] };
 }
 
 function fnGate({ ctx }: CodeFnInput, meta: CodeFnMeta): CodeFnResult {
@@ -257,10 +345,10 @@ function fnSaveAd({ ctx }: CodeFnInput, meta: CodeFnMeta): CodeFnResult {
 }
 
 function fnSaveCrm({ ctx }: CodeFnInput): CodeFnResult {
-  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyCrmInput>;
-  const platform = normalized.generation_settings?.platform ?? "не указана";
+  const normalized = (ctx.normalized ?? {}) as Partial<AdCopyPipelineInput>;
+  const address = normalized.property?.address ?? "не указан";
   return {
-    output: { savedToCrm: true, note: "Симуляция записи в CRM — реальной интеграции с внешней CRM в этом MVP нет.", publishedPlatform: platform },
+    output: { savedToCrm: true, note: "Симуляция записи в CRM — реальной интеграции с внешней CRM в этом MVP нет.", address },
     status: "ok",
     checks: [{ label: "Запись в CRM выполнена (симуляция)", pass: true }],
   };
@@ -278,70 +366,61 @@ const CODE_FUNCS: Record<string, (input: CodeFnInput, meta: CodeFnMeta) => CodeF
 
 // ── Default, fully editable 10-stage configuration ──
 const BENEFITS_PROMPT = `Ты — эксперт по анализу объектов недвижимости и продающему копирайтингу.
-Проанализируй структурированные данные объекта недвижимости и определи преимущества, уникальное торговое предложение, целевую аудиторию и продающие тезисы.
+Проанализируй структурированные данные объекта недвижимости и настройки пользователя, определи преимущества, уникальное торговое предложение, целевую аудиторию и продающие тезисы.
 
-Данные объекта:
-Тип сделки: {{crm.deal_type}}
-Тип объекта: {{crm.object_type}}
-Город: {{crm.city}}
-Район: {{crm.district}}
-Улица: {{crm.street}}
-Комнат: {{crm.rooms}}
-Площадь: {{crm.area}} м²
-Этаж: {{crm.floor}} из {{crm.total_floors}}
-Цена: {{crm.price}}
-Описание: {{crm.description}}
-Особенности: {{crm.features}}
-Ремонт: {{crm.renovation}}
-Балкон: {{crm.balcony}}
-Санузел: {{crm.bathroom}}
-Вид из окна: {{crm.view}}
-Инфраструктура: {{crm.infrastructure}}
-Парковка: {{crm.parking}}
-Ипотека: {{crm.mortgage}}
+Данные объекта (property):
+{{ctx.normalized.property}}
+
+Настройки генерации (user_settings):
+{{ctx.normalized.user_settings}}
 
 Верни СТРОГО валидный JSON без markdown и пояснений с полями:
 {
   "advantages": string[] (3-6 конкретных преимуществ объекта на основе реальных данных выше, ничего не выдумывай),
   "usp": string (одно уникальное торговое предложение — главный аргумент в пользу покупки),
   "strengths": string[] (сильные стороны локации, дома, планировки),
-  "target_audience": string (для кого этот объект подходит лучше всего),
   "selling_points": string[] (3-5 продающих тезисов для текста объявления),
-  "style": string (рекомендуемый стиль объявления)
+  "target_audience": string[] (для кого этот объект подходит лучше всего — учти user_settings.target_audience, если указано)
 }`;
 
 const GENERATION_PROMPT = `Ты — профессиональный копирайтер объявлений недвижимости.
-Составь продающее объявление на основе данных объекта и его преимуществ.
+Составь продающее объявление на основе данных объекта, преимуществ и пользовательских настроек генерации.
 
-Данные объекта:
-Тип сделки: {{crm.deal_type}}
-Тип объекта: {{crm.object_type}}
-Город: {{crm.city}}
-Район: {{crm.district}}
-Комнат: {{crm.rooms}}, Площадь: {{crm.area}} м², Этаж {{crm.floor}} из {{crm.total_floors}}
-Цена: {{crm.price}}
-Ремонт: {{crm.renovation}}, Балкон: {{crm.balcony}}, Вид: {{crm.view}}
+Данные объекта (property):
+{{ctx.stored.property}}
 
-Преимущества и позиционирование (от предыдущего этапа):
-{{ctx.benefits}}
+Настройки генерации (user_settings — стиль, фокус, длина текста, структура, аудитория, эмодзи):
+{{ctx.stored.user_settings}}
 
-Верни СТРОГО валидный JSON без markdown и пояснений с полями:
+Преимущества и позиционирование:
+Advantages: {{ctx.stored.advantages}}
+USP: {{ctx.stored.usp}}
+Strengths: {{ctx.stored.strengths}}
+Selling points: {{ctx.stored.selling_points}}
+Target audience: {{ctx.stored.target_audience}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений СТРОГО с тремя полями (никаких advantages/usp/других полей в ответе):
 {
-  "title": string (заголовок объявления, до 70 символов, содержит ключевые характеристики),
-  "description": string (текст объявления 3-6 предложений, продающая структура: зацепка -> характеристики -> преимущества -> призыв),
+  "title": string (заголовок объявления, до 90 символов, содержит ключевые характеристики),
+  "description": string (текст объявления; следуй user_settings.structure и придерживайся user_settings.text_length, если указаны),
   "cta": string (короткий призыв к действию)
 }
 
 Правила:
 - Используй только факты из данных объекта и преимущества выше, ничего не выдумывай.
+- Учитывай style/focus/target_audience/structure/emoji из user_settings.
 - Не используй канцеляризмы, штампы и избыточные превосходные степени без основания в фактах.`;
 
 const CHECKER_PROMPT = `Ты — независимый контролёр качества объявлений недвижимости (самопроверка перед публикацией, кросс-вендорная проверка).
 Сверь текст объявления с исходными данными объекта и правилами качества, исправь ошибки.
 
-Исходные данные объекта:
-Город: {{crm.city}}, Район: {{crm.district}}, Комнат: {{crm.rooms}}, Площадь: {{crm.area}} м², Цена: {{crm.price}}
-Преимущества: {{ctx.benefits}}
+Исходные данные объекта (property):
+{{ctx.stored.property}}
+
+Настройки генерации (user_settings):
+{{ctx.stored.user_settings}}
+
+Преимущества: {{ctx.stored.advantages}}
 
 Проверяемое объявление:
 {{ctx.ad}}
@@ -349,7 +428,7 @@ const CHECKER_PROMPT = `Ты — независимый контролёр ка�
 Проверь и верни СТРОГО валидный JSON без markdown и пояснений:
 {
   "facts_ok": boolean (все факты в объявлении соответствуют исходным данным),
-  "style_ok": boolean (стиль соответствует целевой аудитории, без канцеляризмов),
+  "style_ok": boolean (стиль соответствует user_settings.style и целевой аудитории, без канцеляризмов),
   "language_ok": boolean (нет орфографических и грамматических ошибок русского языка),
   "prohibited_words_ok": boolean (нет запрещённых слов: "лучший", "гарантия", "100%"),
   "readability_score": number (0-100, оценка читаемости текста),
@@ -421,7 +500,8 @@ export async function runAdCopyPipeline(
       let result: CodeFnResult;
       if (stage.type === "llm" || stage.type === "check") {
         const prompt = tmpl(stage.prompt ?? "", { crm, ctx });
-        const model = stage.model || (stage.type === "check" ? "claude-sonnet-4-6" : "gpt-5-mini");
+        const requestedModel = stage.model || (stage.type === "check" ? "claude-sonnet-4-6" : "gpt-5-mini");
+        const { model, fallbackNote } = resolveAvailableModel(requestedModel);
         const text = await callModelByName(prompt, model);
         const tokens = estimateTokens(prompt) + estimateTokens(text);
         const cost = estimateCost(model, tokens);
@@ -434,11 +514,27 @@ export async function runAdCopyPipeline(
         } catch {
           parsed = { raw: text };
         }
+        const schema = STAGE_OUTPUT_SCHEMAS[stage.id];
+        let status: "ok" | "warn" | "bad" = "ok";
+        const contractChecks: AdCopyCheckItem[] = [];
+        if (schema) {
+          const validated = schema.safeParse(parsed);
+          if (validated.success) {
+            parsed = validated.data ?? parsed;
+            contractChecks.push({ label: "Формат ответа соответствует контракту этапа", pass: true });
+          } else {
+            status = "bad";
+            for (const issue of (validated.error?.issues ?? []).slice(0, 6)) {
+              contractChecks.push({ label: `Контракт: ${issue.path.join(".") || "(root)"} — ${issue.message}`, pass: false });
+            }
+          }
+        }
         result = {
           output: parsed,
-          status: "ok",
+          status,
+          checks: contractChecks.length > 0 ? contractChecks : undefined,
           metrics: [
-            { label: "Модель", value: `${MODEL_VENDOR[model] ?? "?"}/${model}` },
+            { label: "Модель", value: `${MODEL_VENDOR[model] ?? "?"}/${model}${fallbackNote ? ` ${fallbackNote}` : ""}` },
             { label: "Токены (оценка)", value: String(Math.round(tokens)) },
             { label: "Стоимость (оценка)", value: `$${cost.toFixed(4)}` },
           ],
