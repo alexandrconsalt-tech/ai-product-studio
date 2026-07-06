@@ -831,9 +831,31 @@ async function callOpenAI(prompt, model){
   return { text, tokens };
 }
 
+// A *configured* key isn't the same as a *working* one -- an
+// expired/revoked/mistyped key still passes loadApiKey()/loadOpenaiKey()'s
+// presence check and only fails once the vendor's API itself rejects it
+// (e.g. Anthropic's "401 invalid x-api-key"). If the requested model's
+// vendor call throws and the *other* vendor's key is configured, retry
+// through that vendor instead of hard-failing the stage -- same
+// reasoning as src/shared/llm/browser-direct-provider.ts's
+// callBrowserLlm on the React side. Falls through to the original error
+// when there's truly no other vendor to try.
 async function callModel(prompt, model){
   const vendor = MODEL_VENDOR[model] || 'anthropic';
-  return vendor==='openai' ? callOpenAI(prompt, model) : callAnthropic(prompt, model);
+  if(vendor==='openai'){
+    try{ const r=await callOpenAI(prompt, model); return {...r, actualModel:model}; }
+    catch(err){
+      if(!loadApiKey()) throw err;
+      const r=await callAnthropic(prompt, 'claude-sonnet-4-6');
+      return {...r, actualModel:'claude-sonnet-4-6', fallbackNote:'авто-переключение на Claude — ключ OpenAI не задан или недействителен'};
+    }
+  }
+  try{ const r=await callAnthropic(prompt, model); return {...r, actualModel:model}; }
+  catch(err){
+    if(!loadOpenaiKey()) throw err;
+    const r=await callOpenAI(prompt, 'gpt-5-mini');
+    return {...r, actualModel:'gpt-5-mini', fallbackNote:'авто-переключение на GPT — ключ Anthropic не задан или недействителен'};
+  }
 }
 function parseJSON(text){
   let t=text.trim().replace(/```json/gi,'').replace(/```/g,'').trim();
@@ -853,14 +875,15 @@ async function runStage(stage, ctx){
     return r;
   } else {
     const prompt=tmpl(stage.prompt, ctx);
-    const {text:raw, tokens}=await callModel(prompt, stage.model);
+    const {text:raw, tokens, actualModel, fallbackNote}=await callModel(prompt, stage.model);
     let parsed=null, parseErr=null;
     try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
     const ms=Math.round(performance.now()-t0);
-    const cost=estimateCost(stage.model, tokens);
+    const cost=estimateCost(actualModel, tokens);
+    const modelLabel=(actualModel&&actualModel.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)')+(fallbackNote?' ('+fallbackNote+')':'');
     return { output: parsed || {raw}, raw, parseErr, ms, tokens, cost,
       status: parseErr?'warn':'ok',
-      metrics:[['Модель',stage.model&&stage.model.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude'],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
+      metrics:[['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
   }
 }

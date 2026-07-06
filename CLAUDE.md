@@ -1720,6 +1720,16 @@ File(s)/module
 
 ---
 
+## Addendum (2026-07-06, sixth same-day fix) — Pipeline Lab v3's own Checker no longer hard-fails when only the Anthropic key is invalid
+
+**Bug reported.** "Транскрибация и саммари" (AI Call Analysis, `public/pipeline-lab-v3.html`'s "Полный пайплайн VT" preset) degraded to poor quality: stage 8 "Проверка саммари" (the Checker, hardcoded to `claude-sonnet-4-6`) failed with `Anthropic API 401: invalid x-api-key`, even though every OpenAI-vendor stage (Извлечение фактов/Определение потребностей/Результат звонка/Генерация саммари) succeeded -- proving the OpenAI key was fine, only Anthropic's was invalid. The Checker's failure alone dropped `confidenceScore` from a normal ~0.87-0.92 down to 0.617 (`Проверщик (крит. штраф)` component scoring 0%, 30% of the total weight), forcing the Quality Gate into `FALLBACK` and deferring the CRM save ("Never empty card" principle) instead of auto-saving. The user asked to "restore the product's settings to how they were at 6:00 AM on 2026-07-05" -- there is no version history of a user's own browser-local Pipeline Lab v3 stage config to literally revert to (this app has no such snapshot mechanism), but the pasted evidence pointed at the exact same class of bug just fixed in `browser-direct-provider.ts` (Addendum, fourth same-day fix): a *configured* key isn't the same as a *working* one, and the vendor-dispatch function committed to whichever vendor a stage's model belongs to with no fallback if that call actually failed.
+
+**Fix.** `callModel()` in `public/pipeline-lab-v3.html` (previously: `vendor==='openai' ? callOpenAI(...) : callAnthropic(...)`, no fallback) now tries the requested vendor first and, if that call throws and the *other* vendor's key is configured, retries through it instead of failing the stage -- symmetric in both directions (works whether it's the Checker's Anthropic key or a GPT-vendor stage's OpenAI key that's the invalid one). `runStage()` was updated to price and label the report using the model that actually ran (`actualModel`), not the originally-configured one, and appends a visible `fallbackNote` ("авто-переключение на Claude/GPT — ключ ... не задан или недействителен") to the stage's "Модель" metric so a vendor substitution is never silently hidden from the report.
+
+**What was NOT changed.** The pipeline preset/stage configuration itself (prompts, thresholds, node order) is untouched -- nothing needed to be "restored" at the config level once the actual root cause (a real API failure being treated as fatal when a working fallback existed) is fixed. Verified: `node --check` on the extracted inline script (syntax), `npm run lint`/`npx vitest run` 236/236/`npm run build` all pass (this file has no dedicated test suite of its own, being a standalone non-TS asset), and manually confirmed in-browser (invalid Anthropic key + mocked-working OpenAI key + mocked Anthropic 401) that stage 8 now reports `status: "ok"` with the fallback note and a real Checker JSON response, instead of the hard `"Ошибка"` the user saw.
+
+---
+
 ## Appendix A — Remaining Templates
 
 The templates for Feature Specification, Prompt Specification, Pipeline Specification, Agent Specification, and ADR are defined in place at §37, §38, §39, §40, §41 respectively. Technical Debt and Incident templates are at §63 and §57. The remaining four templates follow.
