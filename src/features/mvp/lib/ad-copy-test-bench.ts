@@ -35,6 +35,15 @@ export const AD_COPY_TYPE_LABELS: Record<AdCopyStageType, string> = {
   store: "Хранилище",
 };
 
+/** Same per-type accent colors as public/pipeline-lab-v3.html's own TYPE_META (svc/llm/check/code/store), kept in sync by hex value so both surfaces read as one visual system. */
+export const AD_COPY_TYPE_COLORS: Record<AdCopyStageType, Readonly<{ color: string; bg: string; border: string }>> = {
+  svc: { color: "#38bdf8", bg: "rgba(56,189,248,.12)", border: "rgba(56,189,248,.4)" },
+  llm: { color: "#34d399", bg: "rgba(52,211,153,.12)", border: "rgba(52,211,153,.4)" },
+  check: { color: "#a78bfa", bg: "rgba(167,139,250,.12)", border: "rgba(167,139,250,.4)" },
+  code: { color: "#f59e0b", bg: "rgba(245,158,11,.12)", border: "rgba(245,158,11,.4)" },
+  store: { color: "#fb7185", bg: "rgba(251,113,133,.12)", border: "rgba(251,113,133,.4)" },
+};
+
 export const AD_COPY_CODE_FN_LIST = ["validate", "normalize", "storage", "quality", "gate", "saveAd", "saveCrm"] as const;
 export type AdCopyCodeFn = (typeof AD_COPY_CODE_FN_LIST)[number];
 

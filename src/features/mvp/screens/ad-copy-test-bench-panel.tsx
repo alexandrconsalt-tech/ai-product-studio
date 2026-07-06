@@ -9,6 +9,7 @@ import { storedFilesForContext, type StoredInputFile } from "@/shared/lib/input-
 import { InputFileStoragePanel } from "./input-file-storage-panel";
 import {
   AD_COPY_CODE_FN_LIST,
+  AD_COPY_TYPE_COLORS,
   AD_COPY_TYPE_LABELS,
   availableContextKeys,
   createBlankStage,
@@ -66,6 +67,9 @@ function stringifyPayload(payload: unknown): string {
 
 const TYPE_OPTIONS: readonly AdCopyStageType[] = ["svc", "code", "llm", "check", "store"];
 
+/** Matches public/pipeline-lab-v3.html's `label.fld` (11px, uppercase, letter-spacing, muted) so field labels read the same on both surfaces. */
+const FLD_LABEL_CLASS = "block text-[11px] font-bold uppercase tracking-wider text-text-muted";
+
 function StageReportBody({ report }: Readonly<{ report: AdCopyStageReport | undefined }>) {
   if (!report || (report.status === "idle" && !report.output)) return null;
   return (
@@ -117,45 +121,55 @@ function StageEditor({
 }>) {
   const [expanded, setExpanded] = React.useState(false);
   const isModelType = stage.type === "llm" || stage.type === "check";
+  const typeColor = AD_COPY_TYPE_COLORS[stage.type];
 
   return (
-    <Card className="grid gap-0 p-0">
+    <Card className="grid gap-0 overflow-hidden p-0" style={{ opacity: stage.enabled ? 1 : 0.5 }}>
       <button type="button" className="flex w-full items-center gap-3 p-3 text-left" onClick={() => setExpanded((value) => !value)}>
+        <span className="h-full w-1 shrink-0 self-stretch rounded-full" style={{ background: typeColor.color }} aria-hidden="true" />
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-extrabold" style={{ color: typeColor.color }}>
+          {index + 1}
+        </span>
+        <p className="min-w-0 flex-1 truncate text-sm font-semibold">{stage.name}</p>
+        <span
+          className="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider"
+          style={{ color: typeColor.color, background: typeColor.bg, borderColor: typeColor.border }}
+        >
+          {AD_COPY_TYPE_LABELS[stage.type]}
+        </span>
+        {report ? <Badge tone={statusTone(report.status)}>{STATUS_LABELS[report.status]}{report.attempt && report.attempt > 1 ? ` · попытка ${report.attempt}` : ""}</Badge> : null}
+        <Switch
+          checked={stage.enabled}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(event) => onChange({ ...stage, enabled: event.target.checked })}
+        />
         {expanded ? <ChevronDown className="size-4 shrink-0 text-text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-text-muted" aria-hidden="true" />}
-        <span className="text-sm font-semibold text-text-muted">{index + 1}</span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{stage.name}</p>
-          <p className="text-xs text-text-muted">{AD_COPY_TYPE_LABELS[stage.type]}</p>
-        </div>
-        <label className="flex items-center gap-1 text-xs text-text-muted" onClick={(event) => event.stopPropagation()}>
-          <Switch checked={stage.enabled} onChange={(event) => onChange({ ...stage, enabled: event.target.checked })} />
-          Вкл
-        </label>
-        {report ? <Badge tone={statusTone(report.status)}>{STATUS_LABELS[report.status]}{report.attempt && report.attempt > 1 ? ` · попытка ${report.attempt}` : ""}</Badge> : <Badge tone="neutral">{STATUS_LABELS.idle}</Badge>}
       </button>
 
       {expanded ? (
         <div className="grid gap-3 border-t border-border p-3">
-          <label className="grid gap-1 text-sm">
-            Название
-            <Input value={stage.name} onChange={(event) => onChange({ ...stage, name: event.target.value })} />
-          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1">
+              <span className={FLD_LABEL_CLASS}>Название</span>
+              <Input value={stage.name} onChange={(event) => onChange({ ...stage, name: event.target.value })} />
+            </label>
 
-          <label className="grid gap-1 text-sm">
-            Тип
-            <Select value={stage.type} onChange={(event) => onChange({ ...stage, type: event.target.value as AdCopyStageType })}>
-              {TYPE_OPTIONS.map((type) => (
-                <option key={type} value={type}>
-                  {AD_COPY_TYPE_LABELS[type]}
-                </option>
-              ))}
-            </Select>
-          </label>
+            <label className="grid gap-1">
+              <span className={FLD_LABEL_CLASS}>Тип</span>
+              <Select value={stage.type} onChange={(event) => onChange({ ...stage, type: event.target.value as AdCopyStageType })}>
+                {TYPE_OPTIONS.map((type) => (
+                  <option key={type} value={type}>
+                    {AD_COPY_TYPE_LABELS[type]}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          </div>
 
           {isModelType ? (
             <>
-              <label className="grid gap-1 text-sm">
-                Модель
+              <label className="grid gap-1">
+                <span className={FLD_LABEL_CLASS}>Модель</span>
                 <Select value={stage.model ?? MODEL_OPTIONS[0].value} onChange={(event) => onChange({ ...stage, model: event.target.value })}>
                   {MODEL_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -164,15 +178,15 @@ function StageEditor({
                   ))}
                 </Select>
               </label>
-              <label className="grid gap-1 text-sm">
-                Промт
+              <label className="grid gap-1">
+                <span className={FLD_LABEL_CLASS}>Промт</span>
                 <Textarea className="min-h-40 font-mono text-xs" value={stage.prompt ?? ""} onChange={(event) => onChange({ ...stage, prompt: event.target.value })} />
               </label>
             </>
           ) : (
             <>
-              <label className="grid gap-1 text-sm">
-                Код-функция
+              <label className="grid gap-1">
+                <span className={FLD_LABEL_CLASS}>Код-функция</span>
                 <Select value={stage.codeFn ?? ""} onChange={(event) => onChange({ ...stage, codeFn: event.target.value || undefined })}>
                   <option value="">—</option>
                   {AD_COPY_CODE_FN_LIST.map((fn) => (
@@ -182,16 +196,16 @@ function StageEditor({
                   ))}
                 </Select>
               </label>
-              <label className="grid gap-1 text-sm">
-                Исполнитель (сервис)
+              <label className="grid gap-1">
+                <span className={FLD_LABEL_CLASS}>Исполнитель (сервис)</span>
                 <Input value={stage.vendor ?? ""} onChange={(event) => onChange({ ...stage, vendor: event.target.value })} />
               </label>
               <p className="text-xs text-text-muted">Детерминированный шаг: выполняется кодом, без модели. Использует результаты предыдущих шагов из контекста.</p>
             </>
           )}
 
-          <label className="grid gap-1 text-sm">
-            {"Ключ результата (для {{ctx.КЛЮЧ}})"}
+          <label className="grid gap-1">
+            <span className={FLD_LABEL_CLASS}>{"Ключ результата (для {{ctx.КЛЮЧ}})"}</span>
             <Input value={stage.outKey} onChange={(event) => onChange({ ...stage, outKey: event.target.value })} />
           </label>
 

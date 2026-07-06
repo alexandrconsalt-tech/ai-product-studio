@@ -65,8 +65,21 @@ export function Radio({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   return <input type="radio" className={cn("size-4 border-border accent-primary", className)} {...props} />;
 }
 
+/** A real pill toggle (track + sliding thumb via `appearance-none` + `after:`), not a native checkbox glyph -- `accent-primary` alone can't restyle a checkbox into a switch shape in every browser. */
 export function Switch({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input type="checkbox" role="switch" className={cn("h-5 w-9 rounded-full accent-primary", className)} {...props} />;
+  return (
+    <input
+      type="checkbox"
+      role="switch"
+      className={cn(
+        "relative h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-border transition-colors duration-fast",
+        "after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-white after:transition-transform after:duration-fast after:content-['']",
+        "checked:bg-success checked:after:translate-x-4",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 export type SegmentedControlProps = React.HTMLAttributes<HTMLDivElement>;
