@@ -381,6 +381,13 @@ function summaryQualityStages(){
       prompt:
 `Ты — независимый проверщик критически важных фактов AI Summary для CRM агентства недвижимости.
 
+ВАЖНЫЙ КОНТЕКСТ — КАРТОЧКА CRM
+Следующий агент читает саммари ВМЕСТЕ с карточкой CRM, в которой уже есть: имя клиента, имя агента, телефон клиента, полный адрес объекта, тип сделки (купить/продать/сдать/снять), тип недвижимости, характеристики объекта (комнатность, метраж, этаж) и цена объекта.
+- НЕ снижай оценку за отсутствие этих данных в саммари: их отсутствие — требование стандарта.
+- НЕ включай их в списки пропущенного/недостающего.
+- Подтверждение статики («квартира продаётся», «номер актуален», «объявление активно») — это НЕ договорённость и НЕ критический факт; не требуй их в саммари.
+- Оценивай только информацию, которой в карточке нет: намерение, источник средств, сроки сделки, сомнения/возражения, ситуация с объектом (кто живёт, условия показа), доступность клиента, договорённости, следующий шаг.
+
 Главный принцип:
 Саммари не обязано передавать все факты звонка. Оно должно передавать только те факты, которые нужны агенту для продолжения работы с клиентом.
 
@@ -406,7 +413,10 @@ function summaryQualityStages(){
 - цену объекта;
 - номер телефона;
 - этаж, площадь, характеристики объекта, если они есть или должны быть в карточке объекта;
-- приветствия и служебные реплики.
+- приветствия и служебные реплики;
+- имя клиента (всегда есть в карточке CRM);
+- подтверждение актуальности объявления / что объект продаётся;
+- подтверждение контактного номера.
 
 Верни строго валидный JSON без markdown:
 
@@ -462,8 +472,15 @@ function summaryQualityStages(){
       prompt:
 `Ты — независимый проверщик продуктовой полезности AI Summary.
 
+ВАЖНЫЙ КОНТЕКСТ — КАРТОЧКА CRM
+Следующий агент читает саммари ВМЕСТЕ с карточкой CRM, в которой уже есть: имя клиента, имя агента, телефон клиента, полный адрес объекта, тип сделки (купить/продать/сдать/снять), тип недвижимости, характеристики объекта (комнатность, метраж, этаж) и цена объекта.
+- НЕ снижай оценку за отсутствие этих данных в саммари: их отсутствие — требование стандарта.
+- НЕ включай их в списки пропущенного/недостающего.
+- Подтверждение статики («квартира продаётся», «номер актуален», «объявление активно») — это НЕ договорённость и НЕ критический факт; не требуй их в саммари.
+- Оценивай только информацию, которой в карточке нет: намерение, источник средств, сроки сделки, сомнения/возражения, ситуация с объектом (кто живёт, условия показа), доступность клиента, договорённости, следующий шаг.
+
 Главный вопрос:
-Может ли следующий агент после прочтения саммари за 5-10 секунд понять контекст звонка и продолжить работу с клиентом без прослушивания записи?
+Может ли следующий агент после прочтения саммари за 5-10 секунд понять контекст звонка и продолжить работу с клиентом без прослушивания записи, учитывая, что карточка CRM с данными клиента и объекта у него уже открыта?
 
 Оцени не литературное качество текста, а рабочую полезность для CRM.
 Оцени только качество самого Summary. Не давай советы агенту по дальнейшей работе и не рекомендуй добавлять в Summary телефон, точный адрес, цену/порог, характеристики объекта или данные, которых не было в звонке. Формулировка "уточнить" не является рекомендацией к Summary.
@@ -518,6 +535,13 @@ function summaryQualityStages(){
       model:'claude-sonnet-4-6', outKey:'action_check',
       prompt:
 `Ты — независимый проверщик результата звонка, договорённостей и следующего шага.
+
+ВАЖНЫЙ КОНТЕКСТ — КАРТОЧКА CRM
+Следующий агент читает саммари ВМЕСТЕ с карточкой CRM, в которой уже есть: имя клиента, имя агента, телефон клиента, полный адрес объекта, тип сделки (купить/продать/сдать/снять), тип недвижимости, характеристики объекта (комнатность, метраж, этаж) и цена объекта.
+- НЕ снижай оценку за отсутствие этих данных в саммари: их отсутствие — требование стандарта.
+- НЕ включай их в списки пропущенного/недостающего.
+- Подтверждение статики («квартира продаётся», «номер актуален», «объявление активно») — это НЕ договорённость и НЕ критический факт; не требуй их в саммари.
+- Оценивай только информацию, которой в карточке нет: намерение, источник средств, сроки сделки, сомнения/возражения, ситуация с объектом (кто живёт, условия показа), доступность клиента, договорённости, следующий шаг.
 
 Твоя задача — проверить, правильно ли саммари передало, чем закончился звонок и что нужно делать дальше.
 
@@ -591,6 +615,7 @@ function summaryQualityStages(){
 10. Нет отрицательных фактов типа “источник средств не определён”, если это не нужно в Summary.
 11. Структура соответствует стандарту: краткий основной текст + статус/договорённость или следующий шаг.
 12. Summary написано итоговыми фактами, а не пересказом вопрос-ответ.
+13. Нет имени клиента и имени агента (они в карточке CRM; их присутствие в саммари — нарушение, их отсутствие — норма).
 
 Не запрещай переговорные условия клиента, если они важны для продолжения работы и написаны без точных сумм:
 - клиент просит торг;
@@ -633,6 +658,7 @@ function summaryQualityStages(){
 - Если текст трудно читать — score не выше 75.
 - Если найдено 2 или больше конструкций пересказа диалога — status = "fail", score не выше 60.
 - Если есть статус "готов к сделке" без согласованной цены, принятого предложения и следующего шага по сделке — status = "fail", score не выше 60.
+- Если есть имя клиента или агента — score не выше 80.
 - Если нарушений нет — score 90-100.
 
 Саммари:
@@ -649,6 +675,8 @@ function summaryQualityStages(){
 //  ДЕФОЛТНЫЙ ПАЙПЛАЙН — ЧЕТЫРНАДЦАТЬ ЭТАПОВ
 //  Nexara → Валидация → Факты → Хранилище → Потребности → Результат →
 //  Саммари → 5 специализированных проверщиков → Summary Quality Gate → CRM
+//  Промпты шагов 3/5/6/7/8-12 и логика Quality Gate — версия V9.1, 2026-07-07
+//  (AI Summary stabilization pass, PIPELINE_VERSION 7). См. CLAUDE.md.
 // ═══════════════════════════════════════════════════════════════════════════
 function defaultPipeline(){
   return [
@@ -678,10 +706,14 @@ function defaultPipeline(){
   "budget_citation": <дословная цитата или null>,
   "source_of_funds": [<массив из: "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено">],
   "city_or_district": <город/район или null>,
-  "phone_mentioned": <true/false — звучал ли номер телефона>
+  "phone_mentioned": <true/false — звучал ли номер телефона>,
+  "intent": <из: "купить","продать","снять","сдать","не определено">,
+  "client_availability": <ограничения/доступность клиента дословно кратко ("не работает, доступен в любое время") или null>
 }
 
 Правило про budget (V8.1): budget заполняй ТОЛЬКО если клиент явно назвал сумму как свой бюджет или лимит («рассчитываю до…», «у меня есть…», «одобрено на…»). Сумма, названная для идентификации объявления или подтверждения цены объекта (в том числе в диалоге с оператором: «цена какая в объявлении указана?» → «23 500») — это цена объекта, а НЕ бюджет клиента. В этом случае budget = null, budget_citation не заполняй.
+
+Правило про city_or_district (V9): в это поле пиши ТОЛЬКО город и/или район («СПб, Московский район»). Полный адрес объекта (улица, дом, корпус, квартира) сюда НЕ пишется — он есть в карточке объекта. Если в разговоре звучал только адрес конкретного объекта и не звучал отдельный город/район поиска — ставь null.
 
 Транскрипция:
 {{transcript}}`
@@ -713,6 +745,8 @@ function defaultPipeline(){
 
 Правило про timeline (V8.1): timeline заполняй ТОЛЬКО если клиент говорил о сроках покупки/сделки («хочу купить до…», «нужно въехать к…», «ипотека одобрена, действует до…»). Дата просмотра, встречи или созвона — это договорённость, а НЕ срок сделки: в этом случае timeline = "не определено". timeline_citation обязана содержать слова клиента именно о сроке сделки; если такой цитаты нет — timeline = "не определено".
 
+Правило про property_requirements (V9): не дублируй данные карточки объекта — адрес, комнатность, метраж, этаж, цену конкретного объявления. Пиши только ТРЕБОВАНИЯ клиента к искомому объекту, прозвучавшие в разговоре («нужен второй этаж или выше», «рядом со школой», «готов рассматривать другие варианты помимо объекта из объявления»). Если клиент обсуждал только конкретный объект из объявления без отдельных требований — property_requirements = "первичный запрос по объекту из объявления" + перечисли дополнительные пожелания, если были.
+
 Транскрипция:
 {{transcript}}`
     },
@@ -728,9 +762,21 @@ function defaultPipeline(){
 {
   "call_result": <из: "назначен показ","назначен повторный звонок","клиент думает","отказ","нецелевой звонок">,
   "next_step": <конкретный следующий шаг или null>,
+  "next_step_owner": <"агент" | "клиент" | "оба" | null>,
   "next_step_citation": <дословная цитата или null>,
   "agreements": [<достигнутые договорённости строками>]
 }
+
+Правило про agreements (V9): договорённость — это взаимное обязательство о БУДУЩЕМ действии, к которому стороны пришли в разговоре. Примеры: «агент перезвонит клиенту ближе к дате, чтобы согласовать показ», «клиент пришлёт документы до пятницы», «показ в четверг после согласования с собственником».
+
+НЕ являются договорённостями и в agreements НЕ включаются:
+- подтверждения фактов и статусов («квартира продаётся», «объявление актуально», «номер актуален»);
+- отказы от услуг («консультация по ипотеке не нужна») — это возражение/ограничение, не договорённость;
+- интересы и пожелания («готов посмотреть другие варианты») — это потребность;
+- обмен контактами и подтверждение телефона.
+
+Если взаимных обязательств о будущих действиях не было — agreements = [] (пустой массив — это нормально).
+Формат каждой договорённости: кто → что делает → когда (срок указывай только если он прозвучал).
 
 Транскрипция:
 {{transcript}}`
@@ -829,7 +875,7 @@ function defaultPipeline(){
 
 ## ФОРМАТ САММАРИ (полноценный звонок)
 
-**1. Основной текст:** 2–3 коротких предложения. Цель — до 500 символов, максимум 700. Плотный деловой стиль, только итоговые рабочие факты без пересказа вопрос-ответ. Порядок:
+**1. Основной текст:** 2–3 коротких предложения. Цель — до 600 символов, максимум 700. Плотный деловой стиль, только итоговые рабочие факты без пересказа вопрос-ответ. Порядок:
 [Клиент + цель + ситуация]. [Ключевые условия/ограничения]. [Итог звонка].
 
 **2. Строка статуса** (с новой строки): «Статус: …» — 2–4 дескриптора из словаря, через запятую:
@@ -841,6 +887,8 @@ function defaultPipeline(){
 — «Следующий шаг: …» — если явной договорённости нет: «Следующий шаг: не согласован». Если конкретное действие и дедлайн прозвучали, напиши их.
 «Я подумаю» — не договорённость. Не завышай статус.
 
+**4. Маркеры критически важных фактов** (V9.1, с новой строки, необязательно — только если реально есть 2–4 факта, важных для продолжения работы и не вошедших в основной текст): каждый пункт начинается с «- » и самодостаточен — понятен без чтения транскрипции. Формат: краткий факт, при необходимости + дословная цитата клиента в кавычках. Пример: «- Отказался от консультации по ипотеке: "Нет, не надо"». Голая цитата без пояснения запрещена. Если критичных фактов, не попавших в текст, нет — маркеры не пиши.
+
 ## ФОРМАТ ВЫВОДА
 
 Верни СТРОГО валидный JSON без markdown-обёртки и пояснений:
@@ -849,10 +897,14 @@ function defaultPipeline(){
 
 Переносы строк — как \n, кавычки внутри текста — как \".
 
+## САМОПРОВЕРКА ПЕРЕД ОТВЕТОМ (V9.1, выполни внутренне)
+
+1) Каждый факт подтверждается транскрипцией. 2) Нет данных карточки (имя, адрес, цена, характеристики объекта), телефонов, оценочных ярлыков вне словаря «Статус:». 3) Длина ≤ 600 символов, не больше 700. 4) Нет пересказа вопрос-ответ. 5) Если есть маркеры — каждый самодостаточен, без голой цитаты без пояснения.
+
 ## ЭТАЛОННЫЕ ПРИМЕРЫ
 
 Пример 1 — полноценный звонок:
-{"summary": "Андрей, частное лицо — интересуется конкретной квартирой, цель — лично посмотреть. По документам и истории объекта: собственница одна с момента постройки, свободная продажа; доступ к показу нужно согласовать из-за проживающего родственника собственницы.\nСтатус: полноценный контакт, реальный интерес, готов к просмотру, ждёт подтверждения.\nДоговорились: агент согласует доступ и подтвердит Андрею просмотр звонком."}
+{"summary": "Андрей, частное лицо — интересуется конкретной квартирой, цель — лично посмотреть. По документам и истории объекта: собственница одна с момента постройки, свободная продажа; доступ к показу нужно согласовать из-за проживающего родственника собственницы.\nСтатус: полноценный контакт, реальный интерес, готов к просмотру, ждёт подтверждения.\nДоговорились: агент согласует доступ и подтвердит Андрею просмотр звонком.\n- Отказался от консультации по ипотеке: \"Нет, не надо, рассчитываю на свои средства\"."}
 
 Пример 2 — звонок с ипотекой и возражением:
 {"summary": "Клиентка подбирает квартиру для дочери-студентки, решение принимает вместе с мужем. Покупка в ипотеку с одобрением банка, срок сделки — до конца лета; объект вызывает сомнения из-за шума, нужны альтернативы с более подходящими параметрами.\nСтатус: полноценный контакт, сравнивает варианты, сомневается.\nСледующий шаг: агент подбирает несколько альтернатив и перезванивает до четверга."}
@@ -917,7 +969,28 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // V8.5 replaces the single summary checker with five specialized Russian
 // judges and a dedicated Summary Quality Gate. Saved user configs are
 // migrated in place instead of being reset.
-const PIPELINE_VERSION = 6;
+// V9.1 (2026-07-07, AI Summary stabilization pass): Outcome Agent defines
+// "agreements" precisely (fact confirmations no longer misread as
+// agreements) and gains next_step_owner; Fact Agent gains city_or_district/
+// intent/client_availability rules; Need Agent bans property_requirements
+// card-field duplication; Summary Agent gains optional self-contained
+// bullet markers (target 600, hard cap 700 chars unchanged); the three
+// judges most prone to demanding CRM-card fields (Critical Facts, Utility,
+// Action) get a shared "card already exists" context block, Utility's main
+// question is reworded, Critical Facts' non-critical list grows, and
+// Presentation gains a client/agent-name rule; the Quality Gate is
+// reweighted to Truth 40/Critical Facts 20/Utility 23/Action 15/
+// Presentation 2 (Quality Framework v1) and gets two deterministic safety
+// nets (>700-char length, phone-number regex) plus a fix so key_problems
+// are built strictly from the judges' own structured JSON fields instead
+// of a lossy text-pattern re-classification that could report a problem
+// contradicting a judge's own explicit verdict. NOTE: per V8.4, this
+// version bump is migration metadata, not an invalidation key -- a
+// browser with a previously saved, already-migrated 14-stage config keeps
+// its saved (possibly edited) stage text; only browsers with no saved
+// config, or a config predating the V8.5 5-judge architecture, pick up
+// these prompts automatically. See CLAUDE.md's dated addendum for details.
+const PIPELINE_VERSION = 7;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
@@ -1547,12 +1620,20 @@ const CODE_FUNCS = {
 
   // ── Summary Quality Gate: агрегирует 5 специализированных judge-агентов ──
   summaryQualityGate(stage,ctx){
+    // Weights per Quality Framework v1 (see Задача 6.3 of the 2026-07-07
+    // AI Summary stabilization spec): Truth 40% (hallucinations 20% +
+    // accuracy 20%), Critical Facts 20%, Utility 23% (context 10% +
+    // usefulness 10% + priority 3%), Action 15% (agreements 10% + next
+    // step 5%), Presentation 2% (brevity 1% + structure 0.5% + rules 0.5%).
+    // Presentation's low weight is intentional: its hard, mechanically-
+    // checkable failures (length, PII, card duplicates) are enforced
+    // deterministically below, independent of its score contribution.
     const weights={
-      truth_check:.30,
-      critical_facts_check:.25,
-      context_utility_check:.20,
+      truth_check:.40,
+      critical_facts_check:.20,
+      context_utility_check:.23,
       action_check:.15,
-      presentation_check:.10
+      presentation_check:.02
     };
     const labels={
       truth_check:'Проверка достоверности',
@@ -1586,7 +1667,14 @@ const CODE_FUNCS = {
       p.explanation='Статус "готов к сделке" нельзя использовать без принятого предложения, согласованной цены и следующего шага по сделке.';
       p.raw.score=p.score; p.raw.status=p.status; p.raw.explanation=p.explanation;
     }
-    if(hasInventedNextStep(smText, judges.action_check.raw)){
+    // V9.1 fix: this deterministic override must never contradict the
+    // Action judge's own explicit verdict. Previously it fired purely off
+    // `next_step_in_transcript` being empty, which could fabricate an
+    // "invented_next_step" error even when the judge had already said
+    // `is_next_step_reflected: true` -- exactly the phantom key_problems
+    // bug reported (Задача 6.1). Now it only fires when the judge itself
+    // did not already confirm the next step was correctly reflected.
+    if(judges.action_check.raw.is_next_step_reflected!==true && hasInventedNextStep(smText, judges.action_check.raw)){
       const a=judges.action_check;
       const err={type:'invented_next_step', problem:'Summary придумало следующий шаг, хотя в звонке он явно не прозвучал.', evidence_from_transcript:null};
       a.raw.action_errors=[...toList(a.raw.action_errors), err];
@@ -1594,6 +1682,33 @@ const CODE_FUNCS = {
       a.score=Math.min(a.score,60); a.status='fail';
       a.explanation='Придуман следующий шаг.';
       a.raw.score=a.score; a.raw.status=a.status; a.raw.explanation=a.explanation;
+    }
+    // Deterministic safety nets independent of the LLM judges (Задача 6.2):
+    // never trust the judge's own self-reported length_chars/pii_found for
+    // the two most mechanically-checkable failure modes.
+    const deterministicLength=smText.length;
+    const isTooLongDeterministic=deterministicLength>700;
+    const deterministicForbidden=detectForbiddenSummaryDetails(smText);
+    const deterministicPhone=deterministicForbidden.filter(x=>x.kind==='phone');
+    const deterministicCardLeaks=deterministicForbidden.filter(x=>x.kind!=='phone');
+    if(isTooLongDeterministic){
+      const p=judges.presentation_check;
+      p.raw.is_too_long=true;
+      p.raw.length_chars=deterministicLength;
+      p.raw.criteria=[...toList(p.raw.criteria), criterion('Длина ≤ 700 символов (код)', true, false, 'Саммари '+deterministicLength+' симв. — больше 700, проверено детерминированно, не по length_chars судьи.')];
+      p.score=Math.min(p.score,85); if(p.status==='pass') p.status='warning';
+      p.raw.score=p.score; p.raw.status=p.status;
+    }
+    if(deterministicPhone.length){
+      const p=judges.presentation_check;
+      p.raw.pii_found=[...toList(p.raw.pii_found), ...deterministicPhone.map(x=>x.value)];
+      p.raw.criteria=[...toList(p.raw.criteria), criterion('Нет телефона (код)', true, false, 'Обнаружен номер телефона детерминированной проверкой кода, независимо от pii_found судьи.')];
+      p.score=Math.min(p.score,60); p.status='fail';
+      p.raw.score=p.score; p.raw.status=p.status;
+    }
+    if(deterministicCardLeaks.length){
+      const p=judges.presentation_check;
+      p.raw.forbidden_card_duplicates=[...toList(p.raw.forbidden_card_duplicates), ...deterministicCardLeaks.map(x=>x.label+': '+x.value)];
     }
     const scores=Object.fromEntries(judgeKeys.map(key=>[key, judges[key].score]));
     const summary_quality_score=judgeKeys.reduce((sum,key)=>sum+scores[key]*weights[key],0);
@@ -1651,7 +1766,9 @@ const CODE_FUNCS = {
       hasPii ||
       hasMissedNextStep ||
       action.status==='fail' ||
-      criticalFacts.status==='fail';
+      criticalFacts.status==='fail' ||
+      isTooLongDeterministic ||
+      deterministicPhone.length>0;
     const autoSave =
       summary_quality_score >= 90 &&
       critical_errors.length===0 &&
@@ -1662,6 +1779,8 @@ const CODE_FUNCS = {
       !hasForbidden &&
       truth.has_hallucinations===false &&
       truth.has_fact_distortions===false &&
+      !isTooLongDeterministic &&
+      deterministicPhone.length===0 &&
       onlyMinorWarnings;
     let decision='MANUAL_REVIEW';
     if(retry) decision='RETRY';
@@ -1669,11 +1788,31 @@ const CODE_FUNCS = {
     const stt=decision==='AUTO_SAVE'?'ok':(decision==='MANUAL_REVIEW'?'warn':'bad');
     const uniqueCritical=uniqTextList(critical_errors);
     const uniqueWarnings=uniqTextList(warnings).slice(0,5);
-    const shortProblems=uniqTextList([...critical_errors, ...warnings].map(shortIssue)).slice(0,3);
-    const generatedActions=shortProblems.map(shortAction);
+    // Задача 6.1: key_problems/главная причина решения собираются СТРОГО из
+    // структурированных полей JSON пяти судей текущего прогона (плюс двух
+    // детерминированных проверок кода выше) -- никакого повторного
+    // угадывания категории по свободному тексту через shortIssue(), чтобы
+    // не порождать фантомные проблемы, не подтверждённые реальным
+    // результатом судьи (симптом из отчёта: "Придуман следующий шаг"/
+    // "В Summary попали контактные данные" при чистых critical_errors/
+    // is_next_step_reflected/pii_found предыдущего прогона).
+    const structuredProblems=[];
+    if(truth.has_hallucinations===true) structuredProblems.push('Truth: обнаружена галлюцинация в саммари.');
+    if(truth.has_fact_distortions===true) structuredProblems.push('Truth: искажён факт (деньги/срок/договорённость/следующий шаг).');
+    if(truth.has_role_confusion===true) structuredProblems.push('Truth: перепутаны роли клиента/агента/оператора.');
+    toList(truth.critical_errors).forEach(x=>structuredProblems.push('Truth: '+formatIssue(x)));
+    toList(criticalFacts.missed_critical_facts).forEach(x=>structuredProblems.push('Critical Facts: '+formatIssue(x)));
+    if(utility.status==='fail') toList(utility.missing_for_next_agent).forEach(x=>structuredProblems.push('Utility: '+formatIssue(x)));
+    toList(action.action_errors).forEach(x=>structuredProblems.push('Action: '+formatIssue(x)));
+    toList(presentation.forbidden_card_duplicates).forEach(x=>structuredProblems.push('Presentation: дубль карточки — '+formatIssue(x)));
+    toList(presentation.pii_found).forEach(x=>structuredProblems.push('Presentation: PII/контакт — '+formatIssue(x)));
+    toList(presentation.forbidden_phrases).forEach(x=>structuredProblems.push('Presentation: запрещённая формулировка — '+formatIssue(x)));
+    if(isTooLongDeterministic) structuredProblems.push('Gate (код): длина саммари '+deterministicLength+' симв. — больше 700, критическая ошибка.');
+    const keyProblems=uniqTextList(structuredProblems).slice(0,3);
+    const generatedActions=keyProblems.map(shortAction);
     const uniqueRecommendations=uniqTextList([...generatedActions, ...recommendations]).filter(recommendationAllowed).slice(0,3);
     const uniqueWarningDetails=warning_details.filter((item,i,arr)=>item.message && arr.findIndex(x=>x.warning_type===item.warning_type&&x.message===item.message)===i);
-    const main_reason=shortProblems[0] || (decision==='AUTO_SAVE'?'Критических проблем не найдено':'Требуется ручная проверка Summary');
+    const main_reason=keyProblems[0] || (decision==='AUTO_SAVE'?'Критических проблем не найдено':'Требуется ручная проверка Summary');
     const explanation = decision==='AUTO_SAVE'
       ? 'Саммари прошло все критические проверки и может быть сохранено автоматически.'
       : decision==='RETRY'
@@ -1690,7 +1829,7 @@ const CODE_FUNCS = {
         warning_details:uniqueWarningDetails,
         recommendations:uniqueRecommendations,
         main_reason,
-        key_problems:shortProblems,
+        key_problems:keyProblems,
         top_recommendations:uniqueRecommendations,
         explanation,
         judges:Object.fromEntries(judgeKeys.map(key=>[key, judges[key].raw]))
@@ -1880,6 +2019,11 @@ async function runStage(stage, ctx){
     const modelLabel=(actualModel&&actualModel.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)')+(fallbackNote?' ('+fallbackNote+')':'');
     const output = parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw});
     const rep={ output, raw, parseErr, ms, tokens, cost,
+      // Задача 8: фактически использованная модель как первоклассное поле
+      // результата шага (не только текстовое примечание в metrics), чтобы
+      // калибровка судей по прогонам была воспроизводимой даже когда
+      // vendor-fallback молча подменил вендора.
+      actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
       status: parseErr?(stage.type==='check'?'bad':'warn'):'ok',
       metrics:[['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
