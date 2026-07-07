@@ -1482,6 +1482,61 @@ const ENUMS = {
 };
 const ROLE_RX=['Агент','Клиент','Оператор','Менеджер'];
 
+// ─── V9 Cleanup Functions: deterministic enforcement of V9 rules ───────────────────────
+// These run AFTER LLM returns, before storing in ctx. They remove/fix violations that
+// explicit prompts alone cannot guarantee.
+
+function cleanupFactsV9(facts){
+  // V9 Rule: city_or_district must be null OR only city/district name, never a full address
+  // Forbidden: дома, корпуса, квартиры, улицы, номеры объектов, адреса типа "ул. Предпортовая, 4, корпус 1"
+  if(facts.city_or_district){
+    const cd = facts.city_or_district.trim();
+    // Regex: if it contains street markers, building numbers, or address structure → reject
+    if(/\b(ул\.|улиц|дом|дома|корпус|кв|квартир|комнат|здани|комплекс|строени|адрес|спб|питер|москв)\b|,\s*\d+|[\d]{1,3}\s*,/i.test(cd)){
+      facts.city_or_district = null;  // Clear obvious address patterns
+    }
+  }
+  return facts;
+}
+
+function cleanupNeedsV9(needs){
+  // V9 Rule: property_requirements must NOT contain object card data (address, rooms, area, floor, price)
+  // Forbidden: адреса, номеры домов, названия улиц, конкретные адреса, 1-комнатная, 35.8 кв.м, 1 этаж, цены
+  if(needs.property_requirements && typeof needs.property_requirements === 'string'){
+    const pr = needs.property_requirements;
+    // Remove common card patterns: full addresses (улица/дом/номер), room counts, area, floor, prices
+    const forbidden = /предпортов|преображенск|парк культур|набережн|ул\.|,\s*\d+|корпус|кв\.|квартир|комнатн|кв\.м|кв\.м\.|м²|этаж|цен|тыс\.рублей|руб\.|\d+\s*(?:тыс|млн|руб)|значительн|большой|красив|современн|новый|ремонт|лоджи/i;
+    if(forbidden.test(pr)){
+      // Has card data; try to extract only actual requirements (client's stated preferences)
+      // Keep phrases like "второй этаж", "рядом со школой", "готов рассмотреть" but remove exact values/prices
+      needs.property_requirements = null;  // Clear entirely if contaminated with card data
+    }
+  }
+  return needs;
+}
+
+function cleanupOutcomeV9(outcome){
+  // V9 Rule: agreements must be ONLY mutual future-action commitments, not facts/refusals/interests
+  // Remove: факты (квартира продаётся), подтверждения (номер актуален), отказы (не нужна ипотека), интерес, статусы
+  if(Array.isArray(outcome.agreements)){
+    const forbiddenMarkers = [
+      /(?:продаёт|продаётся|продав|продан|актив|живу|проживает|находиться|расположен|находит|ремонт|квартир|комната|площ|этаж|цен|стоимост|сумм|руб|тыс)/i, // ФАКТЫ
+      /(?:подтверд|актуал|номер|телефон|контакт|данные|указа|записа|зафиксирова)/i, // ПОДТВЕРЖДЕНИЕ ФАКТОВ
+      /(?:не нужна|отказ|отказыва|отказал|не берм|не хочу|не могу|отрицатель|отрицал|против|нет спасибо|не интересует)/i, // ОТКАЗЫ
+      /(?:интересует|заинтересова|хочет|ищет|ищу|рассматрива|смотреть|посмотреть|может быть)/i, // ИНТЕРЕС/ПОТРЕБНОСТЬ (без обязательства)
+      /(?:статус|статусе|стоит|находится|состояние|состояни|обсуждали|обсуждают|спросил|спроси|ответил|ответит|сказал|сказала|заявил)/i, // СТАТУС/ФАКТ/ДИАЛОГ
+    ];
+
+    outcome.agreements = outcome.agreements.filter(agr => {
+      if(!agr || typeof agr !== 'string') return true;
+      // Check if agreement contains forbidden markers (suggests it's a fact/refusal/interest, not commitment)
+      const isForbidden = forbiddenMarkers.some(rx => rx.test(agr));
+      return !isForbidden;
+    });
+  }
+  return outcome;
+}
+
 const CODE_FUNCS = {
   // ── этап Nexara: в Lab транскрипция уже улучшена, сервис симулируется ────
   stt(stage,ctx){
@@ -2114,7 +2169,13 @@ async function runPipeline(){
     }
 
     // сохраняем в контекст
-    if(stage.outKey && rep.output!==undefined) ctx[stage.outKey]=rep.output;
+    if(stage.outKey && rep.output!==undefined){
+      // Apply V9 cleanup for specific stages BEFORE storing
+      if(stage.outKey === 'facts' && rep.output) rep.output = cleanupFactsV9(rep.output);
+      if(stage.outKey === 'needs' && rep.output) rep.output = cleanupNeedsV9(rep.output);
+      if(stage.outKey === 'outcome' && rep.output) rep.output = cleanupOutcomeV9(rep.output);
+      ctx[stage.outKey]=rep.output;
+    }
     if(rep.tokens) totalTokens+=rep.tokens;
     if(rep.cost) totalCost+=rep.cost;
     if(rep.status==='bad') errorCount++;
