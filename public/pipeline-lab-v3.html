@@ -318,7 +318,7 @@ function summaryQualityStages(){
   return [
     {
       id:s(), enabled:true, type:'check', name:'Проверка достоверности',
-      model:'claude-sonnet-4-6', outKey:'truth_check',
+      model:'claude-sonnet-4-6', outKey:'truth_check', promptVersion:1,
       prompt:
 `Ты — независимый проверщик достоверности AI Summary для звонков по недвижимости.
 
@@ -377,7 +377,7 @@ function summaryQualityStages(){
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка критически важных фактов',
-      model:'claude-sonnet-4-6', outKey:'critical_facts_check',
+      model:'claude-sonnet-4-6', outKey:'critical_facts_check', promptVersion:1,
       prompt:
 `Ты — независимый проверщик критически важных фактов AI Summary для CRM агентства недвижимости.
 
@@ -468,7 +468,7 @@ function summaryQualityStages(){
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка полезности для агента',
-      model:'claude-sonnet-4-6', outKey:'context_utility_check',
+      model:'claude-sonnet-4-6', outKey:'context_utility_check', promptVersion:1,
       prompt:
 `Ты — независимый проверщик продуктовой полезности AI Summary.
 
@@ -532,7 +532,7 @@ function summaryQualityStages(){
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка договорённостей и следующего шага',
-      model:'claude-sonnet-4-6', outKey:'action_check',
+      model:'claude-sonnet-4-6', outKey:'action_check', promptVersion:1,
       prompt:
 `Ты — независимый проверщик результата звонка, договорённостей и следующего шага.
 
@@ -598,7 +598,7 @@ function summaryQualityStages(){
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка формата и правил',
-      model:'claude-sonnet-4-6', outKey:'presentation_check',
+      model:'claude-sonnet-4-6', outKey:'presentation_check', promptVersion:1,
       prompt:
 `Ты — независимый проверщик формата, лаконичности и CRM-правил для AI Summary.
 
@@ -692,7 +692,7 @@ function defaultPipeline(){
     },
     {
       id:s(), enabled:true, type:'llm', name:'Извлечение фактов',
-      model:'gpt-5-mini', outKey:'facts',
+      model:'gpt-5-mini', outKey:'facts', promptVersion:1,
       prompt:
 `Ты — Fact Agent пайплайна анализа звонков по недвижимости.
 Извлеки ФАКТЫ из транскрипции. Верни СТРОГО валидный JSON без markdown и пояснений.
@@ -735,7 +735,7 @@ function defaultPipeline(){
     },
     {
       id:s(), enabled:true, type:'llm', name:'Определение потребностей',
-      model:'gpt-5-mini', outKey:'needs',
+      model:'gpt-5-mini', outKey:'needs', promptVersion:1,
       prompt:
 `Ты — Need Agent пайплайна анализа звонков по недвижимости.
 Определи ПОТРЕБНОСТИ клиента из транскрипции. Верни СТРОГО валидный JSON без markdown.
@@ -770,7 +770,7 @@ function defaultPipeline(){
     },
     {
       id:s(), enabled:true, type:'llm', name:'Результат звонка',
-      model:'gpt-5-mini', outKey:'outcome',
+      model:'gpt-5-mini', outKey:'outcome', promptVersion:1,
       prompt:
 `Ты — Outcome Agent пайплайна анализа звонков по недвижимости.
 Определи РЕЗУЛЬТАТ звонка. Верни СТРОГО валидный JSON без markdown.
@@ -814,7 +814,7 @@ function defaultPipeline(){
     },
     {
       id:s(), enabled:true, type:'llm', name:'Генерация саммари',
-      model:'gpt-5-mini', outKey:'summary',
+      model:'gpt-5-mini', outKey:'summary', promptVersion:1,
       prompt:
 `Ты — Summary Agent агентства недвижимости. Напиши саммари звонка для карточки клиента в CRM так, чтобы другой агент, открыв карточку, продолжил работу с клиентом без прослушивания звонка.
 
@@ -1019,9 +1019,26 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // version bump is migration metadata, not an invalidation key -- a
 // browser with a previously saved, already-migrated 14-stage config keeps
 // its saved (possibly edited) stage text; only browsers with no saved
-// config, or a config predating the V8.5 5-judge architecture, pick up
-// these prompts automatically. See CLAUDE.md's dated addendum for details.
-const PIPELINE_VERSION = 8;
+// config, or a config predating the V8.5 5-judge architecture, picked up
+// these prompts automatically -- until the per-stage promptVersion fix
+// below (2026-07-07, real-run audit): browsers already on the 5-judge
+// architecture (hasSummaryQualityArchitecture===true) NEVER got a content
+// refresh at all, because migratePipelineConfig() returned early before
+// any prompt-text comparison ran. Confirmed live: a real run's Fact Agent
+// output was missing the intent/client_availability fields added in a
+// later round, and the Summary Agent produced a plain-text refusal
+// ("no Facts/Needs/Outcome JSON") instead of JSON -- both symptoms of a
+// browser stuck on a stale saved prompt while shipped defaults had long
+// since moved on. Fix: each llm/check stage in defaultPipeline() now
+// carries its own promptVersion; migratePipelineConfig() always runs a
+// content-refresh pass (regardless of structural migration) that
+// overwrites a saved stage's prompt+model with the current default when
+// the saved promptVersion is behind AND the stage was never manually
+// edited (stage.userEdited, set by the prompt/model input handlers in
+// renderStages()). A genuine user edit is still permanent and authoritative,
+// per the original V8.4 intent -- only silently-stale, never-touched
+// stages get auto-upgraded.
+const PIPELINE_VERSION = 9;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
@@ -1055,23 +1072,54 @@ function hasSummaryQualityArchitecture(stages){
 }
 function migratePipelineConfig(stages){
   if(!Array.isArray(stages) || !stages.length) return stages;
-  if(hasSummaryQualityArchitecture(stages)) return stages;
 
-  const summaryIdx=stages.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
-  const crmIdx=stages.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
-  const cleaned=stages.filter(stage=>!isOldSummaryCheck(stage) && !isOldGate(stage));
-  const migrated=summaryQualityStages();
+  let result = stages;
+  if(!hasSummaryQualityArchitecture(stages)){
+    const summaryIdx=stages.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
+    const crmIdx=stages.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
+    const cleaned=stages.filter(stage=>!isOldSummaryCheck(stage) && !isOldGate(stage));
+    const migrated=summaryQualityStages();
 
-  let insertAt=cleaned.length;
-  const cleanedCrmIdx=cleaned.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
-  const cleanedSummaryIdx=cleaned.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
-  if(cleanedCrmIdx>=0) insertAt=cleanedCrmIdx;
-  else if(cleanedSummaryIdx>=0) insertAt=cleanedSummaryIdx+1;
-  else if(crmIdx>=0) insertAt=Math.min(crmIdx, cleaned.length);
-  else if(summaryIdx>=0) insertAt=Math.min(summaryIdx+1, cleaned.length);
+    let insertAt=cleaned.length;
+    const cleanedCrmIdx=cleaned.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
+    const cleanedSummaryIdx=cleaned.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
+    if(cleanedCrmIdx>=0) insertAt=cleanedCrmIdx;
+    else if(cleanedSummaryIdx>=0) insertAt=cleanedSummaryIdx+1;
+    else if(crmIdx>=0) insertAt=Math.min(crmIdx, cleaned.length);
+    else if(summaryIdx>=0) insertAt=Math.min(summaryIdx+1, cleaned.length);
 
-  cleaned.splice(insertAt, 0, ...migrated);
-  return cleaned;
+    cleaned.splice(insertAt, 0, ...migrated);
+    result = cleaned;
+  }
+
+  // Контент-апгрейд (независимо от структурной миграции выше): "durable
+  // config" (V8.4) означает, что сохранённый в браузере конфиг переживает
+  // деплой БЕЗ ИЗМЕНЕНИЙ -- значит однажды сохранённый текст промпта
+  // (facts/needs/outcome/summary/судьи) мог навсегда застрять на старой
+  // версии, даже когда структура (5 судей + gate) уже присутствует и
+  // структурная миграция выше не запускается. Раньше это было обнаружено
+  // "живьём": сохранённый в браузере Fact Agent не возвращал добавленные
+  // позже поля intent/client_availability, хотя код уже давно был обновлён.
+  // Правило: если пользователь НЕ редактировал этап вручную (нет флага
+  // userEdited) и сохранённый promptVersion ниже текущего дефолтного --
+  // подтягиваем текст промпта (и модель) из свежего defaultPipeline().
+  // Ручные правки пользователя (userEdited:true) не трогаем никогда.
+  const defaults=defaultPipeline();
+  const defaultByKey={};
+  defaults.forEach(d=>{ if(d.outKey) defaultByKey[d.outKey]=d; });
+  result.forEach(stage=>{
+    const def = stage.outKey && defaultByKey[stage.outKey];
+    if(!def || def.promptVersion==null) return;
+    if(stage.userEdited) return;
+    const savedVersion = stage.promptVersion||0;
+    if(savedVersion < def.promptVersion){
+      stage.prompt = def.prompt;
+      stage.model = def.model;
+      stage.promptVersion = def.promptVersion;
+    }
+  });
+
+  return result;
 }
 
 let pipeline = loadPipelineConfig() || defaultPipeline();
@@ -2508,8 +2556,8 @@ function renderStages(){
       renderStages();
     });
     el.querySelector('[data-outkey]').addEventListener('input',e=>stage.outKey=e.target.value.trim());
-    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>stage.prompt=e.target.value);
-    const mm=el.querySelector('[data-model]'); if(mm)mm.addEventListener('change',e=>stage.model=e.target.value);
+    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>{stage.prompt=e.target.value; stage.userEdited=true;});
+    const mm=el.querySelector('[data-model]'); if(mm)mm.addEventListener('change',e=>{stage.model=e.target.value; stage.userEdited=true;});
     const cf=el.querySelector('[data-codefn]'); if(cf)cf.addEventListener('change',e=>stage.codeFn=e.target.value);
     const vn=el.querySelector('[data-vendor]'); if(vn)vn.addEventListener('input',e=>stage.vendor=e.target.value.trim());
     el.querySelector('[data-up]').addEventListener('click',()=>{if(i>0){[pipeline[i-1],pipeline[i]]=[pipeline[i],pipeline[i-1]];renderStages();}});
