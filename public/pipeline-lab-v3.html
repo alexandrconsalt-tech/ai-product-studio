@@ -466,6 +466,7 @@ function summaryQualityStages(){
 Может ли следующий агент после прочтения саммари за 5-10 секунд понять контекст звонка и продолжить работу с клиентом без прослушивания записи?
 
 Оцени не литературное качество текста, а рабочую полезность для CRM.
+Оцени только качество самого Summary. Не давай советы агенту по дальнейшей работе и не рекомендуй добавлять в Summary телефон, точный адрес, цену/порог, характеристики объекта или данные, которых не было в звонке. Формулировка "уточнить" не является рекомендацией к Summary.
 
 Проверь:
 1. Понятно ли, зачем клиент обратился.
@@ -531,6 +532,8 @@ function summaryQualityStages(){
 Не штрафуй саммари, если договорённости или следующего шага в звонке реально не было.
 Но если они были и саммари их пропустило — это ошибка.
 
+Если следующий шаг явно не прозвучал, Summary должно написать ровно по смыслу: "Следующий шаг: не согласован". Это корректная фиксация отсутствия договорённости, не галлюцинация и не ошибка. Ошибка — когда Summary придумывает конкретное действие, срок или ответственного при next_step_in_transcript = null.
+
 Верни строго валидный JSON без markdown:
 
 {
@@ -544,7 +547,7 @@ function summaryQualityStages(){
   "is_next_step_reflected": true | false,
   "action_errors": [
     {
-      "type": "missed_agreement" | "missed_next_step" | "wrong_deadline" | "overstated_agreement",
+      "type": "missed_agreement" | "missed_next_step" | "invented_next_step" | "wrong_deadline" | "overstated_agreement",
       "problem": "<описание проблемы>",
       "evidence_from_transcript": "<цитата>"
     }
@@ -556,6 +559,8 @@ function summaryQualityStages(){
 - Если следующий шаг был в звонке и корректно отражён — score 90-100.
 - Если следующий шаг был, но не отражён — score не выше 65.
 - Если саммари придумало договорённость — score не выше 60.
+- Если следующего шага не было, а Summary написало "Следующий шаг: не согласован" — не штрафовать.
+- Если следующего шага не было, а Summary придумало конкретный следующий шаг — score не выше 60.
 - Если договорённости не было, но саммари корректно описывает отсутствие явной договорённости — не штрафовать.
 
 Саммари:
@@ -585,6 +590,7 @@ function summaryQualityStages(){
 9. Нет оценочных суждений: “горячий клиент”, “холодный клиент”, “перспективный клиент”.
 10. Нет отрицательных фактов типа “источник средств не определён”, если это не нужно в Summary.
 11. Структура соответствует стандарту: краткий основной текст + статус/договорённость или следующий шаг.
+12. Summary написано итоговыми фактами, а не пересказом вопрос-ответ.
 
 Не запрещай переговорные условия клиента, если они важны для продолжения работы и написаны без точных сумм:
 - клиент просит торг;
@@ -614,6 +620,9 @@ function summaryQualityStages(){
   "readability_issues": [
     "<проблемы читаемости>"
   ],
+  "style_issues": [
+    "<найденные формулировки пересказа диалога: спросил, спросила, уточнил, уточняла, агент ответил, агент сказал, клиент заявила, обсудили>"
+  ],
   "explanation": "<краткое объяснение оценки>"
 }
 
@@ -622,6 +631,8 @@ function summaryQualityStages(){
 - Если есть полный адрес, цена, бюджет или характеристики объекта — score не выше 80.
 - Если длина больше 700 символов — score не выше 85.
 - Если текст трудно читать — score не выше 75.
+- Если найдено 2 или больше конструкций пересказа диалога — status = "fail", score не выше 60.
+- Если есть статус "готов к сделке" без согласованной цены, принятого предложения и следующего шага по сделке — status = "fail", score не выше 60.
 - Если нарушений нет — score 90-100.
 
 Саммари:
@@ -770,6 +781,15 @@ function defaultPipeline(){
 — «Спросил/спросила X — агент: Y».
 — «Уточнял/уточняла X — агент ответил Y».
 — «Клиент задал вопрос...».
+— Любые конструкции «клиент X — агент Y».
+
+Запрещённые слова и обороты в Summary:
+— «спросила», «спросил»;
+— «уточняла», «уточнил»;
+— «агент ответил», «агент сказал»;
+— «клиент заявила»;
+— «обсудили»;
+— «клиент согласилась».
 
 Вместо этого формулируй результат:
 Плохо: «Спросила причину продажи — агент: срочных причин продажи нет».
@@ -787,10 +807,12 @@ function defaultPipeline(){
 
 — Не выдумывай и не расширяй факты (не пиши «сравнивает варианты», если клиент этого не говорил).
 — Не дублируй в саммари данные, которые уже есть или должны быть в карточке заявки: полный адрес объекта, площадь, этаж, этажность, стоимость объекта, бюджет/ценовую вилку, характеристики объекта (ремонт, отделка, состояние пола и т.п.), номера телефонов.
-— Если такие данные важны для смысла, обобщай без значений: «интересуется конкретным объектом», «уточняла параметры объекта», «обсудили бюджет», «рассматривает варианты с разным состоянием», «оставила контакт для связи».
+— Если такие данные важны для смысла, обобщай без значений: «интересуется конкретным объектом», «важны параметры объекта», «есть финансовые условия сделки», «рассматривает варианты с разным состоянием», «оставила контакт для связи».
 — Не включай характеристики объекта из объявления и точную идентификацию объекта. Допустимо только обобщение уровня «интересуется конкретной квартирой/вариантами в нужной локации».
 — Запрещённые формулировки: «по адресу …», «квартира по …», «квартирой по …», «на улице …», «на [название улицы], [номер]», «агент видит номер», «отобразился номер», «по отобразившемуся номеру», «номер клиента».
 — Не пиши отрицательные факты: «источник средств не определён», «телефон не прозвучал», «критериев не называл».
+— Не пиши «готов к сделке», если нет согласованной цены, принятого предложения и следующего шага по сделке. Если агент отказал на условие клиента или подходящего предложения нет, статус «готов к сделке» запрещён.
+— Если явного следующего шага нет, пиши ровно: «Следующий шаг: не согласован». Не придумывай действие агента, срок или ответственного.
 — Не пересказывай приветствия, любезности, служебные реплики.
 — Нецензурную лексику и оскорбления не цитируй — передай смысл нейтрально.
 — Каждый факт — один раз; связанные детали объединяй в одно предложение.
@@ -807,8 +829,8 @@ function defaultPipeline(){
 
 ## ФОРМАТ САММАРИ (полноценный звонок)
 
-**1. Основной текст:** 3–6 предложений, до 800 символов. Плотный деловой стиль, итоговые рабочие факты без пересказа вопрос-ответ. Порядок (пропускай отсутствующее):
-клиент и цель → итоговые факты без дублей карточки заявки → способ оплаты/источник средств без сумм → сроки → ограничения и особенности.
+**1. Основной текст:** 2–3 коротких предложения. Цель — до 500 символов, максимум 700. Плотный деловой стиль, только итоговые рабочие факты без пересказа вопрос-ответ. Порядок:
+[Клиент + цель + ситуация]. [Ключевые условия/ограничения]. [Итог звонка].
 
 **2. Строка статуса** (с новой строки): «Статус: …» — 2–4 дескриптора из словаря, через запятую:
 полноценный контакт / краткий контакт / реальный интерес / готов к просмотру / готов к сделке / ждёт подтверждения / сравнивает варианты / сомневается / взял паузу / теряет интерес.
@@ -816,7 +838,7 @@ function defaultPipeline(){
 
 **3. Блок действия** (с новой строки, ровно один):
 — «Договорились: …» — подтверждённая обеими сторонами договорённость: что, кто, когда.
-— «Следующий шаг: …» — если явной договорённости нет: конкретное действие агента с дедлайном, если он прозвучал.
+— «Следующий шаг: …» — если явной договорённости нет: «Следующий шаг: не согласован». Если конкретное действие и дедлайн прозвучали, напиши их.
 «Я подумаю» — не договорённость. Не завышай статус.
 
 ## ФОРМАТ ВЫВОДА
@@ -830,13 +852,13 @@ function defaultPipeline(){
 ## ЭТАЛОННЫЕ ПРИМЕРЫ
 
 Пример 1 — полноценный звонок:
-{"summary": "Андрей, частное лицо — интересуется конкретной квартирой, цель — лично посмотреть. Документы и история объекта обсуждены: собственница одна с момента постройки, свободная продажа, деньги планирует вложить в бизнес. Клиент просит показ утром; доступ нужно согласовать, потому что в квартире проживает родственник собственницы.\nСтатус: полноценный контакт, реальный интерес, готов к просмотру, ждёт подтверждения.\nДоговорились: агент согласует доступ и подтвердит Андрею просмотр звонком."}
+{"summary": "Андрей, частное лицо — интересуется конкретной квартирой, цель — лично посмотреть. По документам и истории объекта: собственница одна с момента постройки, свободная продажа; доступ к показу нужно согласовать из-за проживающего родственника собственницы.\nСтатус: полноценный контакт, реальный интерес, готов к просмотру, ждёт подтверждения.\nДоговорились: агент согласует доступ и подтвердит Андрею просмотр звонком."}
 
 Пример 2 — звонок с ипотекой и возражением:
-{"summary": "Клиентка подбирает квартиру для дочери-студентки, решение принимают вместе с мужем. Покупка в ипотеку, одобрение банка есть, сделку хочет закрыть до конца лета. После обсуждения шума сомневается в объекте и просит альтернативы с более подходящими параметрами; параллельно рассматривает новостройку.\nСтатус: полноценный контакт, сравнивает варианты, сомневается.\nСледующий шаг: агент подбирает несколько альтернатив и перезванивает до четверга."}
+{"summary": "Клиентка подбирает квартиру для дочери-студентки, решение принимает вместе с мужем. Покупка в ипотеку с одобрением банка, срок сделки — до конца лета; объект вызывает сомнения из-за шума, нужны альтернативы с более подходящими параметрами.\nСтатус: полноценный контакт, сравнивает варианты, сомневается.\nСледующий шаг: агент подбирает несколько альтернатив и перезванивает до четверга."}
 
 Пример 3 — слабый звонок:
-{"summary": "Недостаточно информации. Клиент уточнил актуальность объявления и завершил разговор, потребность обсудить не успели.\nСледующий шаг: перезвонить, выяснить цель обращения и критерии подбора."}
+{"summary": "Недостаточно информации. Клиент проверил актуальность объявления и завершил разговор, потребность зафиксировать не успели.\nСледующий шаг: не согласован."}
 
 Транскрипция звонка:
 {{transcript}}
@@ -1244,7 +1266,7 @@ function warningDetail(warning_type, message){
 }
 
 function recommendationAllowed(text){
-  return !/(телефон|номер|контакт|адрес|цена объекта|точная цена|характеристик|площад|этаж|данных не было|агент не задал|вопросы, которые агент)/i.test(String(text||''));
+  return !/(телефон|номер|контакт|адрес|цена объекта|точная цена|цена\/порог|порог|характеристик|площад|этаж|данных не было|агент не задал|вопросы, которые агент|уточнить)/i.test(String(text||''));
 }
 
 function uniqTextList(list){
@@ -1256,6 +1278,70 @@ function uniqTextList(list){
     seen.add(key); out.push(item);
   }
   return out;
+}
+
+function summaryText(ctx){
+  const sm=ctx&&ctx.summary;
+  if(sm&&typeof sm==='object'&&typeof sm.summary==='string') return sm.summary;
+  if(typeof sm==='string') return sm;
+  return '';
+}
+
+function detectDialogueStyle(summary){
+  const text=String(summary||'');
+  const patterns=[
+    /спросил[а]?/ig,
+    /уточнил[а]?/ig,
+    /агент\s+ответил/ig,
+    /агент\s+сказал/ig,
+    /клиент\s+заявил[а]?/ig,
+    /обсудили/ig,
+    /клиент\s+согласил(?:ся|ась)/ig,
+    /клиент[^.\n;—-]{0,80}[—-]\s*агент/ig
+  ];
+  const found=[];
+  for(const rx of patterns){
+    const matches=text.match(rx)||[];
+    found.push(...matches);
+  }
+  return [...new Set(found.map(x=>x.trim()).filter(Boolean))];
+}
+
+function hasInventedNextStep(summary, action){
+  const text=String(summary||'');
+  const noNextStep=!action.next_step_in_transcript || action.next_step_in_transcript==='null';
+  if(!noNextStep) return false;
+  const m=text.match(/Следующий шаг:\s*([^\n]+)/i);
+  if(!m) return false;
+  return !/не\s+согласован|нет|отсутств/i.test(m[1]);
+}
+
+function hasOverstatedDealStatus(summary){
+  return /Статус:[^\n]*готов[а-я\s]*к\s+сделке/i.test(String(summary||''));
+}
+
+function shortIssue(text){
+  const s=String(text||'');
+  if(/invented_next_step|придум|следующ/i.test(s)) return 'Придуман следующий шаг';
+  if(/готов[а-я\s]*к\s+сделке|overstated/i.test(s)) return 'Завышен статус: готов к сделке';
+  if(/мотивац|цель|вложить/i.test(s)) return 'Пропущена мотивация клиента';
+  if(/огранич|стресс|проблемн|услов/i.test(s)) return 'Пропущено ограничение клиента';
+  if(/спросил|спросила|уточнил|уточняла|агент ответил|агент сказал|клиент заявила|обсудили|пересказ/i.test(s)) return 'Summary написано как пересказ диалога';
+  if(/телефон|номер|pii|контакт/i.test(s)) return 'В Summary попали контактные данные';
+  if(/адрес|цена|площад|этаж|характеристик|дубли/i.test(s)) return 'В Summary попали данные карточки';
+  return s.replace(/\s+/g,' ').slice(0,110);
+}
+
+function shortAction(issue){
+  const s=shortIssue(issue);
+  if(s==='Summary написано как пересказ диалога') return 'Перегенерировать Summary в формате фактов.';
+  if(s==='Придуман следующий шаг') return 'Убрать выдуманный следующий шаг.';
+  if(s==='Завышен статус: готов к сделке') return 'Убрать статус “готов к сделке”.';
+  if(s==='Пропущена мотивация клиента') return 'Коротко добавить мотивацию клиента, если она прозвучала.';
+  if(s==='Пропущено ограничение клиента') return 'Коротко добавить важное ограничение клиента.';
+  if(s==='В Summary попали контактные данные') return 'Убрать телефон или контактные данные.';
+  if(s==='В Summary попали данные карточки') return 'Убрать адрес, цену или характеристики объекта.';
+  return 'Перегенерировать Summary в формате фактов.';
 }
 
 function levenshtein(a,b){
@@ -1477,6 +1563,38 @@ const CODE_FUNCS = {
     };
     const judgeKeys=Object.keys(weights);
     const judges=Object.fromEntries(judgeKeys.map(key=>[key, normalizeSummaryJudge(ctx[key], key, labels[key])]));
+    const smText=summaryText(ctx);
+    const styleIssues=detectDialogueStyle(smText);
+    if(styleIssues.length){
+      const p=judges.presentation_check;
+      const styleCriterion=criterion('Факты вместо пересказа', styleIssues.length>=2, styleIssues.length===1, 'Найдены обороты пересказа диалога: '+styleIssues.join(', '));
+      p.raw.style_issues=[...toList(p.raw.style_issues), ...styleIssues];
+      p.raw.criteria=[...toList(p.raw.criteria), styleCriterion];
+      if(styleIssues.length>=2){
+        p.score=Math.min(p.score,60);
+        p.status='fail';
+        p.explanation='Summary написано как пересказ диалога.';
+        p.raw.score=p.score; p.raw.status=p.status; p.raw.explanation=p.explanation;
+      }
+    }
+    if(hasOverstatedDealStatus(smText)){
+      const p=judges.presentation_check;
+      const item='Завышен статус: готов к сделке';
+      p.raw.forbidden_phrases=[...toList(p.raw.forbidden_phrases), item];
+      p.raw.criteria=[...toList(p.raw.criteria), criterion('Статус не завышен', true, false, item)];
+      p.score=Math.min(p.score,60); p.status='fail';
+      p.explanation='Статус "готов к сделке" нельзя использовать без принятого предложения, согласованной цены и следующего шага по сделке.';
+      p.raw.score=p.score; p.raw.status=p.status; p.raw.explanation=p.explanation;
+    }
+    if(hasInventedNextStep(smText, judges.action_check.raw)){
+      const a=judges.action_check;
+      const err={type:'invented_next_step', problem:'Summary придумало следующий шаг, хотя в звонке он явно не прозвучал.', evidence_from_transcript:null};
+      a.raw.action_errors=[...toList(a.raw.action_errors), err];
+      a.raw.criteria=[...toList(a.raw.criteria), criterion('Следующий шаг не придуман', true, false, 'Если следующий шаг не прозвучал, нужно писать "Следующий шаг: не согласован".')];
+      a.score=Math.min(a.score,60); a.status='fail';
+      a.explanation='Придуман следующий шаг.';
+      a.raw.score=a.score; a.raw.status=a.status; a.raw.explanation=a.explanation;
+    }
     const scores=Object.fromEntries(judgeKeys.map(key=>[key, judges[key].score]));
     const summary_quality_score=judgeKeys.reduce((sum,key)=>sum+scores[key]*weights[key],0);
 
@@ -1506,10 +1624,12 @@ const CODE_FUNCS = {
     warnings.push(...toList(presentation.pii_found).map(x=>'PII/контакт в саммари: '+formatIssue(x)));
     warnings.push(...toList(presentation.forbidden_phrases).map(x=>'Запрещённая формулировка: '+formatIssue(x)));
     warnings.push(...toList(presentation.readability_issues).map(x=>'Читаемость: '+formatIssue(x)));
+    warnings.push(...toList(presentation.style_issues).map(x=>'Пересказ диалога: '+formatIssue(x)));
     warning_details.push(...toList(presentation.forbidden_card_duplicates).map(x=>warningDetail('duplicate_card_data', x)));
     warning_details.push(...toList(presentation.pii_found).map(x=>warningDetail('pii', x)));
     warning_details.push(...toList(presentation.forbidden_phrases).map(x=>warningDetail('format', x)));
     warning_details.push(...toList(presentation.readability_issues).map(x=>warningDetail('readability', x)));
+    warning_details.push(...toList(presentation.style_issues).map(x=>warningDetail('format', 'Summary написано как пересказ диалога: '+formatIssue(x))));
     warning_details.push(...toList(criticalFacts.missed_critical_facts).map(x=>warningDetail('missing_critical_fact', x)));
     warning_details.push(...toList(action.action_errors).map(x=>warningDetail('action_issue', x)));
     recommendations.push(...toList(utility.missing_for_next_agent).map(x=>'Добавить для следующего агента: '+formatIssue(x)));
@@ -1548,9 +1668,12 @@ const CODE_FUNCS = {
     else if(autoSave) decision='AUTO_SAVE';
     const stt=decision==='AUTO_SAVE'?'ok':(decision==='MANUAL_REVIEW'?'warn':'bad');
     const uniqueCritical=uniqTextList(critical_errors);
-    const uniqueWarnings=uniqTextList(warnings);
-    const uniqueRecommendations=uniqTextList(recommendations).filter(recommendationAllowed);
+    const uniqueWarnings=uniqTextList(warnings).slice(0,5);
+    const shortProblems=uniqTextList([...critical_errors, ...warnings].map(shortIssue)).slice(0,3);
+    const generatedActions=shortProblems.map(shortAction);
+    const uniqueRecommendations=uniqTextList([...generatedActions, ...recommendations]).filter(recommendationAllowed).slice(0,3);
     const uniqueWarningDetails=warning_details.filter((item,i,arr)=>item.message && arr.findIndex(x=>x.warning_type===item.warning_type&&x.message===item.message)===i);
+    const main_reason=shortProblems[0] || (decision==='AUTO_SAVE'?'Критических проблем не найдено':'Требуется ручная проверка Summary');
     const explanation = decision==='AUTO_SAVE'
       ? 'Саммари прошло все критические проверки и может быть сохранено автоматически.'
       : decision==='RETRY'
@@ -1566,7 +1689,9 @@ const CODE_FUNCS = {
         warnings:uniqueWarnings,
         warning_details:uniqueWarningDetails,
         recommendations:uniqueRecommendations,
-        top_recommendations:uniqueRecommendations.slice(0,3),
+        main_reason,
+        key_problems:shortProblems,
+        top_recommendations:uniqueRecommendations,
         explanation,
         judges:Object.fromEntries(judgeKeys.map(key=>[key, judges[key].raw]))
       },
@@ -1922,7 +2047,7 @@ function renderReport(stage, rep, num){
     }).join('')+'</ul>';
   }
 
-  if(rep.confidenceBreakdown){
+  if(rep.confidenceBreakdown && !rep.isSummaryQualityGate){
     body+='<div class="kvlist" style="margin-top:6px">'+rep.confidenceBreakdown.map(b=>
       '<div><span class="k">'+b.label+' <span class="tag">'+(b.w*100)+'%</span></span> <b>'+(b.val*100).toFixed(0)+'%</b></div>').join('')+'</div>';
   }
@@ -1935,7 +2060,7 @@ function renderReport(stage, rep, num){
   else if(rep.parseErr){ body+='<div class="out" style="color:var(--warn)">JSON не распознан: '+escapeHtml(rep.parseErr)+'\n\n'+escapeHtml((rep.raw||'').slice(0,600))+'</div>'; }
   else if(rep.output!==undefined && !rep.isCode){
     body+='<div class="out">'+escapeHtml(JSON.stringify(rep.output,null,2))+'</div>';
-  } else if(rep.isCode && stage.codeFn!=='gate' && rep.output){
+  } else if(rep.isCode && stage.codeFn!=='gate' && stage.codeFn!=='summaryQualityGate' && rep.output){
     // компактный вывод для сервисных и код-шагов
     const o={...rep.output}; delete o.checks; delete o.rows; delete o.breakdown;
     if(Object.keys(o).length) body+='<div class="out">'+escapeHtml(JSON.stringify(o,null,2))+'</div>';
@@ -1981,34 +2106,18 @@ function renderIssueList(title, items, emptyText){
 }
 
 function renderSummaryQualityPanel(gate){
-  const judgeLabels={
-    truth_check:'Достоверность',
-    critical_facts_check:'Критические факты',
-    context_utility_check:'Полезность',
-    action_check:'Договорённости',
-    presentation_check:'Формат'
-  };
-  const judges=gate.judges||{};
   const score=Number(gate.summary_quality_score||0);
   const scoreTone=score>=90?'ok':(score>=70?'warn':'bad');
   let html='<div class="metrics" style="margin-top:12px">'
     +'<div class="metric"><div class="ml">Summary Quality Score</div><div class="mv '+scoreTone+'">'+score.toFixed(1)+'</div></div>'
     +'<div class="metric"><div class="ml">Решение</div><div class="mv '+decisionTone(gate.decision)+'">'+escapeHtml(gate.decision||'—')+'</div></div>'
     +'</div>';
-  html+='<div class="metrics">';
-  for(const key of Object.keys(judgeLabels)){
-    const raw=judges[key]||{};
-    html+='<div class="metric"><div class="ml">'+escapeHtml(judgeLabels[key])+'</div><div class="mv '+judgeTone(raw)+'">'+escapeHtml(raw.score ?? '—')+'</div></div>';
-  }
-  html+='</div>';
-  html+=renderIssueList('Критические ошибки', gate.critical_errors, 'нет');
-  html+=renderIssueList('Предупреждения', gate.warnings, 'нет');
-  html+=renderIssueList('Топ-3 рекомендации', gate.top_recommendations||toList(gate.recommendations).slice(0,3), 'нет');
+  html+='<div class="kvlist" style="margin-top:10px"><div><span class="k">Главная причина решения</span> <b>'+escapeHtml(gate.main_reason||gate.explanation||'—')+'</b></div></div>';
+  html+=renderIssueList('3 ключевые проблемы', toList(gate.key_problems).slice(0,3), 'нет');
+  html+=renderIssueList('3 действия для исправления', gate.top_recommendations||toList(gate.recommendations).slice(0,3), 'нет');
   html+='<div style="margin-top:12px">';
-  for(const key of Object.keys(judgeLabels)){
-    html+='<details class="help"><summary>JSON: '+escapeHtml(judgeLabels[key])+'</summary>'
-      +'<div class="out">'+escapeHtml(JSON.stringify(judges[key]||{},null,2))+'</div></details>';
-  }
+  html+='<details class="help"><summary>Полный JSON Summary Quality Gate</summary>'
+    +'<div class="out">'+escapeHtml(JSON.stringify(gate,null,2))+'</div></details>';
   html+='</div>';
   return html;
 }
