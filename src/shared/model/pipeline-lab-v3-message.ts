@@ -25,6 +25,7 @@ export type PipelineLabV3RunPayload = Readonly<{
   // from Dashboard, not just its aggregate numbers.
   transcript?: string;
   report?: unknown;
+  stageReports?: unknown;
 }>;
 
 export type PipelineLabV3RunMessage = Readonly<{

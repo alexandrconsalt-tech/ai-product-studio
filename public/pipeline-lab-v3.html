@@ -586,6 +586,15 @@ function summaryQualityStages(){
 10. Нет отрицательных фактов типа “источник средств не определён”, если это не нужно в Summary.
 11. Структура соответствует стандарту: краткий основной текст + статус/договорённость или следующий шаг.
 
+Не запрещай переговорные условия клиента, если они важны для продолжения работы и написаны без точных сумм:
+- клиент просит торг;
+- клиент готов к быстрому выкупу;
+- клиент предлагает особые условия;
+- клиент хочет корректировку цены;
+- клиент обсуждает комиссию как условие сделки.
+
+Запрещай только точную цену объекта, бюджет клиента, полный ценовой диапазон или точные суммы комиссии/скидки. Формулировка уровня «готов к быстрому выкупу при корректировке условий и обсуждает комиссию» допустима.
+
 Верни строго валидный JSON без markdown:
 
 {
@@ -745,12 +754,34 @@ function defaultPipeline(){
 ## ЧЕК-ЛИСТ ИЗВЛЕЧЕНИЯ (включай всё, что прозвучало)
 
 1. **Клиент:** имя; роль — сам покупатель (частное лицо) / для родственников / представитель / риелтор клиента; если решение принимает не он — укажи. Цель звонка.
-2. **Вопросы клиента и ответы агента.** Фиксируй парой «Спросил про X — ответ: Y» только рабочий смысл: документы, история объекта, собственники, причина продажи, условия сделки, торг, доступность похожих вариантов. Следующий агент должен знать, что клиенту уже рассказали, чтобы не повторяться и не противоречить.
+2. **Рабочие факты из вопросов и ответов.** Не пересказывай формат диалога. Выведи итоговый смысл: документы в порядке / срочных причин продажи нет / показ невозможен завтра / клиент готов к торгу / подходящего предложения нет. Следующий агент должен знать итог, а не последовательность вопросов.
 3. **Деньги:** способ оплаты и источник средств (ипотека, наличные, продажа своего жилья, маткапитал). Конкретные суммы, бюджет клиента, цена объекта и ценовая вилка НЕ пишутся в саммари: они должны жить в полях карточки заявки.
 4. **Сроки сделки**, если клиент о них говорил. Дата просмотра или созвона — это договорённость, а не срок сделки.
 5. **Ограничения и особенности:** доступ на объект (кто проживает, чьё согласие нужно), обременения, зависимость от продажи другого жилья, альтернативы клиента.
 6. **Сомнения и возражения** — конкретно, что именно смущает.
 7. **Статус клиента** — по словарю из раздела «Формат», каждый дескриптор подтверждается словами или действиями клиента.
+
+## СТИЛЬ ФОРМУЛИРОВАНИЯ
+
+Пиши саммари как набор итоговых рабочих фактов, а не как пересказ диалога.
+
+Запрещено использовать шаблон:
+— «Клиент спросил — агент ответил».
+— «Спросил/спросила X — агент: Y».
+— «Уточнял/уточняла X — агент ответил Y».
+— «Клиент задал вопрос...».
+
+Вместо этого формулируй результат:
+Плохо: «Спросила причину продажи — агент: срочных причин продажи нет».
+Хорошо: «Срочных причин продажи нет».
+
+Плохо: «Уточняла возможность быстрого выкупа с корректировкой цены — агент ответил, что такого предложения нет».
+Хорошо: «Клиент готов к быстрому выкупу за наличные при корректировке условий; подходящего предложения под такие условия у агента нет».
+
+Плохо: «Спросил, можно ли посмотреть завтра — ответ агента: нельзя».
+Хорошо: «Завтра показ невозможен; предварительно рассматривается четверг».
+
+Главный принцип: Summary должно быть не стенограммой и не пересказом вопросов/ответов, а CRM-выжимкой для продолжения работы.
 
 ## ЧЕГО НЕ ДЕЛАТЬ
 
@@ -776,8 +807,8 @@ function defaultPipeline(){
 
 ## ФОРМАТ САММАРИ (полноценный звонок)
 
-**1. Основной текст:** 3–6 предложений, до 800 символов. Плотный деловой стиль, телеграфные конструкции приветствуются («Спросил про документы — ответ: …»). Порядок (пропускай отсутствующее):
-клиент и цель → вопросы и ответы без дублей карточки заявки → способ оплаты/источник средств без сумм → сроки → ограничения и особенности.
+**1. Основной текст:** 3–6 предложений, до 800 символов. Плотный деловой стиль, итоговые рабочие факты без пересказа вопрос-ответ. Порядок (пропускай отсутствующее):
+клиент и цель → итоговые факты без дублей карточки заявки → способ оплаты/источник средств без сумм → сроки → ограничения и особенности.
 
 **2. Строка статуса** (с новой строки): «Статус: …» — 2–4 дескриптора из словаря, через запятую:
 полноценный контакт / краткий контакт / реальный интерес / готов к просмотру / готов к сделке / ждёт подтверждения / сравнивает варианты / сомневается / взял паузу / теряет интерес.
@@ -799,10 +830,10 @@ function defaultPipeline(){
 ## ЭТАЛОННЫЕ ПРИМЕРЫ
 
 Пример 1 — полноценный звонок:
-{"summary": "Андрей, частное лицо — интересуется конкретной квартирой, цель — лично посмотреть. Спросил про документы и причину продажи — ответ: собственница одна с момента постройки, свободная продажа, деньги хочет вложить в бизнес. Просил показ утром; ограничение — в квартире проживает родственник собственницы, нужно согласовать доступ.\nСтатус: полноценный контакт, реальный интерес, готов к просмотру, ждёт подтверждения.\nДоговорились: агент согласует доступ и подтвердит Андрею просмотр звонком."}
+{"summary": "Андрей, частное лицо — интересуется конкретной квартирой, цель — лично посмотреть. Документы и история объекта обсуждены: собственница одна с момента постройки, свободная продажа, деньги планирует вложить в бизнес. Клиент просит показ утром; доступ нужно согласовать, потому что в квартире проживает родственник собственницы.\nСтатус: полноценный контакт, реальный интерес, готов к просмотру, ждёт подтверждения.\nДоговорились: агент согласует доступ и подтвердит Андрею просмотр звонком."}
 
 Пример 2 — звонок с ипотекой и возражением:
-{"summary": "Клиентка подбирает квартиру для дочери-студентки, решение принимают вместе с мужем. Покупка в ипотеку, одобрение банка есть, сделку хочет закрыть до конца лета. Спросила про шум — ответ агента усилил сомнение; попросила подобрать альтернативы с более подходящими параметрами. Упомянула, что параллельно смотрит новостройку.\nСтатус: полноценный контакт, сравнивает варианты, сомневается.\nСледующий шаг: агент подбирает несколько альтернатив и перезванивает до четверга."}
+{"summary": "Клиентка подбирает квартиру для дочери-студентки, решение принимают вместе с мужем. Покупка в ипотеку, одобрение банка есть, сделку хочет закрыть до конца лета. После обсуждения шума сомневается в объекте и просит альтернативы с более подходящими параметрами; параллельно рассматривает новостройку.\nСтатус: полноценный контакт, сравнивает варианты, сомневается.\nСледующий шаг: агент подбирает несколько альтернатив и перезванивает до четверга."}
 
 Пример 3 — слабый звонок:
 {"summary": "Недостаточно информации. Клиент уточнил актуальность объявления и завершил разговор, потребность обсудить не успели.\nСледующий шаг: перезвонить, выяснить цель обращения и критерии подбора."}
@@ -1123,11 +1154,108 @@ function normalizeSummaryJudge(raw, key, label){
   const score=Number.isFinite(scoreRaw) ? Math.max(0, Math.min(100, scoreRaw)) : 0;
   const status=normalizeStatus(value.status, score);
   const explanation=value.explanation || (status==='pass' ? 'Критических проблем не найдено.' : 'Проверщик не дал объяснение.');
+  const criteria=buildSummaryJudgeCriteria(key, {...value, score, status, explanation});
   const missing=[
     ...toList(value.missing_for_next_agent),
     ...toList(value.readability_issues)
   ].map(formatIssue).filter(Boolean);
-  return {score, status, explanation, raw:{...value, score, status, explanation}, missing};
+  return {score, status, explanation, raw:{...value, score, status, explanation, criteria}, missing, criteria};
+}
+
+function criterion(name, failed, warning, explanation){
+  const status=failed?'fail':(warning?'warning':'pass');
+  return {name, status, score:failed?0:(warning?75:100), explanation};
+}
+
+function buildSummaryJudgeCriteria(key, raw){
+  if(key==='truth_check') return [
+    criterion('Галлюцинации', raw.has_hallucinations===true, false, raw.has_hallucinations?'Есть факты без опоры в транскрипции.':'Галлюцинации не выявлены.'),
+    criterion('Искажение фактов', raw.has_fact_distortions===true, false, raw.has_fact_distortions?'Есть искажённые факты.':'Искажения фактов не выявлены.'),
+    criterion('Путаница ролей', raw.has_role_confusion===true, false, raw.has_role_confusion?'Роли клиента/агента/оператора перепутаны.':'Роли переданы корректно.'),
+    criterion('Деньги, сроки, договорённости', toList(raw.critical_errors).some(x=>/деньг|срок|договор|шаг|fund|deadline/i.test(formatIssue(x))), raw.status==='warning', raw.explanation||'Критические факты сверены.')
+  ];
+  if(key==='critical_facts_check') return [
+    criterion('High-факты отражены', toList(raw.missed_critical_facts).some(x=>x&&x.importance==='high'), toList(raw.missed_critical_facts).length>0, 'Проверены важные факты, реально прозвучавшие в звонке.'),
+    criterion('Договорённости и следующий шаг не пропущены', toList(raw.missed_critical_facts).some(x=>/договор|следующ/i.test(formatIssue(x))), false, 'Проверена полнота договорённостей и следующего шага.'),
+    criterion('Не штрафует за отсутствующие в звонке данные', false, raw.status==='warning', raw.explanation||'Оценены только прозвучавшие факты.')
+  ];
+  if(key==='context_utility_check') return [
+    criterion('Можно продолжить без записи', raw.can_continue_without_recording===false, false, raw.can_continue_without_recording===false?'Агенту потребуется запись.':'Контекст достаточен для продолжения.'),
+    criterion('Понятна ситуация клиента', Number(raw.context_clarity||0)<70, Number(raw.context_clarity||0)<90, 'Оценена ясность контекста.'),
+    criterion('Рабочая полезность для CRM', Number(raw.business_usefulness||0)<70, Number(raw.business_usefulness||0)<90, 'Оценена применимость для следующего действия.')
+  ];
+  if(key==='action_check') return [
+    criterion('Результат звонка отражён', raw.call_result_in_transcript && raw.is_result_reflected===false, false, 'Проверен итог звонка.'),
+    criterion('Договорённость отражена', raw.agreement_in_transcript && raw.is_agreement_reflected===false, false, 'Проверены договорённости.'),
+    criterion('Следующий шаг отражён', raw.next_step_in_transcript && raw.is_next_step_reflected===false, false, 'Проверен следующий шаг и ответственный.')
+  ];
+  if(key==='presentation_check') return [
+    criterion('Длина до 700 символов', raw.is_too_long===true, false, 'Проверена длина Summary.'),
+    criterion('Нет дублей карточки', toList(raw.forbidden_card_duplicates).length>0, false, 'Адрес, цена, характеристики и другие поля карточки не должны попадать в Summary.'),
+    criterion('Нет PII/контактов', toList(raw.pii_found).length>0, false, 'Телефоны и контакты запрещены.'),
+    criterion('Читаемость и формат', toList(raw.readability_issues).length>0, toList(raw.forbidden_phrases).length>0, raw.explanation||'Проверен формат и лаконичность.')
+  ];
+  return [criterion('JSON и базовый результат', raw.status==='fail', raw.status==='warning', raw.explanation||'Проверен результат этапа.')];
+}
+
+function stageScoreFromOutput(stage, rep){
+  const out=rep.output||{};
+  if(out.summary_quality_score!=null) return Number(out.summary_quality_score);
+  if(out.score!=null) return Number(out.score)>1?Number(out.score):Number(out.score)*100;
+  if(stage.codeFn==='validate' && out.score!=null) return Number(out.score)*100;
+  if(stage.codeFn==='store' && out.score!=null) return Number(out.score)*100;
+  if(stage.codeFn==='stt') return rep.status==='ok'?100:0;
+  if(stage.type==='llm' || stage.type==='check') return rep.parseErr?0:(out&&typeof out==='object'&&Object.keys(out).length?90:70);
+  if(rep.status==='bad') return 0;
+  if(rep.status==='warn') return 75;
+  return 100;
+}
+
+function metaStatusFromScore(score, rep){
+  if(rep.status==='bad' || score<70) return 'fail';
+  if(rep.status==='warn' || score<90) return 'warning';
+  return 'pass';
+}
+
+function buildStageMeta(stage, rep){
+  const score=Math.max(0, Math.min(100, Number(stageScoreFromOutput(stage, rep))||0));
+  const status=metaStatusFromScore(score, rep);
+  const criteria=(rep.output&&Array.isArray(rep.output.criteria)) ? rep.output.criteria : [
+    {name:'Выполнение этапа', status, score, explanation: rep.error || rep.parseErr || (status==='pass'?'Этап выполнен без критических проблем.':'Этап требует внимания.')},
+  ];
+  const issues=[...toList(rep.error), ...toList(rep.parseErr), ...toList(rep.output&&rep.output.issues)].filter(Boolean).map(formatIssue);
+  const recommendations=toList(rep.output&&rep.output.recommendations).map(formatIssue).filter(Boolean);
+  return {
+    status,
+    score:+score.toFixed(1),
+    confidence:+(score/100).toFixed(3),
+    durationMs:rep.ms||0,
+    tokens:rep.tokens,
+    cost:rep.cost,
+    explanation:(rep.output&&rep.output.explanation)||issues[0]||criteria[0]?.explanation||'Этап выполнен.',
+    criteria,
+    issues,
+    recommendations
+  };
+}
+
+function warningDetail(warning_type, message){
+  return {warning_type, message:formatIssue(message)};
+}
+
+function recommendationAllowed(text){
+  return !/(телефон|номер|контакт|адрес|цена объекта|точная цена|характеристик|площад|этаж|данных не было|агент не задал|вопросы, которые агент)/i.test(String(text||''));
+}
+
+function uniqTextList(list){
+  const seen=new Set();
+  const out=[];
+  for(const item of list.map(formatIssue).filter(Boolean)){
+    const key=item.toLowerCase().replace(/\s+/g,' ').trim();
+    if(seen.has(key)) continue;
+    seen.add(key); out.push(item);
+  }
+  return out;
 }
 
 function levenshtein(a,b){
@@ -1360,11 +1488,15 @@ const CODE_FUNCS = {
 
     const critical_errors=[];
     const warnings=[];
+    const warning_details=[];
     const recommendations=[];
     for(const key of judgeKeys){
       const judge=judges[key];
       if(judge.status==='fail') critical_errors.push(labels[key]+': '+judge.explanation);
-      else if(judge.status==='warning') warnings.push(labels[key]+': '+judge.explanation);
+      else if(judge.status==='warning'){
+        warnings.push(labels[key]+': '+judge.explanation);
+        warning_details.push(warningDetail(key==='context_utility_check'?'weak_context':key==='action_check'?'action_issue':key==='presentation_check'?'format':'missing_critical_fact', labels[key]+': '+judge.explanation));
+      }
       if(judge.missing) recommendations.push(...judge.missing.map(x=>labels[key]+': '+x));
     }
     critical_errors.push(...toList(truth.critical_errors).map(formatIssue));
@@ -1374,38 +1506,51 @@ const CODE_FUNCS = {
     warnings.push(...toList(presentation.pii_found).map(x=>'PII/контакт в саммари: '+formatIssue(x)));
     warnings.push(...toList(presentation.forbidden_phrases).map(x=>'Запрещённая формулировка: '+formatIssue(x)));
     warnings.push(...toList(presentation.readability_issues).map(x=>'Читаемость: '+formatIssue(x)));
+    warning_details.push(...toList(presentation.forbidden_card_duplicates).map(x=>warningDetail('duplicate_card_data', x)));
+    warning_details.push(...toList(presentation.pii_found).map(x=>warningDetail('pii', x)));
+    warning_details.push(...toList(presentation.forbidden_phrases).map(x=>warningDetail('format', x)));
+    warning_details.push(...toList(presentation.readability_issues).map(x=>warningDetail('readability', x)));
+    warning_details.push(...toList(criticalFacts.missed_critical_facts).map(x=>warningDetail('missing_critical_fact', x)));
+    warning_details.push(...toList(action.action_errors).map(x=>warningDetail('action_issue', x)));
     recommendations.push(...toList(utility.missing_for_next_agent).map(x=>'Добавить для следующего агента: '+formatIssue(x)));
     recommendations.push(...toList(criticalFacts.missed_critical_facts).map(x=>'Отразить критический факт: '+formatIssue(x)));
     recommendations.push(...toList(action.action_errors).map(x=>'Уточнить договорённость/следующий шаг: '+formatIssue(x)));
     recommendations.push(...toList(presentation.forbidden_card_duplicates).map(x=>'Убрать из саммари поле карточки: '+formatIssue(x)));
     recommendations.push(...toList(presentation.pii_found).map(x=>'Убрать контактные данные: '+formatIssue(x)));
 
-    const hasWarning=judgeKeys.some(key=>judges[key].status==='warning');
     const hasForbidden=toList(presentation.forbidden_card_duplicates).length>0;
     const hasPii=toList(presentation.pii_found).length>0;
+    const hasMissedNextStep=toList(action.action_errors).some(x=>/missed_next_step|следующ/i.test(formatIssue(x)));
+    const warningTypes=[...new Set(warning_details.map(x=>x.warning_type).filter(Boolean))];
+    const onlyMinorWarnings=warningTypes.every(t=>t==='readability'||t==='minor_format');
     const retry =
       summary_quality_score < 70 ||
       truth.has_hallucinations===true ||
       truth.has_fact_distortions===true ||
       truth.has_role_confusion===true ||
+      hasPii ||
+      hasMissedNextStep ||
       action.status==='fail' ||
       criticalFacts.status==='fail';
     const autoSave =
       summary_quality_score >= 90 &&
+      critical_errors.length===0 &&
       truth.status==='pass' &&
       criticalFacts.status==='pass' &&
       action.status!=='fail' &&
       !hasPii &&
       !hasForbidden &&
       truth.has_hallucinations===false &&
-      truth.has_fact_distortions===false;
+      truth.has_fact_distortions===false &&
+      onlyMinorWarnings;
     let decision='MANUAL_REVIEW';
     if(retry) decision='RETRY';
     else if(autoSave) decision='AUTO_SAVE';
     const stt=decision==='AUTO_SAVE'?'ok':(decision==='MANUAL_REVIEW'?'warn':'bad');
-    const uniqueCritical=[...new Set(critical_errors.filter(Boolean))];
-    const uniqueWarnings=[...new Set(warnings.filter(Boolean))];
-    const uniqueRecommendations=[...new Set(recommendations.filter(Boolean))];
+    const uniqueCritical=uniqTextList(critical_errors);
+    const uniqueWarnings=uniqTextList(warnings);
+    const uniqueRecommendations=uniqTextList(recommendations).filter(recommendationAllowed);
+    const uniqueWarningDetails=warning_details.filter((item,i,arr)=>item.message && arr.findIndex(x=>x.warning_type===item.warning_type&&x.message===item.message)===i);
     const explanation = decision==='AUTO_SAVE'
       ? 'Саммари прошло все критические проверки и может быть сохранено автоматически.'
       : decision==='RETRY'
@@ -1419,7 +1564,9 @@ const CODE_FUNCS = {
         scores,
         critical_errors:uniqueCritical,
         warnings:uniqueWarnings,
+        warning_details:uniqueWarningDetails,
         recommendations:uniqueRecommendations,
+        top_recommendations:uniqueRecommendations.slice(0,3),
         explanation,
         judges:Object.fromEntries(judgeKeys.map(key=>[key, judges[key].raw]))
       },
@@ -1596,6 +1743,7 @@ async function runStage(stage, ctx){
     if(!fn) throw new Error('нет код-функции '+stage.codeFn);
     const r=fn(stage,ctx);
     r.ms=Math.round(performance.now()-t0); r.isCode=true;
+    r.meta=buildStageMeta(stage,r);
     return r;
   } else {
     const prompt=tmpl(stage.prompt, ctx);
@@ -1606,10 +1754,12 @@ async function runStage(stage, ctx){
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=(actualModel&&actualModel.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)')+(fallbackNote?' ('+fallbackNote+')':'');
     const output = parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw});
-    return { output, raw, parseErr, ms, tokens, cost,
+    const rep={ output, raw, parseErr, ms, tokens, cost,
       status: parseErr?(stage.type==='check'?'bad':'warn'):'ok',
       metrics:[['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
+    rep.meta=buildStageMeta(stage,rep);
+    return rep;
   }
 }
 
@@ -1639,6 +1789,7 @@ async function runPipeline(){
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
   let totalTokens=0, totalCost=0, errorCount=0, warningCount=0;
+  const stageReports=[];
   const startedAt=new Date().toISOString(), startedMs=Date.now();
 
   for(let i=0;i<active.length;i++){
@@ -1659,6 +1810,7 @@ async function runPipeline(){
         ms:0,
         metrics:[['Ошибка',e.message]]
       };
+      rep.meta=buildStageMeta(stage,rep);
     }
 
     // сохраняем в контекст
@@ -1667,6 +1819,7 @@ async function runPipeline(){
     if(rep.cost) totalCost+=rep.cost;
     if(rep.status==='bad') errorCount++;
     else if(rep.status==='warn') warningCount++;
+    stageReports.push({stage:sanitize(stage), report:rep});
 
     card.replaceWith(renderReport(stage, rep, i+1));
     progBar.style.width=((i+1)/active.length*100)+'%';
@@ -1674,8 +1827,8 @@ async function runPipeline(){
 
   runStatus.textContent='готово';
   runBtn.disabled=false;
-  renderFinal(totalTokens, totalCost);
-  reportRunToParent({ startedAt, durationMs: Date.now()-startedMs, stageCount: active.length, errorCount, warningCount, totalTokens, totalCost });
+  renderFinal(totalTokens, totalCost, stageReports);
+  reportRunToParent({ startedAt, durationMs: Date.now()-startedMs, stageCount: active.length, errorCount, warningCount, totalTokens, totalCost, stageReports });
 }
 
 // Playground (AI Product Studio v2) listens for this from the parent
@@ -1690,7 +1843,7 @@ function reportRunToParent(run){
     // (dlReport, see renderFinal) -- so a test opened later from
     // Dashboard's run history shows exactly what that download would
     // have shown, not a lighter summary.
-    const report={ pipeline: pipeline.map(sanitize), result: ctx, usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
+    const report={ pipeline: pipeline.map(sanitize), result: ctx, stageReports: run.stageReports||[], usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
     window.parent.postMessage({
       source:'pipeline-lab-v3', type:'run-complete', productId: PRODUCT_ID,
       payload:{
@@ -1735,6 +1888,8 @@ function renderReport(stage, rep, num){
   const M=stageTypeMeta(stage);
   const el=document.createElement('div'); el.className='report';
   let body='';
+  const meta=rep.meta || buildStageMeta(stage,rep);
+  const scoreTone=meta.score>=90?'ok':(meta.score>=70?'warn':'bad');
 
   if(rep.metrics&&rep.metrics.length){
     body+='<div class="metrics">'+rep.metrics.map(([l,v])=>{
@@ -1742,6 +1897,22 @@ function renderReport(stage, rep, num){
       if(l==='Уверенность системы'||l==='Уверенность'){const nn=parseFloat(v);cls=nn>=0.8?'ok':nn>=0.65?'warn':'bad';}
       return '<div class="metric"><div class="ml">'+l+'</div><div class="mv '+cls+'">'+v+'</div></div>';
     }).join('')+'</div>';
+  }
+
+  body+='<div class="metrics">'
+    +'<div class="metric"><div class="ml">Оценка</div><div class="mv '+scoreTone+'">'+Number(meta.score||0).toFixed(0)+'%</div></div>'
+    +'<div class="metric"><div class="ml">Confidence</div><div class="mv">'+Number(meta.confidence||0).toFixed(2)+'</div></div>'
+    +'</div>';
+
+  if(meta.criteria&&meta.criteria.length){
+    body+='<details class="help" open><summary>Критерии оценки</summary><ul class="chklist">'
+      +meta.criteria.map(c=>{
+        const st=c.status||'pass';
+        const cls=st==='pass'?'pass':(st==='warning'?'warnli':'fail');
+        const ic=st==='pass'?'✓':(st==='warning'?'!':'✕');
+        return '<li class="'+cls+'"><span class="ic">'+ic+'</span><span><b>'+escapeHtml(c.name||'Критерий')+'</b> · '+escapeHtml(st)+' · '+escapeHtml(c.score??'—')+'%<br><span style="color:var(--muted)">'+escapeHtml(c.explanation||'')+'</span></span></li>';
+      }).join('')
+      +'</ul></details>';
   }
 
   if(rep.checks&&rep.checks.length){
@@ -1775,7 +1946,7 @@ function renderReport(stage, rep, num){
   el.innerHTML='<div class="rep-h">'
     +'<div class="ri" style="background:'+M.bg+';color:'+M.c+'">'+num+'</div>'
     +'<div class="rt"><div class="rn">'+escapeHtml(stage.name)+'</div>'
-    +'<div class="rm">'+M.label+(who?' · '+who:'')+' · '+(rep.ms||0)+' мс</div></div>'
+    +'<div class="rm">'+M.label+(who?' · '+who:'')+' · '+(rep.ms||0)+' мс · Оценка: '+Number(meta.score||0).toFixed(0)+'%</div></div>'
     +'<div class="badge '+badgeFor(st)+'">'+badgeText(st)+'</div></div>'
     +'<div class="rep-b">'+(body||'<div class="rm" style="color:var(--dim)">нет данных</div>')+'</div>';
   return el;
@@ -1832,7 +2003,7 @@ function renderSummaryQualityPanel(gate){
   html+='</div>';
   html+=renderIssueList('Критические ошибки', gate.critical_errors, 'нет');
   html+=renderIssueList('Предупреждения', gate.warnings, 'нет');
-  html+=renderIssueList('Рекомендации', gate.recommendations, 'нет');
+  html+=renderIssueList('Топ-3 рекомендации', gate.top_recommendations||toList(gate.recommendations).slice(0,3), 'нет');
   html+='<div style="margin-top:12px">';
   for(const key of Object.keys(judgeLabels)){
     html+='<details class="help"><summary>JSON: '+escapeHtml(judgeLabels[key])+'</summary>'
@@ -1842,7 +2013,7 @@ function renderSummaryQualityPanel(gate){
   return html;
 }
 
-function renderFinal(totalTokens, totalCost){
+function renderFinal(totalTokens, totalCost, stageReports){
   const sm=ctx.summary, gate=ctx.summary_quality_gate||ctx.gate, crm=ctx.crm, n=ctx.needs||{};
   const summary = (sm&&sm.summary) || '—';
   const el=document.createElement('div'); el.className='final';
@@ -1885,7 +2056,7 @@ function renderFinal(totalTokens, totalCost){
 
   metaEl.scrollIntoView({behavior:'smooth',block:'center'});
   document.getElementById('dlReport').onclick=()=>{
-    const blob=new Blob([JSON.stringify({pipeline:pipeline.map(sanitize),result:ctx,usage:{totalTokens,totalCost}},null,2)],{type:'application/json'});
+    const blob=new Blob([JSON.stringify({pipeline:pipeline.map(sanitize),result:ctx,stageReports:stageReports||[],usage:{totalTokens,totalCost}},null,2)],{type:'application/json'});
     dl(blob,'pipeline_report.json');
   };
 }
