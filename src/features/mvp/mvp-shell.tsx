@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
+import { BarChart3, Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, ClipboardCheck, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppShell, Header, NavigationItem, Sidebar, Workspace, IconButton, Badge, Breadcrumb } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
@@ -19,6 +19,8 @@ import { AnalyticsScreen } from "./screens/analytics-screen";
 import { PipelineLabV3Screen } from "./screens/pipeline-lab-v3-screen";
 import { DashboardScreen } from "./screens/dashboard-screen";
 import { SettingsScreen } from "./screens/settings-screen";
+import { SummaryReviewScreen } from "./screens/summary-review-screen";
+import { SummaryReportScreen } from "./screens/summary-report-screen";
 
 // Every view stays reachable by URL (`?view=...`) -- CLAUDE.md's "hide
 // navigation, never delete code" rule (AI Product Studio v2 addendum).
@@ -31,6 +33,8 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
   { id: "architecture", label: "Архитектура", icon: <BrainCircuit className="size-4" aria-hidden="true" /> },
   { id: "pipeline", label: "Пайплайн", icon: <Bot className="size-4" aria-hidden="true" /> },
   { id: "playground", label: "Песочница", icon: <Play className="size-4" aria-hidden="true" /> },
+  { id: "summary-review", label: "Оценка Summary", icon: <ClipboardCheck className="size-4" aria-hidden="true" /> },
+  { id: "summary-report", label: "Отчёт Summary", icon: <BarChart3 className="size-4" aria-hidden="true" /> },
   { id: "inspector", label: "Инспектор", icon: <Microscope className="size-4" aria-hidden="true" /> },
   { id: "prompts", label: "Промпты", icon: <ScrollText className="size-4" aria-hidden="true" /> },
   { id: "analytics", label: "Аналитика", icon: <LineChart className="size-4" aria-hidden="true" /> },
@@ -44,7 +48,7 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
 // API keys). Everything else above stays reachable by URL only
 // (Projects, Architecture, Pipeline, Inspector, Prompts, Analytics,
 // Pipeline Lab v3 standalone).
-const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "dashboard", "settings"]);
+const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "summary-review", "summary-report", "dashboard", "settings"]);
 const visibleNavItems = navItems.filter((item) => VISIBLE_VIEW_IDS.has(item.id));
 
 const viewTitles: Record<MvpView, string> = {
@@ -53,6 +57,8 @@ const viewTitles: Record<MvpView, string> = {
   architecture: "Архитектура",
   pipeline: "Пайплайн",
   playground: "Песочница",
+  "summary-review": "Оценка качества Summary",
+  "summary-report": "Отчёт по оценке",
   inspector: "Инспектор выполнения",
   prompts: "Инспектор промптов",
   analytics: "Аналитика",
@@ -68,6 +74,8 @@ function isMvpView(value: string | null): value is MvpView {
     value === "architecture" ||
     value === "pipeline" ||
     value === "playground" ||
+    value === "summary-review" ||
+    value === "summary-report" ||
     value === "inspector" ||
     value === "prompts" ||
     value === "analytics" ||
@@ -147,6 +155,8 @@ export function MvpShell() {
             {view === "architecture" ? <ArchitectureScreen /> : null}
             {view === "pipeline" ? <PipelineScreen /> : null}
             {view === "playground" ? <PlaygroundScreen /> : null}
+            {view === "summary-review" ? <SummaryReviewScreen /> : null}
+            {view === "summary-report" ? <SummaryReportScreen /> : null}
             {view === "inspector" ? <ExecutionInspectorScreen /> : null}
             {view === "prompts" ? <PromptInspectorScreen /> : null}
             {view === "analytics" ? <AnalyticsScreen /> : null}
