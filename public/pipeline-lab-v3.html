@@ -10,8 +10,8 @@
     --line:#26324d; --line2:#324063;
     --ink:#e9eef8; --muted:#8b98b6; --dim:#5a6788;
     --svc:#38bdf8; --code:#f59e0b; --gpt:#34d399; --claude:#a78bfa; --gate:#fb7185;
-    --ok:#34d399; --warn:#fbbf24; --bad:#fb7185;
-    --okbg:rgba(52,211,153,.12); --warnbg:rgba(251,191,36,.12); --badbg:rgba(251,113,133,.12);
+    --ok:#34d399; --warn:#fbbf24; --attn:#fb923c; --bad:#fb7185;
+    --okbg:rgba(52,211,153,.12); --warnbg:rgba(251,191,36,.12); --attnbg:rgba(251,146,60,.12); --badbg:rgba(251,113,133,.12);
   }
   *{box-sizing:border-box}
   body{margin:0;background:
@@ -112,13 +112,14 @@
   .rep-h .rt .rm{font-size:11.5px;color:var(--dim)}
   .rep-h .badge{font-size:11px;font-weight:800;padding:4px 10px;border-radius:7px;text-transform:uppercase;letter-spacing:.04em}
   .badge.ok{background:var(--okbg);color:var(--ok)} .badge.warn{background:var(--warnbg);color:var(--warn)}
+  .badge.attn{background:var(--attnbg);color:var(--attn)}
   .badge.bad{background:var(--badbg);color:var(--bad)} .badge.run{background:rgba(56,189,248,.14);color:var(--svc)}
   .rep-b{padding:14px 16px}
   .metrics{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   .metric{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:96px}
   .metric .ml{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}
   .metric .mv{font-size:17px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
-  .metric .mv.ok{color:var(--ok)} .metric .mv.warn{color:var(--warn)} .metric .mv.bad{color:var(--bad)}
+  .metric .mv.ok{color:var(--ok)} .metric .mv.warn{color:var(--warn)} .metric .mv.attn{color:var(--attn)} .metric .mv.bad{color:var(--bad)}
   .kvlist{font-size:12.5px}
   .kvlist .k{color:var(--muted);display:inline-block;min-width:150px}
   .kvlist > div{padding:4px 0;border-bottom:1px solid var(--line)}
@@ -302,7 +303,7 @@ const MODEL_OPTIONS = [
   {v:'gpt-5-mini',        t:'GPT-5 mini (OpenAI)'},
   {v:'claude-sonnet-4-6', t:'Claude Sonnet 4.6 (Anthropic)'},
 ];
-const CODE_FN_LIST = ['stt','validate','store','gate','summaryQualityGate','crm'];
+const CODE_FN_LIST = ['stt','validate','store','conversationStore','gate','summaryQualityGate','crm'];
 
 // Ориентировочная стоимость за 1000 токенов -- оценка для отображения
 // расходов теста, а не точный биллинг вендора (реальная стоимость
@@ -318,7 +319,7 @@ function summaryQualityStages(){
   return [
     {
       id:s(), enabled:true, type:'check', name:'Проверка достоверности',
-      model:'claude-sonnet-4-6', outKey:'truth_check', promptVersion:1,
+      model:'claude-sonnet-4-6', outKey:'truth_check', promptVersion:2,
       prompt:
 `Ты — независимый проверщик достоверности AI Summary для звонков по недвижимости.
 
@@ -366,18 +367,12 @@ function summaryQualityStages(){
 Транскрипция:
 {{transcript}}
 
-Факты:
-{{ctx.facts}}
-
-Потребности:
-{{ctx.needs}}
-
-Результат звонка:
-{{ctx.outcome}}`
+Conversation Store (проверенные факты/потребности/результат звонка -- источник истины):
+{{ctx.conversation_store}}`
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка критически важных фактов',
-      model:'claude-sonnet-4-6', outKey:'critical_facts_check', promptVersion:1,
+      model:'claude-sonnet-4-6', outKey:'critical_facts_check', promptVersion:2,
       prompt:
 `Ты — независимый проверщик критически важных фактов AI Summary для CRM агентства недвижимости.
 
@@ -457,18 +452,12 @@ function summaryQualityStages(){
 Транскрипция:
 {{transcript}}
 
-Факты:
-{{ctx.facts}}
-
-Потребности:
-{{ctx.needs}}
-
-Результат звонка:
-{{ctx.outcome}}`
+Conversation Store (проверенные факты/потребности/результат звонка -- источник истины):
+{{ctx.conversation_store}}`
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка полезности для агента',
-      model:'claude-sonnet-4-6', outKey:'context_utility_check', promptVersion:1,
+      model:'claude-sonnet-4-6', outKey:'context_utility_check', promptVersion:2,
       prompt:
 `Ты — независимый проверщик продуктовой полезности AI Summary.
 
@@ -521,18 +510,12 @@ function summaryQualityStages(){
 Транскрипция:
 {{transcript}}
 
-Факты:
-{{ctx.facts}}
-
-Потребности:
-{{ctx.needs}}
-
-Результат звонка:
-{{ctx.outcome}}`
+Conversation Store (проверенные факты/потребности/результат звонка -- источник истины):
+{{ctx.conversation_store}}`
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка договорённостей и следующего шага',
-      model:'claude-sonnet-4-6', outKey:'action_check', promptVersion:1,
+      model:'claude-sonnet-4-6', outKey:'action_check', promptVersion:2,
       prompt:
 `Ты — независимый проверщик результата звонка, договорённостей и следующего шага.
 
@@ -593,8 +576,8 @@ function summaryQualityStages(){
 Транскрипция:
 {{transcript}}
 
-Результат звонка:
-{{ctx.outcome}}`
+Conversation Store (проверенный результат звонка -- источник истины):
+{{ctx.conversation_store}}`
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка формата и правил',
@@ -672,11 +655,13 @@ function summaryQualityStages(){
   ];
 }
 
-//  ДЕФОЛТНЫЙ ПАЙПЛАЙН — ЧЕТЫРНАДЦАТЬ ЭТАПОВ
-//  Nexara → Валидация → Факты → Хранилище → Потребности → Результат →
-//  Саммари → 5 специализированных проверщиков → Summary Quality Gate → CRM
-//  Промпты шагов 3/5/6/7/8-12 и логика Quality Gate — версия V9.1, 2026-07-07
-//  (AI Summary stabilization pass, PIPELINE_VERSION 7). См. CLAUDE.md.
+//  ДЕФОЛТНЫЙ ПАЙПЛАЙН — СЕМНАДЦАТЬ ЭТАПОВ (stages 1-9 rework, 2026-07-08)
+//  Nexara → Валидация → Факты → Проверка фактов → Потребности → Проверка
+//  потребностей → Результат звонка → Проверка результата → Conversation
+//  Store → Саммари → 5 специализированных проверщиков → Summary Quality
+//  Gate → CRM. Этапы 3-9 переведены на схему {value,confidence,evidence,
+//  verification_status}; Conversation Store — единственный источник данных
+//  для Summary и для 5 судей (не сырые facts/needs/outcome). См. CLAUDE.md.
 // ═══════════════════════════════════════════════════════════════════════════
 function defaultPipeline(){
   return [
@@ -691,99 +676,198 @@ function defaultPipeline(){
       codeFn:'validate', outKey:'validation', prompt:''
     },
     {
-      id:s(), enabled:true, type:'llm', name:'Извлечение фактов',
-      model:'gpt-5-mini', outKey:'facts', promptVersion:1,
+      id:s(), enabled:true, type:'llm', name:'Извлечение фактов и цитат',
+      model:'gpt-5-mini', outKey:'facts', promptVersion:2,
       prompt:
 `Ты — Fact Agent пайплайна анализа звонков по недвижимости.
 Извлеки ФАКТЫ из транскрипции. Верни СТРОГО валидный JSON без markdown и пояснений.
-Если факт не прозвучал — ставь null. Отсутствие данных — это нормально, ничего не выдумывай.
-Для каждого факта, где возможно, приведи ДОСЛОВНУЮ цитату из транскрипции.
+Факты на этом этапе ещё НЕ считаются проверенными — их независимо проверит следующий этап (Fact Check).
+
+Каждое поле — ОБЪЕКТ такой формы:
+{"value": <значение>, "confidence": <0..1>, "evidence": "<дословная цитата или null>", "speaker": "Клиент"|"Агент"|"Оператор"|null, "verification_status": "pending"}
+
+Если факт не прозвучал: value=null, confidence=1, evidence=null, speaker=null, verification_status="not_applicable". Отсутствие данных — это нормально, ничего не выдумывай.
+
+ЗАПРЕЩЕНО класть цитату внутрь value — value только чистое значение, а не значение с цитатой в скобках.
+Плохо: "value": "купить (\"хотела продать трёшку и купить...\")"
+Хорошо: "value": "купить", "evidence": "хотела продать трёшку в Москве и купить однушку или двушку"
 
 Схема:
 {
-  "client_name": <имя клиента или null>,
-  "budget": <число в рублях или null>,
-  "budget_citation": <дословная цитата или null>,
-  "source_of_funds": [<массив из: "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено">],
-  "city_or_district": <город/район или null>,
-  "phone_mentioned": <true/false — звучал ли номер телефона>,
-  "intent": <из: "купить","продать","снять","сдать","не определено">,
-  "client_availability": <ограничения/доступность клиента дословно кратко ("не работает, доступен в любое время") или null>
+  "client_name": {"value": <имя клиента или null>, "confidence":0..1, "evidence":"...", "speaker":"Клиент", "verification_status":"pending"},
+  "intent": {"value": <из справочника intent>, "confidence":0..1, "evidence":"...", "speaker":"...", "verification_status":"pending"},
+  "source_of_funds": {"value": [<массив из справочника source_of_funds>], "confidence":0..1, "evidence":"...", "speaker":"...", "verification_status":"pending"},
+  "city_or_district": {"value": <город/район или null>, "confidence":0..1, "evidence":"...", "speaker":"...", "verification_status":"pending"},
+  "budget": {"value": <число в рублях или null>, "confidence":0..1, "evidence":"...", "speaker":"...", "verification_status":"pending"},
+  "phone_mentioned": {"value": <true/false>, "confidence":0..1, "evidence":"...", "speaker":"...", "verification_status":"pending"},
+  "client_availability": {"value": <ограничения/доступность клиента дословно кратко ("только удалённо", "не работает, доступен в любое время") или null>, "confidence":0..1, "evidence":"...", "speaker":"...", "verification_status":"pending"}
 }
 
-Правило про budget (V8.1): budget заполняй ТОЛЬКО если клиент явно назвал сумму как свой бюджет или лимит («рассчитываю до…», «у меня есть…», «одобрено на…»). Сумма, названная для идентификации объявления или подтверждения цены объекта (в том числе в диалоге с оператором: «цена какая в объявлении указана?» → «23 500») — это цена объекта, а НЕ бюджет клиента. В этом случае budget = null, budget_citation не заполняй.
+Справочники:
+intent: "купить","продать","снять","сдать","не определено"
+source_of_funds (массив): "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено"
+
+Правило про budget (V8.1): budget.value заполняй ТОЛЬКО если клиент явно назвал сумму как свой бюджет или лимит («рассчитываю до…», «у меня есть…», «одобрено на…»). Сумма, названная для идентификации объявления или подтверждения цены объекта (в том числе в диалоге с оператором: «цена какая в объявлении указана?» → «23 500») — это цена объекта, а НЕ бюджет клиента. В этом случае budget.value = null, budget.verification_status = "not_applicable".
 
 Правило про city_or_district (V9):
-ЗАПРЕЩЕНО: дома, корпуса, квартиры, улицы, номеры объектов, адреса типа "ул. Предпортовая, 4, корпус 1".
+ЗАПРЕЩЕНО В value: дома, корпуса, квартиры, улицы, номеры объектов, адреса типа "ул. Предпортовая, 4, корпус 1".
 РАЗРЕШЕНО ТОЛЬКО: город и/или район («СПб», «Московский район», «СПб, Московский район»).
-ЕСЛИ звучал только адрес конкретного объекта (без отдельного города/района поиска) — ставь null.
+ЕСЛИ звучал только адрес конкретного объекта (без отдельного города/района поиска) — value: null.
 ПРИМЕРЫ:
-- «интересует квартира на Предпортовой, 4» → city_or_district: null (не указан отдельный город/район, только адрес конкретного объекта)
-- «ищу в Питере на Преображенской» → city_or_district: "СПб, Преображенская"
-- «нужна квартира в районе метро Парк Культуры» → city_or_district: "Москва, район метро Парк Культуры"
+- «интересует квартира на Предпортовой, 4» → value: null (не указан отдельный город/район, только адрес конкретного объекта)
+- «ищу в Питере на Преображенской» → value: "СПб, Преображенская"
+- «нужна квартира в районе метро Парк Культуры» → value: "Москва, район метро Парк Культуры"
 
 Транскрипция:
 {{transcript}}`
     },
     {
-      id:s(), enabled:true, type:'store', vendor:'JSON Store',
-      name:'Единое хранилище',
-      codeFn:'store', outKey:'store',
-      required:['client_name'],
-      citationFields:[['budget','budget_citation']],
-      prompt:''
+      id:s(), enabled:true, type:'check', name:'Проверка фактов',
+      model:'claude-sonnet-4-6', outKey:'fact_check', promptVersion:1,
+      prompt:
+`Ты — независимый проверщик фактов (Fact Check Agent) пайплайна анализа звонков по недвижимости. Ты проверяешь работу Fact Agent независимо, по транскрипции.
+
+МЕТОДОЛОГИЯ (Quality Framework v1 -- единая для ВСЕХ проверяющих агентов пайплайна): для каждого поля сначала определи -- было ли соответствующее обсуждение в разговоре?
+├── Нет (тема не звучала) → value=null/verification_status="not_applicable" -- это ПРАВИЛЬНЫЙ результат, verified=true. Не штрафуй за честное отсутствие данных.
+└── Да (тема реально обсуждалась) → проверь: есть evidence; evidence реально есть в транскрипции (дословно или близко по смыслу); value соответствует смыслу evidence; confidence >= 0.85; value входит в справочник, если справочник есть.
+      Всё сошлось → verified=true. Хоть одно не сошлось → verified=false, факт уходит в rejected_facts с конкретной причиной.
+
+Отдельно: если факт помечен как null/не определено, а в транскрипции ЕСТЬ прямое указание на эту информацию -- это тоже ошибка Fact Agent (пропуск), verified=false, причина "информация была в разговоре, но не отражена".
+
+Верни строго валидный JSON без markdown:
+{
+  "verified_facts": {
+    "<имя_поля>": {"value": <как в исходном факте>, "confidence": <0..1>, "evidence": "<цитата>", "verified": true, "source": "fact_check"}
+  },
+  "rejected_facts": {
+    "<имя_поля>": {"value": <исходное value>, "reason": "<конкретная причина>", "evidence": "<цитата или null>"}
+  },
+  "fact_check_quality": {"checked": <кол-во проверенных полей>, "verified": <кол-во verified>, "rejected": <кол-во rejected>, "score": <0..1>, "decision": "PASS"|"PASS_WITH_WARNINGS"|"MANUAL_REVIEW"|"FAIL"}
+}
+
+Decision (проверяй сверху вниз, первое совпадение побеждает):
+1. FAIL: verified/checked < 0.6
+2. MANUAL_REVIEW: отклонён intent ИЛИ отклонён source_of_funds ИЛИ есть явный конфликт фактов (два противоречащих друг другу утверждения по одному полю)
+3. PASS: verified/checked >= 0.9 и среди rejected нет intent/source_of_funds
+4. PASS_WITH_WARNINGS: verified/checked >= 0.75 (запасной вариант)
+
+Факты от Fact Agent (verification_status="pending"):
+{{ctx.facts}}
+
+Транскрипция:
+{{transcript}}`
     },
     {
       id:s(), enabled:true, type:'llm', name:'Определение потребностей',
-      model:'gpt-5-mini', outKey:'needs', promptVersion:1,
+      model:'gpt-5-mini', outKey:'needs', promptVersion:2,
       prompt:
 `Ты — Need Agent пайплайна анализа звонков по недвижимости.
 Определи ПОТРЕБНОСТИ клиента из транскрипции. Верни СТРОГО валидный JSON без markdown.
-Если потребность не обсуждалась — null или "не определено". Ничего не выдумывай.
+
+Каждое поле — ОБЪЕКТ такой формы:
+{"value": <значение>, "confidence": <0..1>, "evidence": "<дословная цитата или null>", "verification_status": "pending"}
+
+Если потребность не обсуждалась: value=null (или "не определено" для timeline), confidence=1, evidence=null, verification_status="not_applicable". Ничего не выдумывай.
 
 Схема:
 {
-  "interested_in": [<из: "Новостройки","Вторичка","Ипотека","Строительство","Аренда">],
-  "property_requirements": <краткое описание требований к объекту или null>,
-  "source_of_funds": [<массив из справочника: "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено">],
-  "timeline": <из: "до 1 месяца","2-3 месяца","3-6 месяцев","более 6 месяцев","не определено">,
-  "timeline_citation": <дословная цитата или null>
+  "interested_in": {"value": [<массив из справочника interested_in>], "confidence":0..1, "evidence":"...", "verification_status":"pending"},
+  "market_type_interest": {"value": [<массив из справочника market_type_interest>], "confidence":0..1, "evidence":"...", "verification_status":"pending"},
+  "property_requirements": {"value": <краткое описание требований к объекту или null>, "confidence":0..1, "evidence":"...", "verification_status":"pending"},
+  "source_of_funds": {"value": [<массив из справочника source_of_funds>], "confidence":0..1, "evidence":"...", "verification_status":"pending"},
+  "timeline": {"value": <из справочника timeline>, "confidence":0..1, "evidence":"...", "verification_status":"pending"}
 }
 
-Правило про timeline (V8.1): timeline заполняй ТОЛЬКО если клиент говорил о сроках покупки/сделки («хочу купить до…», «нужно въехать к…», «ипотека одобрена, действует до…»). Дата просмотра, встречи или созвона — это договорённость, а НЕ срок сделки: в этом случае timeline = "не определено". timeline_citation обязана содержать слова клиента именно о сроке сделки; если такой цитаты нет — timeline = "не определено".
+Справочники:
+interested_in (массив) -- это ДОПОЛНИТЕЛЬНЫЕ УСЛУГИ агентства, которыми интересуется клиент, а НЕ тип рынка и не тип сделки: ТОЛЬКО "Новостройки","Ипотека","Строительство". "Вторичка" и "Аренда" сюда НЕ входят -- это market_type_interest/intent, отдельные измерения.
+market_type_interest (массив): "вторичка","новостройка"
+source_of_funds (массив): "наличные","ипотека одобрена","ипотека в процессе","продажа своей квартиры","не определено"
+timeline: "до 1 месяца","2-3 месяца","3-6 месяцев","более 6 месяцев","не определено"
+
+Правило про timeline (V8.1): timeline.value заполняй ТОЛЬКО если клиент говорил о сроках покупки/сделки («хочу купить до…», «нужно въехать к…», «ипотека одобрена, действует до…»). Дата просмотра, встречи или созвона — это договорённость, а НЕ срок сделки: в этом случае timeline.value = "не определено". evidence обязана содержать слова клиента именно о сроке сделки; если такой цитаты нет — timeline.value = "не определено".
 
 Правило про property_requirements (V9):
-ЗАПРЕЩЕНО ДУБЛИРОВАТЬ: адреса, номера домов, названия улиц, конкретные адреса (типа "Предпортовая, 4 корпус 1"), комнатность (1-комнатная, 2-комнатная), метраж (35.8 кв.м), этажи (1 этаж, 3 этаж), цены объектов (8 550 тыс.).
+ЗАПРЕЩЕНО ДУБЛИРОВАТЬ В value: адреса, номера домов, названия улиц, конкретные адреса (типа "Предпортовая, 4 корпус 1"), комнатность (1-комнатная, 2-комнатная), метраж (35.8 кв.м), этажи (1 этаж, 3 этаж), цены объектов (8 550 тыс.).
 ПИШИ ТОЛЬКО: ТРЕБОВАНИЯ КЛИЕНТА к искомому объекту, если они звучали как отдельные условия поиска.
 ПРИМЕРЫ ПРАВИЛЬНО:
 - Клиент: интересует квартира на Предпортовой. Агент: это 1-комнатная, 35.8 кв.м, цена 8 550. Клиент: готов рассматривать и другие варианты.
-  → property_requirements: "готов рассматривать другие варианты помимо Предпортовой"
+  → value: "готов рассматривать другие варианты помимо Предпортовой"
 - Клиент: нужен второй этаж или выше, рядом со школой.
-  → property_requirements: "второй этаж или выше, рядом со школой"
+  → value: "второй этаж или выше, рядом со школой"
 ПРИМЕРЫ НЕПРАВИЛЬНО:
-- property_requirements: "Пятая Придпортовая, 4 корпус 1" ✗ (это адрес, запрещено)
-- property_requirements: "1-комнатная, 35,8 кв.м, 3 этаж, цена 8 550" ✗ (это данные карточки, запрещено)
-ЕСЛИ клиент обсуждал ТОЛЬКО конкретный объект, БЕЗ отдельных требований → property_requirements: null
+- value: "Пятая Придпортовая, 4 корпус 1" ✗ (это адрес, запрещено)
+- value: "1-комнатная, 35,8 кв.м, 3 этаж, цена 8 550" ✗ (это данные карточки, запрещено)
+ЕСЛИ клиент обсуждал ТОЛЬКО конкретный объект, БЕЗ отдельных требований → value: null
 
 Транскрипция:
 {{transcript}}`
     },
     {
-      id:s(), enabled:true, type:'llm', name:'Результат звонка',
-      model:'gpt-5-mini', outKey:'outcome', promptVersion:1,
+      id:s(), enabled:true, type:'check', name:'Проверка потребностей',
+      model:'claude-sonnet-4-6', outKey:'need_check', promptVersion:1,
+      prompt:
+`Ты — независимый проверщик потребностей (Need Check Agent) пайплайна анализа звонков по недвижимости. Ты проверяешь работу Need Agent независимо, по транскрипции.
+
+МЕТОДОЛОГИЯ (Quality Framework v1 -- единая для ВСЕХ проверяющих агентов пайплайна):
+Для КАЖДОГО поля потребностей сначала определи: было ли соответствующее обсуждение в разговоре?
+├── Нет (тема не звучала) → поле НЕ оценивается как ошибка. null/"не определено" -- ПРАВИЛЬНЫЙ результат, verified=true.
+└── Да (тема реально обсуждалась) → проверь: отражено ли то, что реально было сказано, точно и по справочнику?
+      Да → verified=true (PASS). Нет (придумано, исказило смысл, значение вне справочника) → verified=false (FAIL), в rejected_needs с причиной.
+
+Это устраняет главную проблему наивной проверки: нельзя штрафовать Need Agent за честное "не определено", если клиент действительно не называл этого условия.
+
+Отдельно (независимо от логики выше) -- строгая проверка справочников:
+- interested_in.value: каждое значение массива обязано входить строго в ["Новостройки","Ипотека","Строительство"]. Любое другое значение (например "Вторичка", "Аренда") → reject этого значения с reason "<значение> не входит в канонический справочник interested_in".
+- market_type_interest.value: только из ["вторичка","новостройка"].
+- source_of_funds.value: только из справочника.
+- timeline.value: только из справочника; если единственное основание для непустого timeline -- дата следующего звонка/показа, а не срок сделки -- reject с reason "timeline перепутан со сроком следующего контакта".
+
+Верни строго валидный JSON без markdown:
+{
+  "verified_needs": {
+    "<имя_поля>": {"value": <как в исходной потребности>, "confidence": <0..1>, "evidence": "<цитата>", "verified": true, "source": "need_check"}
+  },
+  "rejected_needs": {
+    "<имя_поля>": {"value": <исходное value>, "reason": "<конкретная причина>"}
+  },
+  "need_check_quality": {"checked": <кол-во проверенных полей>, "verified": <кол-во verified>, "rejected": <кол-во rejected>, "score": <0..1>, "decision": "PASS"|"PASS_WITH_WARNINGS"|"MANUAL_REVIEW"|"FAIL"}
+}
+
+Decision (проверяй сверху вниз, первое совпадение побеждает):
+1. FAIL: JSON invalid ИЛИ большинство needs rejected
+2. MANUAL_REVIEW: отклонён source_of_funds ИЛИ timeline спорный
+3. PASS: все обязательные потребности (source_of_funds, timeline) verified И dictionary_ok
+4. PASS_WITH_WARNINGS: есть rejected по необязательным значениям (например часть interested_in), но ключевые поля сохранены (запасной вариант)
+
+Потребности от Need Agent (verification_status="pending"):
+{{ctx.needs}}
+
+Факты (для контекста):
+{{ctx.facts}}
+
+Транскрипция:
+{{transcript}}`
+    },
+    {
+      id:s(), enabled:true, type:'llm', name:'Результат звонка и следующий шаг',
+      model:'gpt-5-mini', outKey:'outcome', promptVersion:2,
       prompt:
 `Ты — Outcome Agent пайплайна анализа звонков по недвижимости.
 Определи РЕЗУЛЬТАТ звонка. Верни СТРОГО валидный JSON без markdown.
-Для следующего шага приведи ДОСЛОВНУЮ цитату из транскрипции, если она есть.
+
+Каждое поле — ОБЪЕКТ с value/confidence/evidence/verification_status (у next_step дополнительно owner и deadline).
+Если факт не прозвучал: value=null, confidence=1, evidence=null, verification_status="not_applicable".
 
 Схема:
 {
-  "call_result": <из: "назначен показ","назначен повторный звонок","клиент думает","отказ","нецелевой звонок">,
-  "next_step": <конкретный следующий шаг или null>,
-  "next_step_owner": <"агент" | "клиент" | "оба" | null>,
-  "next_step_citation": <дословная цитата или null>,
-  "agreements": [<достигнутые договорённости строками>]
+  "call_result": {"value": <из справочника call_result>, "confidence":0..1, "evidence":"...", "verification_status":"pending"},
+  "next_step": {"value": <конкретный следующий шаг или null>, "owner": "агент"|"клиент"|"оба"|null, "deadline": <срок дословно или null>, "confidence":0..1, "evidence":"...", "verification_status":"pending"},
+  "agreements": {"value": [<массив достигнутых договорённостей строками>], "confidence":0..1, "evidence":"...", "verification_status":"pending"}
 }
+
+Справочник call_result: "назначен показ","назначен повторный звонок","клиент думает","отказ","нецелевой звонок","недостаточно информации","звонок не состоялся"
+
+Правило про next_step: если next_step.value указан — owner ОБЯЗАТЕЛЕН ("агент"/"клиент"/"оба"). Если deadline указан — evidence обязана содержать слова именно о сроке. Если следующего шага не было — next_step.value=null, owner=null, deadline=null, verification_status="not_applicable".
 
 Правило про agreements (V9):
 ДОГОВОРЁННОСТЬ = взаимное обязательство о БУДУЩЕМ действии. Обе стороны согласились что-то конкретное ДЕЛАТЬ.
@@ -791,38 +875,80 @@ function defaultPipeline(){
 
 ПРИМЕРЫ ПРАВИЛЬНО (это договорённости):
 ✓ Агент: «Дайте мне пару дней, я согласую время с собственником и перезвоню вам, чтобы договориться о показе».
-  → agreements: ["Агент согласует время с собственником и перезвонит клиенту для согласования показа"]
+  → agreements.value: ["Агент согласует время с собственником и перезвонит клиенту для согласования показа"]
 ✓ Клиент: «Пришлите мне детальное описание квартиры».
-  → agreements: ["Агент пришлёт детальное описание квартиры"]
+  → agreements.value: ["Агент пришлёт детальное описание квартиры"]
 ✓ Агент и Клиент: «Встретимся во вторник в 15:00 у входа дома».
-  → agreements: ["Встреча во вторник в 15:00 у входа дома"]
+  → agreements.value: ["Встреча во вторник в 15:00 у входа дома"]
 
-ПРИМЕРЫ НЕПРАВИЛЬНО (в agreements включать НЕЛЬЗЯ):
+ПРИМЕРЫ НЕПРАВИЛЬНО (в agreements.value включать НЕЛЬЗЯ):
 ✗ "Квартира продаётся" — это ФАКТ, не договорённость
 ✗ "Номер подтверждён" — это ПОДТВЕРЖДЕНИЕ ФАКТА, не договорённость
 ✗ "Ипотека не нужна" — это ОТКАЗ/ОГРАНИЧЕНИЕ, не договорённость
 ✗ "Готов посмотреть другие варианты" — это ИНТЕРЕС/ПОТРЕБНОСТЬ, не договорённость
 ✗ "Объявление активно" — это СТАТУС/ФАКТ, не договорённость
 
-ПРАВИЛО: если в разговоре были ТОЛЬКОиз подтверждения фактов и отказы БЕЗ взаимных обязательств о действиях → agreements = [] (пустой массив)
+ПРАВИЛО: если в разговоре были ТОЛЬКО подтверждения фактов и отказы БЕЗ взаимных обязательств о действиях → agreements.value = [] (пустой массив)
 
-Если взаимных обязательств о будущих действиях не было — agreements = [] (пустой массив — это нормально).
+Если взаимных обязательств о будущих действиях не было — agreements.value = [] (пустой массив — это нормально).
 Формат каждой договорённости: кто → что делает → когда (срок указывай только если он прозвучал).
 
 Транскрипция:
 {{transcript}}`
     },
     {
+      id:s(), enabled:true, type:'check', name:'Проверка результата звонка',
+      model:'claude-sonnet-4-6', outKey:'outcome_check', promptVersion:1,
+      prompt:
+`Ты — независимый проверщик результата звонка (Outcome Check Agent) пайплайна анализа звонков по недвижимости. Ты проверяешь работу Outcome Agent независимо, по транскрипции.
+
+МЕТОДОЛОГИЯ (Quality Framework v1 -- единая для ВСЕХ проверяющих агентов пайплайна): для call_result/next_step/agreements сначала определи, было ли реальное основание в разговоре.
+- call_result: сравни с транскрипцией -- соответствует ли реальному итогу разговора? Если агент/модель придумали более позитивный или негативный исход, чем был на самом деле -- reject.
+- next_step: если next_step.value указан -- есть ли в транскрипции реальная договорённость об этом действии? Придуманный next_step (нет обоснования в транскрипции) -- reject с reason "next_step не подтверждён транскрипцией". Если next_step.value=null, но в разговоре реально был согласован следующий шаг -- это тоже reject, reason "next_step пропущен, хотя был в разговоре".
+- agreements: каждый элемент value должен быть взаимным обязательством о будущем действии, реально подтверждённым транскрипцией (не факт/отказ/интерес/статус). Придуманная или неверно классифицированная как договорённость запись -- reject.
+Если соответствующей темы (например, next_step) в разговоре не было вовсе -- null/пустой результат ПРАВИЛЕН, verified=true, не штрафуй.
+
+Верни строго валидный JSON без markdown:
+{
+  "verified_outcome": {
+    "call_result": {"value": <как в исходном>, "confidence": <0..1>, "verified": true, "evidence": "<цитата>"},
+    "next_step": {"value": <как в исходном>, "owner": <как в исходном>, "deadline": <как в исходном>, "confidence": <0..1>, "verified": true, "evidence": "<цитата>"},
+    "agreements": {"value": [<как в исходном>], "confidence": <0..1>, "verified": true, "evidence": "<цитата>"}
+  },
+  "rejected_outcome": {
+    "<имя_поля>": {"value": <исходное value>, "reason": "<конкретная причина>"}
+  },
+  "outcome_check_quality": {"checked": 3, "verified": <кол-во verified>, "rejected": <кол-во rejected>, "score": <0..1>, "decision": "PASS"|"PASS_WITH_WARNINGS"|"MANUAL_REVIEW"|"FAIL"}
+}
+
+Decision (проверяй сверху вниз, первое совпадение побеждает):
+1. FAIL: придуман next_step ИЛИ call_result неверный
+2. MANUAL_REVIEW: есть спорная договорённость ИЛИ next_step неочевиден
+3. PASS: call_result verified И next_step корректен И нет invented agreement
+4. PASS_WITH_WARNINGS: call_result verified, но deadline/owner недостаточно точные (запасной вариант)
+
+Результат звонка от Outcome Agent (verification_status="pending"):
+{{ctx.outcome}}
+
+Транскрипция:
+{{transcript}}`
+    },
+    {
+      id:s(), enabled:true, type:'code', vendor:'Code',
+      name:'Conversation Store',
+      codeFn:'conversationStore', outKey:'conversation_store', prompt:''
+    },
+    {
       id:s(), enabled:true, type:'llm', name:'Генерация саммари',
-      model:'gpt-5-mini', outKey:'summary', promptVersion:1,
+      model:'gpt-5-mini', outKey:'summary', promptVersion:2,
       prompt:
 `Ты — Summary Agent агентства недвижимости. Напиши саммари звонка для карточки клиента в CRM так, чтобы другой агент, открыв карточку, продолжил работу с клиентом без прослушивания звонка.
 
 ## ИСТОЧНИКИ ДАННЫХ И ПРИОРИТЕТ
 
-1. **Транскрипция звонка — первичный источник.** Каждое утверждение в саммари должно иметь опору в транскрипции. Нет в транскрипции — нет в саммари.
-2. **Структурированные данные** (Результат звонка, Потребности, Факты) — вспомогательные: используй для сверки формулировок и дат. При противоречии с транскрипцией верна транскрипция; само противоречие не упоминай.
-3. Транскрипция создана автоматически и содержит ошибки распознавания. Искажённую фразу с неоднозначным смыслом не включай и не восстанавливай догадкой.
+1. **Conversation Store — единственный источник данных.** Это уже проверенные (verified) факты, потребности и результат звонка — каждое поле прошло независимую проверку по транскрипции на предыдущих этапах пайплайна. Сырую транскрипцию тебе не передают.
+2. Каждое утверждение в саммари должно иметь опору в поле «evidence» соответствующей записи Conversation Store. Нет записи в Conversation Store — нет утверждения в саммари.
+3. Поле со значением null или «не определено» в Conversation Store — это осознанный, проверенный результат («в разговоре об этом речи не было»), а не пропуск. Не пытайся домысливать за него.
 
 ## РОЛИ В ЗВОНКЕ
 
@@ -836,7 +962,7 @@ function defaultPipeline(){
 
 1. Определи сценарий звонка (таблица ниже).
 2. Пройди по чек-листу извлечения.
-3. Проверь каждый факт: найди подтверждающую реплику в транскрипции. Не нашёл — исключи.
+3. Проверь каждый факт: найди подтверждающую запись (evidence) в Conversation Store. Не нашёл — исключи.
 4. Собери саммари по формату.
 
 ## ЧЕК-ЛИСТ ИЗВЛЕЧЕНИЯ (включай всё, что прозвучало)
@@ -943,17 +1069,8 @@ function defaultPipeline(){
 Пример 3 — слабый звонок:
 {"summary": "Недостаточно информации. Клиент проверил актуальность объявления и завершил разговор, потребность зафиксировать не успели.\nСледующий шаг: не согласован."}
 
-Транскрипция звонка:
-{{transcript}}
-
-Результат звонка:
-{{ctx.outcome}}
-
-Потребности:
-{{ctx.needs}}
-
-Факты:
-{{ctx.facts}}`
+Conversation Store (проверенные факты, потребности, результат звонка -- единственный источник данных):
+{{ctx.conversation_store}}`
     },
     ...summaryQualityStages(),
     {
@@ -1038,7 +1155,12 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // renderStages()). A genuine user edit is still permanent and authoritative,
 // per the original V8.4 intent -- only silently-stale, never-touched
 // stages get auto-upgraded.
-const PIPELINE_VERSION = 9;
+// 2026-07-08: stages 1-9 rework adds fact_check/need_check/outcome_check/
+// conversation_store as first-class stages (structural migration in
+// migratePipelineConfig() below, via hasConversationStoreArchitecture()) and
+// bumps every changed stage's promptVersion, so both structure and content
+// reach browsers already past V8.5 without any manual reset. See CLAUDE.md.
+const PIPELINE_VERSION = 10;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
@@ -1070,6 +1192,34 @@ function hasSummaryQualityArchitecture(stages){
     && ['truth_check','critical_facts_check','context_utility_check','action_check','presentation_check']
       .every(key=>stages.some(stage=>stage.outKey===key));
 }
+// stages 1-9 rework (2026-07-08): fact_check/need_check/outcome_check verify
+// each LLM-extraction stage independently, and conversation_store aggregates
+// only their verified output as the single source of truth for Summary.
+// A saved config from before this rework has none of these four stages (and
+// may still have the old flat 'Единое хранилище' store stage instead).
+function hasConversationStoreArchitecture(stages){
+  return ['fact_check','need_check','outcome_check','conversation_store']
+    .every(key=>stages.some(stage=>stage.outKey===key));
+}
+function isOldFlatStore(stage){
+  return stage && stage.codeFn==='store' && stage.outKey==='store';
+}
+function insertMissingStageAfter(stages, afterOutKey, newOutKey, factory){
+  if(stages.some(s=>s.outKey===newOutKey)) return stages;
+  const idx=stages.findIndex(s=>s.outKey===afterOutKey);
+  if(idx<0) return stages;
+  const copy=stages.slice();
+  copy.splice(idx+1, 0, factory());
+  return copy;
+}
+function insertMissingStageBefore(stages, beforeOutKey, newOutKey, factory){
+  if(stages.some(s=>s.outKey===newOutKey)) return stages;
+  const idx=stages.findIndex(s=>s.outKey===beforeOutKey);
+  if(idx<0) return stages;
+  const copy=stages.slice();
+  copy.splice(idx, 0, factory());
+  return copy;
+}
 function migratePipelineConfig(stages){
   if(!Array.isArray(stages) || !stages.length) return stages;
 
@@ -1090,6 +1240,23 @@ function migratePipelineConfig(stages){
 
     cleaned.splice(insertAt, 0, ...migrated);
     result = cleaned;
+  }
+
+  // stages 1-9 rework: insert fact_check/need_check/outcome_check right after
+  // their respective LLM stage, and conversation_store right before summary --
+  // replacing the old flat 'Единое хранилище' store stage if present. Runs
+  // independently of the summary-quality-architecture branch above, since a
+  // config can already have the 5-judge summary architecture (from a much
+  // earlier session) while still predating this rework entirely.
+  if(!hasConversationStoreArchitecture(result)){
+    const defaultsForInsert=defaultPipeline();
+    const findDefault=key=>defaultsForInsert.find(d=>d.outKey===key);
+    let withNewStages=result.filter(stage=>!isOldFlatStore(stage));
+    withNewStages=insertMissingStageAfter(withNewStages,'facts','fact_check',()=>({...findDefault('fact_check'), id:s()}));
+    withNewStages=insertMissingStageAfter(withNewStages,'needs','need_check',()=>({...findDefault('need_check'), id:s()}));
+    withNewStages=insertMissingStageAfter(withNewStages,'outcome','outcome_check',()=>({...findDefault('outcome_check'), id:s()}));
+    withNewStages=insertMissingStageBefore(withNewStages,'summary','conversation_store',()=>({...findDefault('conversation_store'), id:s()}));
+    result=withNewStages;
   }
 
   // Контент-апгрейд (независимо от структурной миграции выше): "durable
@@ -1291,6 +1458,10 @@ function formatIssue(issue){
   if(issue===undefined || issue===null) return '';
   if(typeof issue==='string') return issue;
   if(typeof issue==='number' || typeof issue==='boolean') return String(issue);
+  if(issue.type && issue.message){
+    const examples=Array.isArray(issue.examples)&&issue.examples.length ? ' · примеры: '+issue.examples.slice(0,3).join(' | ') : '';
+    return issue.type+' · '+(issue.severity||'warning')+' · '+issue.message+examples;
+  }
   const parts=[];
   if(issue.type) parts.push(issue.type);
   if(issue.problem) parts.push(issue.problem);
@@ -1375,19 +1546,22 @@ function buildSummaryJudgeCriteria(key, raw){
 function stageScoreFromOutput(stage, rep){
   const out=rep.output||{};
   if(out.summary_quality_score!=null) return Number(out.summary_quality_score);
+  if(stage.codeFn==='stt' && out.quality && out.quality.stt_quality_score!=null) return Number(out.quality.stt_quality_score)*100;
+  if(stage.codeFn==='conversationStore' && out.quality && out.quality.overall_store_score!=null) return Number(out.quality.overall_store_score)*100;
   if(out.score!=null) return Number(out.score)>1?Number(out.score):Number(out.score)*100;
   if(stage.codeFn==='validate' && out.score!=null) return Number(out.score)*100;
   if(stage.codeFn==='store' && out.score!=null) return Number(out.score)*100;
-  if(stage.codeFn==='stt') return rep.status==='ok'?100:0;
+  if(stage.codeFn==='stt') return rep.status==='ok'?90:(rep.status==='warn'?80:60);
   if(stage.type==='llm' || stage.type==='check') return rep.parseErr?0:(out&&typeof out==='object'&&Object.keys(out).length?90:70);
   if(rep.status==='bad') return 0;
+  if(rep.status==='attn') return 60;
   if(rep.status==='warn') return 75;
   return 100;
 }
 
 function metaStatusFromScore(score, rep){
   if(rep.status==='bad' || score<70) return 'fail';
-  if(rep.status==='warn' || score<90) return 'warning';
+  if(rep.status==='warn' || rep.status==='attn' || score<90) return 'warning';
   return 'pass';
 }
 
@@ -1526,47 +1700,223 @@ function findCitation(citation, transcript){
 const ENUMS = {
   source_of_funds:['наличные','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено'],
   timeline:['до 1 месяца','2-3 месяца','3-6 месяцев','более 6 месяцев','не определено'],
-  call_result:['назначен показ','назначен повторный звонок','клиент думает','отказ','нецелевой звонок'],
+  call_result:['назначен показ','назначен повторный звонок','клиент думает','отказ','нецелевой звонок','недостаточно информации','звонок не состоялся'],
+  intent:['купить','продать','снять','сдать','не определено'],
+  interested_in:['Новостройки','Ипотека','Строительство'],
+  market_type_interest:['вторичка','новостройка'],
 };
 const ROLE_RX=['Агент','Клиент','Оператор','Менеджер'];
+const TRANSCRIPT_ALLOWED_ROLES=['Оператор','Агент','Клиент'];
+
+function clamp01(n){
+  const x=Number(n);
+  if(!Number.isFinite(x)) return 0;
+  return Math.max(0, Math.min(1, x));
+}
+
+function pct(n){
+  return (clamp01(n)*100).toFixed(0)+'%';
+}
+
+function transcriptIssue(type, severity, message, examples){
+  return {type, severity, message, examples:[...new Set((examples||[]).filter(Boolean).map(x=>String(x).slice(0,180)))]};
+}
+
+function parseTranscriptTurns(transcript){
+  const turns=[];
+  const lines=String(transcript||'').split(/\r?\n/);
+  let current=null;
+  const roleLine=/^\s*([^:\n]{0,40}?)\s*:\s*(.*)$/;
+  for(const raw of lines){
+    const line=raw.trim();
+    if(!line) continue;
+    const m=line.match(roleLine);
+    if(m){
+      if(current) turns.push(current);
+      current={role:(m[1]||'').trim(), text:(m[2]||'').trim(), raw:line};
+    } else if(current){
+      current.text=(current.text+' '+line).trim();
+      current.raw=(current.raw+' '+line).trim();
+    }
+  }
+  if(current) turns.push(current);
+  return turns;
+}
+
+function isUnknownTranscriptRole(role){
+  const r=String(role||'').trim();
+  if(!r) return true;
+  return /^(unknown|неизвестн|спикер|speaker|участник)/i.test(r) || !TRANSCRIPT_ALLOWED_ROLES.includes(r);
+}
+
+function wordCount(text){
+  return (String(text||'').toLowerCase().match(/[а-яёa-z0-9]+/gi)||[]).length;
+}
+
+function isDamagedPhrase(text){
+  const raw=String(text||'').trim();
+  const clean=raw.toLowerCase();
+  const words=clean.match(/[а-яёa-z0-9]+/gi)||[];
+  const meaningful=words.filter(w=>!/^(э+|а+|м+|ну|да|так|угу|ага|мм+|ээ+|дак)$/i.test(w));
+  const hasMixedWord=words.some(w=>/[а-яёa-z]/i.test(w) && /\d/.test(w));
+  const hasRepeatedChars=/([а-яёa-z])\1{3,}/i.test(clean);
+  const hasUnreadable=/\b(?:пви|пя\d*|эээ+|ммм+|хз|неразборчиво|шум|обрыв|разрыв)\b/i.test(clean);
+  const shortNoise=words.length>0 && words.length<=2 && meaningful.length===0;
+  const suspiciousShort=words.length>0 && words.length<=3 && /^(?:пви|пя\d*|дак|в сумках|крышку|угу|ага|ээ+|ну так)$/i.test(clean);
+  const fragmentDensity=words.length>=3 && meaningful.length/Math.max(1, words.length)<0.45;
+  return hasMixedWord || hasRepeatedChars || hasUnreadable || shortNoise || suspiciousShort || fragmentDensity;
+}
+
+function detectPhoneInTranscript(transcript){
+  const text=String(transcript||'');
+  const found=[];
+  const compact=text.replace(/[^\d]+/g,' ');
+  const direct=text.match(/(?:\+?7|8)?[\s(.-]*\d{3}[\s). -]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}/g)||[];
+  found.push(...direct);
+  const longDigits=compact.match(/\b\d{10,11}\b/g)||[];
+  found.push(...longDigits);
+  const grouped=text.match(/\b(?:\d[\s.-]*){10,11}\b/g)||[];
+  found.push(...grouped.filter(x=>(x.match(/\d/g)||[]).length>=10));
+  const phoneLines=text.split(/\r?\n/).filter(line=>/(телефон|номер|контакт|звоните|перезвон)/i.test(line) && (line.match(/\d/g)||[]).length>=6);
+  found.push(...phoneLines);
+  return [...new Set(found.map(x=>String(x).trim()).filter(Boolean))];
+}
+
+function detectRoleConfusion(turns){
+  const examples=[];
+  for(const turn of turns){
+    const r=turn.role, text=turn.text||'';
+    if(r==='Клиент' && /(у нас юридический отдел|я как агент|наше агентство|мы агентство|я агент|у нашего агентства)/i.test(text)){
+      examples.push(turn.raw);
+    }
+    if(r==='Агент' && /(я хочу купить|мне нужна квартира|хочу продать|я ищу|меня интересует|мой бюджет|у меня ипотека)/i.test(text)){
+      examples.push(turn.raw);
+    }
+    if(r==='Клиент' && wordCount(text)>=35 && /(ипотек|объект|договор|сделк|комисс|показ|подбор|юридическ|документ)/i.test(text)){
+      examples.push(turn.raw);
+    }
+  }
+  return {has:examples.length>0, examples:[...new Set(examples)].slice(0,4)};
+}
+
+function hasCompleteEnding(turns){
+  if(!turns.length) return false;
+  const last=turns[turns.length-1].text||'';
+  const trimmed=last.trim();
+  if(wordCount(trimmed)<3) return false;
+  if(/[а-яёa-z],\s*$/i.test(trimmed)) return false;
+  if(/\b(?:и|а|ну|так|сейчас)$/i.test(trimmed)) return false;
+  if(/(?:до свидания|всего доброго|спасибо|хорошо|договорились|перезвон|свяж|отправ|пока|будем ждать)/i.test(trimmed)) return true;
+  return /[.!?]$/.test(trimmed) || wordCount(trimmed)>=8;
+}
+
+function analyzeTranscriptQuality(transcript){
+  const t=String(transcript||'');
+  const rawLines=t.split(/\r?\n/).filter(x=>x.trim());
+  const turns=parseTranscriptTurns(t);
+  const turnCount=turns.length;
+  const roles=[...new Set(turns.map(x=>x.role).filter(r=>TRANSCRIPT_ALLOWED_ROLES.includes(r)))];
+  const unknownTurns=turns.filter(x=>isUnknownTranscriptRole(x.role));
+  const damagedTurns=turns.filter(x=>isDamagedPhrase(x.text));
+  const unknown_speaker_ratio=turnCount?unknownTurns.length/turnCount:0;
+  const damaged_phrase_ratio=turnCount?damagedTurns.length/turnCount:0;
+  const phones=detectPhoneInTranscript(t);
+  const roleConfusion=detectRoleConfusion(turns);
+  const role_confusion_penalty=roleConfusion.has ? 0.15 : 0;
+  const pii_penalty=phones.length ? 0.05 : 0;
+  const stt_quality_score=clamp01(1 - unknown_speaker_ratio*0.3 - damaged_phrase_ratio*0.4 - role_confusion_penalty - pii_penalty);
+  const role_quality_score=clamp01(1 - unknown_speaker_ratio - (roleConfusion.has ? 0.2 : 0));
+  const noise_score=clamp01(1 - damaged_phrase_ratio);
+  const quality={
+    stt_quality_score:+stt_quality_score.toFixed(3),
+    role_quality_score:+role_quality_score.toFixed(3),
+    noise_score:+noise_score.toFixed(3),
+    unknown_speaker_ratio:+unknown_speaker_ratio.toFixed(3),
+    damaged_phrase_ratio:+damaged_phrase_ratio.toFixed(3),
+    has_unknown_speaker:unknownTurns.length>0,
+    has_role_confusion_risk:roleConfusion.has,
+    has_pii_phone:phones.length>0,
+    requires_manual_review:roleConfusion.has && stt_quality_score<0.85
+  };
+  const issues=[];
+  if(unknownTurns.length) issues.push(transcriptIssue('unknown_speaker','warning','Есть реплики с неизвестной или недопустимой ролью.', unknownTurns.slice(0,4).map(x=>x.raw)));
+  if(damagedTurns.length) issues.push(transcriptIssue(damaged_phrase_ratio>0.15?'stt_noise_high':'stt_noise','warning','Есть признаки поврежденных STT-фраз или мусорных реплик.', damagedTurns.slice(0,5).map(x=>x.raw)));
+  if(phones.length) issues.push(transcriptIssue('pii_phone','warning','В транскрипции найдены признаки телефонных номеров. На этом этапе они только флагируются.', phones.slice(0,4)));
+  if(roleConfusion.has) issues.push(transcriptIssue('role_confusion','warning','Есть признаки возможной путаницы ролей клиента и агента.', roleConfusion.examples));
+  const recommendations=[];
+  if(quality.requires_manual_review) recommendations.push('Проверить роли вручную перед генерацией итогового саммари.');
+  if(damaged_phrase_ratio>0.15) recommendations.push('Повторить STT или улучшение транскрипции перед LLM-анализом.');
+  else if(damagedTurns.length) recommendations.push('Запускать дальнейший анализ с пониженной уверенностью из-за шума STT.');
+  if(phones.length) recommendations.push('Не использовать телефонные номера в summary и CRM-саммари.');
+  if(unknownTurns.length) recommendations.push('Нормализовать неизвестных спикеров до ролей Оператор/Агент/Клиент.');
+  if(!issues.length) recommendations.push('Транскрипция пригодна для дальнейшего анализа без ручных ограничений.');
+  return {transcript:t, chars:t.length, lines:rawLines.length, turns:turnCount, roles, unknownTurns, damagedTurns, phoneExamples:phones, roleConfusionExamples:roleConfusion.examples, quality, issues, recommendations, ending_complete:hasCompleteEnding(turns), parsedTurns:turns};
+}
+
+function sttDecision(quality){
+  if(quality.stt_quality_score<0.75 || quality.unknown_speaker_ratio>0.1 || quality.damaged_phrase_ratio>0.15) return 'RETRY_STT';
+  if(quality.has_role_confusion_risk && quality.stt_quality_score<0.85) return 'MANUAL_REVIEW';
+  if(quality.stt_quality_score>=0.9 && quality.unknown_speaker_ratio<=0.02 && quality.damaged_phrase_ratio<=0.05 && !quality.has_role_confusion_risk) return 'PASS';
+  if(quality.stt_quality_score>=0.75) return 'PASS_WITH_WARNINGS';
+  return 'RETRY_STT';
+}
+
+// Quality Gate цвета (ТЗ, stages 1-9 rework): PASS=зелёный, PASS_WITH_WARNINGS=
+// жёлтый, MANUAL_REVIEW=оранжевый (отдельно от жёлтого -- требует ручной
+// проверки, а не просто "есть нюансы"), RETRY/RETRY_STT/FAIL/STOP=красный.
+function statusFromDecision(decision){
+  if(decision==='PASS') return 'ok';
+  if(decision==='PASS_WITH_WARNINGS') return 'warn';
+  if(decision==='MANUAL_REVIEW') return 'attn';
+  return 'bad';
+}
+
+function agentClientTurnsAfterOperator(turns){
+  const firstDialogue=turns.findIndex(x=>x.role==='Агент' || x.role==='Клиент');
+  const relevant=(firstDialogue>=0?turns.slice(firstDialogue):turns).filter(x=>x.role==='Агент' || x.role==='Клиент');
+  return relevant.length;
+}
+
+function goalDetected(turns){
+  return turns.slice(0,30).some(x=>/(купить|продать|снять|сдать|интересует объект|подбор|ипотек|консультац|интересует квартир|хочу посмотреть)/i.test(x.text||''));
+}
 
 // ─── V9 Cleanup Functions: deterministic enforcement of V9 rules ───────────────────────
 // These run AFTER LLM returns, before storing in ctx. They remove/fix violations that
-// explicit prompts alone cannot guarantee.
+// explicit prompts alone cannot guarantee. Since the stages-1-9 rework (2026-07-08),
+// facts/needs/outcome fields are {value,confidence,evidence,...} objects, not flat
+// strings/arrays -- these functions now clean `.value` in place instead of the field itself.
 
 function cleanupFactsV9(facts){
-  // V9 Rule: city_or_district must be null OR only city/district name, never a full address
-  // Forbidden: дома, корпуса, квартиры, улицы, номеры объектов, адреса типа "ул. Предпортовая, 4, корпус 1"
-  if(facts.city_or_district){
-    const cd = facts.city_or_district.trim();
-    // Regex: if it contains street markers, building numbers, or address structure → reject
+  // V9 Rule: city_or_district.value must be null OR only city/district name, never a full address
+  const f = facts && facts.city_or_district;
+  if(f && f.value){
+    const cd = String(f.value).trim();
     if(/\b(ул\.|улиц|дом|дома|корпус|кв|квартир|комнат|здани|комплекс|строени|адрес|спб|питер|москв)\b|,\s*\d+|[\d]{1,3}\s*,/i.test(cd)){
-      facts.city_or_district = null;  // Clear obvious address patterns
+      f.value = null;
+      f.verification_status = 'not_applicable';
     }
   }
   return facts;
 }
 
 function cleanupNeedsV9(needs){
-  // V9 Rule: property_requirements must NOT contain object card data (address, rooms, area, floor, price)
-  // Forbidden: адреса, номеры домов, названия улиц, конкретные адреса, 1-комнатная, 35.8 кв.м, 1 этаж, цены
-  if(needs.property_requirements && typeof needs.property_requirements === 'string'){
-    const pr = needs.property_requirements;
-    // Remove common card patterns: full addresses (улица/дом/номер), room counts, area, floor, prices
+  // V9 Rule: property_requirements.value must NOT contain object card data (address, rooms, area, floor, price)
+  const pr = needs && needs.property_requirements;
+  if(pr && typeof pr.value === 'string'){
     const forbidden = /предпортов|преображенск|парк культур|набережн|ул\.|,\s*\d+|корпус|кв\.|квартир|комнатн|кв\.м|кв\.м\.|м²|этаж|цен|тыс\.рублей|руб\.|\d+\s*(?:тыс|млн|руб)|значительн|большой|красив|современн|новый|ремонт|лоджи/i;
-    if(forbidden.test(pr)){
-      // Has card data; try to extract only actual requirements (client's stated preferences)
-      // Keep phrases like "второй этаж", "рядом со школой", "готов рассмотреть" but remove exact values/prices
-      needs.property_requirements = null;  // Clear entirely if contaminated with card data
+    if(forbidden.test(pr.value)){
+      pr.value = null;
+      pr.verification_status = 'not_applicable';
     }
   }
   return needs;
 }
 
 function cleanupOutcomeV9(outcome){
-  // V9 Rule: agreements must be ONLY mutual future-action commitments, not facts/refusals/interests
-  // Remove: факты (квартира продаётся), подтверждения (номер актуален), отказы (не нужна ипотека), интерес, статусы
-  if(Array.isArray(outcome.agreements)){
+  // V9 Rule: agreements.value must be ONLY mutual future-action commitments, not facts/refusals/interests
+  const agr = outcome && outcome.agreements;
+  if(agr && Array.isArray(agr.value)){
     const forbiddenMarkers = [
       /(?:продаёт|продаётся|продав|продан|актив|живу|проживает|находиться|расположен|находит|ремонт|квартир|комната|площ|этаж|цен|стоимост|сумм|руб|тыс)/i, // ФАКТЫ
       /(?:подтверд|актуал|номер|телефон|контакт|данные|указа|записа|зафиксирова)/i, // ПОДТВЕРЖДЕНИЕ ФАКТОВ
@@ -1574,12 +1924,9 @@ function cleanupOutcomeV9(outcome){
       /(?:интересует|заинтересова|хочет|ищет|ищу|рассматрива|смотреть|посмотреть|может быть)/i, // ИНТЕРЕС/ПОТРЕБНОСТЬ (без обязательства)
       /(?:статус|статусе|стоит|находится|состояние|состояни|обсуждали|обсуждают|спросил|спроси|ответил|ответит|сказал|сказала|заявил)/i, // СТАТУС/ФАКТ/ДИАЛОГ
     ];
-
-    outcome.agreements = outcome.agreements.filter(agr => {
-      if(!agr || typeof agr !== 'string') return true;
-      // Check if agreement contains forbidden markers (suggests it's a fact/refusal/interest, not commitment)
-      const isForbidden = forbiddenMarkers.some(rx => rx.test(agr));
-      return !isForbidden;
+    agr.value = agr.value.filter(item => {
+      if(!item || typeof item !== 'string') return true;
+      return !forbiddenMarkers.some(rx => rx.test(item));
     });
   }
   return outcome;
@@ -1588,33 +1935,130 @@ function cleanupOutcomeV9(outcome){
 const CODE_FUNCS = {
   // ── этап Nexara: в Lab транскрипция уже улучшена, сервис симулируется ────
   stt(stage,ctx){
-    const t=ctx.__transcript||'';
-    const lines=t.split('\n').filter(x=>x.trim()).length;
-    const roles=ROLE_RX.filter(r=>new RegExp('(^|\\n)\\s*'+r+'\\s*:','i').test(t));
-    return {output:{chars:t.length, lines, roles},
-      metrics:[['Символов',t.length],['Реплик',lines],['Ролей',roles.length]],
-      status: t.length>0?'ok':'bad',
-      checks:[{label:'В Lab подаётся уже улучшенная транскрипция — этап Nexara симулируется (в проде: аудио → STT → улучшение)', pass:true}]};
+    const analysis=analyzeTranscriptQuality(ctx.__transcript||'');
+    const q=analysis.quality;
+    const decision=sttDecision(q);
+    q.requires_manual_review = q.requires_manual_review || decision==='MANUAL_REVIEW';
+    const checks=[
+      {label:'Этап симулируется. Оценка рассчитана по качеству входной транскрипции.', pass:true},
+      {label:'Unknown Speaker ≤ 2%: '+pct(q.unknown_speaker_ratio), pass:q.unknown_speaker_ratio<=0.02, warn:q.unknown_speaker_ratio<=0.1},
+      {label:'Damaged Phrase ≤ 5%: '+pct(q.damaged_phrase_ratio), pass:q.damaged_phrase_ratio<=0.05, warn:q.damaged_phrase_ratio<=0.15},
+      {label:'Роли без признаков путаницы', pass:!q.has_role_confusion_risk, warn:q.has_role_confusion_risk},
+      {label:'Телефоны только флагируются: '+(q.has_pii_phone?'найдены':'не найдены'), pass:!q.has_pii_phone, warn:q.has_pii_phone},
+      {label:'Decision: '+decision, pass:decision==='PASS', warn:decision==='PASS_WITH_WARNINGS'||decision==='MANUAL_REVIEW'},
+    ];
+    return {output:{
+        transcript:analysis.transcript,
+        chars:analysis.chars,
+        lines:analysis.lines,
+        turns:analysis.turns,
+        roles:analysis.roles,
+        provider:'Nexara',
+        simulated:true,
+        quality:q,
+        decision,
+        issues:analysis.issues,
+        recommendations:analysis.recommendations,
+      },
+      metrics:[['Символов',analysis.chars],['Реплик',analysis.turns],['Ролей',analysis.roles.length],['STT Quality',pct(q.stt_quality_score)],['Role Quality',pct(q.role_quality_score)],['Noise',pct(q.noise_score)],['Unknown Speaker',pct(q.unknown_speaker_ratio)],['Damaged Phrase',pct(q.damaged_phrase_ratio)],['Decision',decision]],
+      status:statusFromDecision(decision),
+      checks};
   },
 
   // ── валидация транскрипции детерминированным кодом ───────────────────────
   validate(stage,ctx){
-    const t=ctx.__transcript||'';
-    const roles=ROLE_RX.filter(r=>new RegExp('(^|\\n)\\s*'+r+'\\s*:','i').test(t));
-    const turns=(t.match(/(^|\n)\s*[А-ЯЁA-Z][а-яёa-z]+\s*:/g)||[]).length;
-    const checks=[
-      {label:'Длина ≥ 200 символов', pass:t.length>=200},
-      {label:'Определены роли (минимум две)', pass:roles.length>=2},
-      {label:'Реплик не меньше четырёх', pass:turns>=4},
-      {label:'Есть реплики клиента', pass:/(^|\n)\s*клиент\s*:/i.test(t)},
-      {label:'Нет обрыва в конце (текст завершён)', pass:!/[а-яёa-z],\s*$/i.test(t.trim()), warn:true},
-    ];
-    const passed=checks.filter(c=>c.pass).length;
-    const score=checks.length? passed/checks.length : 1;
-    return {output:{valid: checks.every(c=>c.pass||c.warn), score:+score.toFixed(2), roles, turns},
-      metrics:[['Проверок',checks.length],['Прошло',passed],['Оценка',(score*100).toFixed(0)+'%']],
-      status: score>=0.8?'ok':(score>=0.6?'warn':'bad'),
-      checks};
+    const analysis=analyzeTranscriptQuality(ctx.__transcript||'');
+    const q=analysis.quality;
+    const roles=analysis.roles;
+    const turns=analysis.turns;
+    const agent_client_turns=agentClientTurnsAfterOperator(analysis.parsedTurns);
+    const operator_turns=analysis.parsedTurns.filter(x=>x.role==='Оператор').length;
+    const checksObj={
+      length_ok:analysis.chars>=200,
+      roles_ok:roles.length>=2,
+      min_turns_ok:turns>=4,
+      client_present:roles.includes('Клиент'),
+      agent_present:roles.includes('Агент'),
+      operator_present:operator_turns>0,
+      agent_client_dialog_present:agent_client_turns>=4 && roles.includes('Агент') && roles.includes('Клиент'),
+      operator_only:false,
+      ending_complete:analysis.ending_complete,
+      unknown_speaker_ratio_ok:q.unknown_speaker_ratio<=0.1,
+      noise_ratio_ok:q.damaged_phrase_ratio<=0.1,
+      role_confusion_risk_ok:!q.has_role_confusion_risk,
+      pii_detected:q.has_pii_phone,
+      goal_detected:goalDetected(analysis.parsedTurns),
+    };
+    checksObj.operator_only = !checksObj.agent_client_dialog_present && operator_turns>0;
+
+    let technical_penalty=0;
+    if(!checksObj.client_present) technical_penalty+=0.4;
+    if(!checksObj.agent_present) technical_penalty+=0.3;
+    if(!checksObj.min_turns_ok) technical_penalty+=0.3;
+    if(!checksObj.length_ok) technical_penalty+=0.2;
+    let semantic_penalty=0;
+    if(!checksObj.agent_client_dialog_present) semantic_penalty+=0.2;
+    if(checksObj.operator_only) semantic_penalty+=0.2;
+    if(!checksObj.goal_detected) semantic_penalty+=0.1;
+    const role_penalty=(q.has_role_confusion_risk?0.2:0) + q.unknown_speaker_ratio*0.3;
+    const noise_penalty=q.damaged_phrase_ratio*0.4;
+    const ending_penalty=checksObj.ending_complete?0:0.1;
+    const score=clamp01(1 - technical_penalty - semantic_penalty - role_penalty - noise_penalty - ending_penalty);
+
+    let decision='PASS_WITH_WARNINGS';
+    if(!checksObj.client_present || analysis.chars<20 || turns<4) decision='STOP';
+    else if(score<0.75 || q.damaged_phrase_ratio>0.15 || q.unknown_speaker_ratio>0.1) decision='RETRY_STT';
+    else if(!checksObj.role_confusion_risk_ok || !checksObj.ending_complete || checksObj.pii_detected) decision='MANUAL_REVIEW';
+    else if(score>=0.9 && checksObj.agent_client_dialog_present && !checksObj.operator_only && checksObj.role_confusion_risk_ok && checksObj.noise_ratio_ok) decision='PASS';
+
+    const issues=[...analysis.issues];
+    if(!checksObj.agent_client_dialog_present) issues.push(transcriptIssue('agent_client_dialog_missing','critical','Нет содержательного блока Агент ↔ Клиент минимум из 4 реплик.', []));
+    if(checksObj.operator_only) issues.push(transcriptIssue('operator_only','critical','Транскрипция похожа на операторский блок без полноценного звонка агента.', []));
+    if(!checksObj.ending_complete) issues.push(transcriptIssue('ending_incomplete','warning','Последняя реплика выглядит как резкий обрыв или незаконченная мысль.', analysis.parsedTurns.slice(-1).map(x=>x.raw)));
+    if(!checksObj.goal_detected) issues.push(transcriptIssue('goal_missing','info','В первых репликах не найден явный признак цели клиента.', []));
+
+    const recommendations=[...analysis.recommendations];
+    if(decision==='STOP') recommendations.unshift('Остановить пайплайн: вход не похож на полноценный клиентский звонок.');
+    else if(decision==='RETRY_STT') recommendations.unshift('Повторить STT перед LLM-анализом.');
+    else if(decision==='MANUAL_REVIEW') recommendations.unshift('Продолжать только с ручной проверкой рисков валидации.');
+    else if(decision==='PASS_WITH_WARNINGS') recommendations.unshift('Запустить дальнейший анализ, но отметить результат как сниженной уверенности.');
+
+    const criteria=[
+      {name:'Технические проверки', status:(checksObj.length_ok&&checksObj.roles_ok&&checksObj.min_turns_ok&&checksObj.client_present&&checksObj.agent_present)?'pass':'fail', score:(1-technical_penalty)*100, explanation:'Длина, роли, минимум реплик и наличие клиента/агента.'},
+      {name:'Семантические проверки', status:(checksObj.agent_client_dialog_present&&!checksObj.operator_only&&checksObj.goal_detected)?'pass':'warning', score:(1-semantic_penalty)*100, explanation:'Проверены диалог Агент ↔ Клиент, операторский-only сценарий и цель звонка.'},
+      {name:'Риски', status:(checksObj.role_confusion_risk_ok&&checksObj.noise_ratio_ok&&!checksObj.pii_detected)?'pass':'warning', score:(1-role_penalty-noise_penalty)*100, explanation:'Проверены неизвестные спикеры, шум STT, PII и риск путаницы ролей.'},
+      {name:'Завершение', status:checksObj.ending_complete?'pass':'warning', score:checksObj.ending_complete?100:75, explanation:'Проверена последняя реплика на обрыв.'},
+    ].map(c=>({...c, score:+Math.max(0, Math.min(100, c.score)).toFixed(0)}));
+
+    return {output:{
+        valid:decision!=='STOP' && decision!=='RETRY_STT',
+        score:+score.toFixed(2),
+        decision,
+        roles,
+        turns,
+        chars:analysis.chars,
+        lines:analysis.lines,
+        checks:checksObj,
+        metrics:{
+          chars:analysis.chars,
+          turns,
+          unknown_speaker_ratio:q.unknown_speaker_ratio,
+          damaged_phrase_ratio:q.damaged_phrase_ratio,
+          agent_client_turns,
+          operator_turns,
+        },
+        issues,
+        recommendations,
+        criteria,
+      },
+      metrics:[['Оценка',pct(score)],['Decision',decision],['Реплик',turns],['Агент/Клиент',agent_client_turns],['Unknown Speaker',pct(q.unknown_speaker_ratio)],['Damaged Phrase',pct(q.damaged_phrase_ratio)],['PII',q.has_pii_phone?'найдено':'нет']],
+      status:statusFromDecision(decision),
+      checks:[
+        {label:'Технические проверки: длина/роли/реплики/участники', pass:criteria[0].status==='pass'},
+        {label:'Семантические проверки: Агент ↔ Клиент и цель звонка', pass:criteria[1].status==='pass', warn:criteria[1].status==='warning'},
+        {label:'Risk Gate: шум, неизвестные спикеры, PII, роли', pass:criteria[2].status==='pass', warn:criteria[2].status==='warning'},
+        {label:'Decision: '+decision, pass:decision==='PASS', warn:decision==='PASS_WITH_WARNINGS'||decision==='MANUAL_REVIEW'},
+      ]};
   },
 
   // ── единое хранилище: схема + справочники + нормализация + цитаты ────────
@@ -1664,6 +2108,93 @@ const CODE_FUNCS = {
     return {output:{record:f, evidence:{verified,total,ratio:+evRatio.toFixed(2)}, schema_ok:failed===0, score:+score.toFixed(2)},
       metrics:[['Проверок',checks.length],['Цитаты',verified+'/'+total],['Оценка',(score*100).toFixed(0)+'%']],
       status: failed>0?'bad':(checks.some(c=>c.warn&&!c.pass)?'warn':'ok'),
+      checks};
+  },
+
+  // ── Conversation Store: единый источник истины перед Summary — только
+  // verified-данные из fact_check/need_check/outcome_check, детерминированно ──
+  conversationStore(stage,ctx){
+    const fc=ctx.fact_check||{}, nc=ctx.need_check||{}, oc=ctx.outcome_check||{};
+    const validation=ctx.validation||{};
+    const validationScore=typeof validation.score==='number'?validation.score:0;
+
+    function isNullish(value){
+      if(value===null||value===undefined) return true;
+      if(value==='не определено') return true;
+      if(Array.isArray(value)&&value.length===0) return true;
+      return false;
+    }
+    // Сохраняем ТОЛЬКО verified:true с confidence>=0.85 -- кроме осознанного
+    // null/"не определено", который можно сохранять без порога уверенности
+    // (это валидный результат проверки, а не пропуск данных).
+    function keepVerified(source){
+      const out={};
+      Object.entries(source||{}).forEach(([key,field])=>{
+        if(!field||typeof field!=='object') return;
+        if(field.verified!==true) return;
+        const conf=typeof field.confidence==='number'?field.confidence:0;
+        if(conf>=0.85||isNullish(field.value)) out[key]=field;
+      });
+      return out;
+    }
+
+    const facts=keepVerified(fc.verified_facts);
+    const needs=keepVerified(nc.verified_needs);
+    const outcome=keepVerified(oc.verified_outcome);
+
+    // Нормализация бюджета (перенесена из старого codeFn 'store'): ×1000/
+    // ×1 000 000 эвристика по формулировке evidence, если это похоже на
+    // сумму без единиц или "миллион"/"млн" без цифр после запятой.
+    if(facts.budget && typeof facts.budget.value==='number' && facts.budget.value>0){
+      const cit=(facts.budget.evidence||'').toLowerCase();
+      let normalized=facts.budget.value;
+      if(facts.budget.value<1000 && /миллион|млн/.test(cit)) normalized=facts.budget.value*1000000;
+      else if(facts.budget.value>=1000 && facts.budget.value<100000) normalized=facts.budget.value*1000;
+      facts.budget={...facts.budget, value_normalized:normalized};
+    }
+
+    const fact_check_score=(fc.fact_check_quality&&typeof fc.fact_check_quality.score==='number')?fc.fact_check_quality.score:0;
+    const need_check_score=(nc.need_check_quality&&typeof nc.need_check_quality.score==='number')?nc.need_check_quality.score:0;
+    const outcome_check_score=(oc.outcome_check_quality&&typeof oc.outcome_check_quality.score==='number')?oc.outcome_check_quality.score:0;
+    const overall_store_score=clamp01(validationScore*0.2 + fact_check_score*0.25 + need_check_score*0.25 + outcome_check_score*0.3);
+
+    const schemaInvalid=!fc.fact_check_quality || !nc.need_check_quality || !oc.outcome_check_quality;
+    const hasVerifiedIntent=!!(facts.intent && facts.intent.verified);
+    const hasVerifiedOutcome=Object.keys(outcome).length>0;
+    const hasVerifiedNextStep=!!outcome.next_step;
+    const needsManualReview=nc.need_check_quality && nc.need_check_quality.decision==='MANUAL_REVIEW';
+    const validationManualReview=validation.decision==='MANUAL_REVIEW';
+
+    // Приоритет (первое совпадение побеждает): FAIL > MANUAL_REVIEW > PASS > PASS_WITH_WARNINGS (запасной)
+    let decision;
+    if(schemaInvalid || !hasVerifiedIntent || !hasVerifiedOutcome) decision='FAIL';
+    else if(!hasVerifiedNextStep || needsManualReview || validationManualReview) decision='MANUAL_REVIEW';
+    else if(overall_store_score>=0.9) decision='PASS';
+    else if(overall_store_score>=0.75) decision='PASS_WITH_WARNINGS';
+    else decision='FAIL';
+
+    const quality={
+      transcript_validation_score:+validationScore.toFixed(3),
+      fact_check_score:+fact_check_score.toFixed(3),
+      need_check_score:+need_check_score.toFixed(3),
+      outcome_check_score:+outcome_check_score.toFixed(3),
+      overall_store_score:+overall_store_score.toFixed(3),
+      decision
+    };
+    const debug={
+      rejected_facts:fc.rejected_facts||{},
+      rejected_needs:nc.rejected_needs||{},
+      rejected_outcome:oc.rejected_outcome||{}
+    };
+    const checks=[
+      {label:'Verified-факты сохранены: '+Object.keys(facts).length, pass:hasVerifiedIntent},
+      {label:'Verified-потребности сохранены: '+Object.keys(needs).length, pass:Object.keys(needs).length>0, warn:Object.keys(needs).length===0},
+      {label:'Verified-результат звонка сохранён: '+Object.keys(outcome).length, pass:hasVerifiedOutcome},
+      {label:'Overall Store Score: '+pct(overall_store_score)+' · Decision: '+decision, pass:decision==='PASS', warn:decision==='PASS_WITH_WARNINGS'||decision==='MANUAL_REVIEW'},
+    ];
+    return {output:{facts, needs, outcome, quality, debug},
+      metrics:[['Overall Score',pct(overall_store_score)],['Decision',decision],['Фактов',Object.keys(facts).length],['Потребностей',Object.keys(needs).length],['Результат звонка',Object.keys(outcome).length]],
+      status:statusFromDecision(decision),
       checks};
   },
 
@@ -1989,7 +2520,23 @@ const CODE_FUNCS = {
 
   // ── этап CRM: сборка карточки и симуляция сохранения ─────────────────────
   crm(stage,ctx){
-    const st=ctx.store||{}, rec=st.record||ctx.facts||{}, n=ctx.needs||{}, o=ctx.outcome||{}, sm=ctx.summary||{}, g=ctx.summary_quality_gate||ctx.gate||{};
+    // Приоритет источника карточки: Conversation Store (verified-данные,
+    // stages 1-9 rework) → старый плоский ctx.store/ctx.facts (legacy,
+    // если Conversation Store отключён/отсутствует в сохранённом конфиге).
+    const cs=ctx.conversation_store;
+    let rec, n, o;
+    if(cs){
+      const unwrap=(obj)=>Object.fromEntries(Object.entries(obj||{}).map(([k,v])=>[k, v&&typeof v==='object'&&'value' in v ? v.value : v]));
+      rec=unwrap(cs.facts);
+      if(cs.facts&&cs.facts.budget) rec.budget_normalized=cs.facts.budget.value_normalized;
+      n=unwrap(cs.needs);
+      o=unwrap(cs.outcome);
+      if(cs.outcome&&cs.outcome.next_step) o.next_step_owner=cs.outcome.next_step.owner;
+    } else {
+      const st=ctx.store||{};
+      rec=st.record||ctx.facts||{}; n=ctx.needs||{}; o=ctx.outcome||{};
+    }
+    const sm=ctx.summary||{}, g=ctx.summary_quality_gate||ctx.gate||{};
     const card={
       client_name: rec.client_name ?? null,
       budget: rec.budget_normalized ?? rec.budget ?? null,
@@ -2141,6 +2688,14 @@ async function runStage(stage, ctx){
     if(!fn) throw new Error('нет код-функции '+stage.codeFn);
     const r=fn(stage,ctx);
     r.ms=Math.round(performance.now()-t0); r.isCode=true;
+    // Общие требования ТЗ (stages 1-9 rework): каждый этап пишет
+    // stage_version/prompt_version/model/timestamp. Добавлено централизованно
+    // здесь (а не в каждой код-функции), чтобы не зависеть от того, что
+    // каждая функция сама не забудет их проставить.
+    r.stage_version=stage.stageVersion||'v1';
+    r.prompt_version='v'+(stage.promptVersion||1);
+    r.model=stage.vendor||'code';
+    r.timestamp=new Date().toISOString();
     r.meta=buildStageMeta(stage,r);
     return r;
   } else {
@@ -2158,6 +2713,9 @@ async function runStage(stage, ctx){
       // калибровка судей по прогонам была воспроизводимой даже когда
       // vendor-fallback молча подменил вендора.
       actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
+      // Общие требования ТЗ (stages 1-9 rework): версионирование каждого этапа.
+      stage_version:stage.stageVersion||'v1', prompt_version:'v'+(stage.promptVersion||1),
+      model:actualModel, timestamp:new Date().toISOString(),
       status: parseErr?(stage.type==='check'?'bad':'warn'):'ok',
       metrics:[['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
@@ -2182,11 +2740,6 @@ async function runPipeline(){
   if(!transcript){ toast('Загрузите транскрипцию'); return; }
   const active=pipeline.filter(s=>s.enabled);
   if(!active.length){ toast('Нет активных шагов'); return; }
-  const modelSteps = active.filter(s=>s.type==='llm'||s.type==='check');
-  const needsAnthropic = modelSteps.some(s=>(MODEL_VENDOR[s.model]||'anthropic')==='anthropic');
-  const needsOpenai = modelSteps.some(s=>MODEL_VENDOR[s.model]==='openai');
-  if(needsAnthropic && !loadApiKey() && !loadOpenaiKey()){ toast('Задайте API-ключ Anthropic или OpenAI: Claude-шаги могут уйти на GPT-5 mini fallback'); return; }
-  if(needsOpenai && !loadOpenaiKey() && !loadApiKey()){ toast('Задайте API-ключ OpenAI или Anthropic: GPT-шаги могут уйти на Claude fallback'); return; }
 
   ctx={ __transcript:transcript, stored_files: storedFilesForCtx() };
   reportsEl.innerHTML=''; emptyState.style.display='none';
@@ -2203,7 +2756,26 @@ async function runPipeline(){
     card.scrollIntoView({behavior:'smooth',block:'center'});
 
     let rep;
-    try{ rep=await runStage(stage, ctx); }
+    const isModelStage=stage.type==='llm'||stage.type==='check';
+    const noModelKey=isModelStage && !loadApiKey() && !loadOpenaiKey();
+    if(noModelKey){
+      rep={
+        status:'warn',
+        output:{
+          skipped:true,
+          score:0.75,
+          decision:'STOP_NO_API_KEY',
+          issues:[transcriptIssue('missing_api_key','warning','Дальнейшие LLM-этапы требуют API-ключ Anthropic или OpenAI. Первые кодовые Quality Gate этапы уже выполнены.', [])],
+          recommendations:['Добавьте API-ключ, чтобы продолжить с этапа «'+stage.name+'».']
+        },
+        ms:0,
+        metrics:[['Decision','STOP_NO_API_KEY'],['Причина','нет API-ключа']],
+        checks:[{label:'Первые кодовые этапы выполнены. Для LLM-этапа нужен API-ключ Anthropic или OpenAI.', pass:false, warn:true}],
+        isCode:true
+      };
+      rep.meta=buildStageMeta(stage,rep);
+    }
+    else try{ rep=await runStage(stage, ctx); }
     catch(e){
       const isChecker=stage.type==='check';
       rep={
@@ -2227,11 +2799,12 @@ async function runPipeline(){
     if(rep.tokens) totalTokens+=rep.tokens;
     if(rep.cost) totalCost+=rep.cost;
     if(rep.status==='bad') errorCount++;
-    else if(rep.status==='warn') warningCount++;
+    else if(rep.status==='warn' || rep.status==='attn') warningCount++;
     stageReports.push({stage:sanitize(stage), report:rep});
 
     card.replaceWith(renderReport(stage, rep, i+1));
     progBar.style.width=((i+1)/active.length*100)+'%';
+    if(noModelKey) break;
   }
 
   runStatus.textContent='готово';
@@ -2275,8 +2848,8 @@ function reportRunToParent(run){
   }catch(e){ /* no parent listening, or postMessage unsupported -- harmless */ }
 }
 
-function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='bad'?'bad':'run';}
-function badgeText(st){return st==='ok'?'OK':st==='warn'?'Внимание':st==='bad'?'Ошибка':'…';}
+function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='attn'?'attn':st==='bad'?'bad':'run';}
+function badgeText(st){return st==='ok'?'OK':st==='warn'?'Внимание':st==='attn'?'Ручная проверка':st==='bad'?'Ошибка':'…';}
 function whoLabel(stage){
   if(stage.vendor) return stage.vendor;
   if(stage.model) return stage.model.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)';
