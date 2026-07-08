@@ -1649,10 +1649,40 @@ function textMentionsMissingTranscript(value){
   return /транскрипц(?:ия|ии|ию)\s+не\s+предостав|transcript\s+(?:is\s+)?not\s+provided|данные\s+отсутств/i.test(JSON.stringify(value||''));
 }
 
+function moduleStageKind(stage){
+  const key=String(stage&&stage.outKey||'').toLowerCase();
+  const name=String(stage&&stage.name||'').toLowerCase();
+  if(/fact|факт/.test(key+' '+name)) return 'facts';
+  if(/need|потребност|запрос|требован/.test(key+' '+name)) return 'needs';
+  if(/outcome|result|результ|итог|исход/.test(key+' '+name)) return 'outcome';
+  if(/summary|саммари|резюме/.test(key+' '+name)) return 'summary';
+  return '';
+}
+
+function moduleOutputList(value, keys){
+  if(Array.isArray(value)) return value;
+  if(!value||typeof value!=='object') return [];
+  for(const key of keys){
+    if(Array.isArray(value[key])) return value[key];
+  }
+  return [];
+}
+
+function moduleExtractionEmpty(kind, value){
+  if(!value||typeof value!=='object') return true;
+  if(kind==='facts') return moduleOutputList(value, ['facts','verified_facts']).length===0;
+  if(kind==='needs') return moduleOutputList(value, ['needs','crm_needs','verified_needs']).length===0;
+  if(kind==='outcome') return textMentionsMissingTranscript(value) || Object.keys(value).filter(k=>!['status','decision','score','explanation','issues','critical_errors'].includes(k)).length===0;
+  return false;
+}
+
 function guardEmptyExtraction(stage, output, ctx){
   if(!IS_TRANSCRIPTION_SUMMARY_MODULE || !hasUsefulTranscript(ctx) || !output || typeof output!=='object') return output;
-  const outKey=stage.outKey||'';
+  const outKey=stage.outKey||'', kind=moduleStageKind(stage);
   const issues=[];
+  if(kind==='facts' && moduleExtractionEmpty('facts', output) && /(?:^facts?$|fact_agent|извлеч|extract)/i.test(outKey+' '+(stage.name||''))) issues.push('Fact Agent вернул пустой список фактов при непустой транскрипции.');
+  if(kind==='needs' && moduleExtractionEmpty('needs', output) && /(?:^needs?$|need_agent|потребност|extract)/i.test(outKey+' '+(stage.name||''))) issues.push('Need Agent вернул пустой список потребностей при непустой транскрипции.');
+  if(kind==='outcome' && moduleExtractionEmpty('outcome', output) && /(?:^outcome$|outcome_agent|результ|итог)/i.test(outKey+' '+(stage.name||''))) issues.push('Outcome Agent не обработал переданную транскрипцию.');
   if(/fact_(?:judge|check)/i.test(outKey) && extractionListEmpty(ctx.facts, ['facts'])) issues.push('Fact Agent вернул пустой список фактов при непустой транскрипции.');
   if(/need_(?:judge|check)/i.test(outKey) && extractionListEmpty(ctx.needs, ['needs','crm_needs'])) issues.push('Need Agent вернул пустой список потребностей при непустой транскрипции.');
   if(/outcome_(?:judge|check)/i.test(outKey) && (textMentionsMissingTranscript(ctx.outcome) || ctx.outcome?.verification_status==='failed')) issues.push('Outcome Agent не обработал переданную транскрипцию.');
@@ -1666,6 +1696,65 @@ function guardEmptyExtraction(stage, output, ctx){
     critical_errors:[...toList(output.critical_errors), ...issues],
     issues:[...toList(output.issues), ...issues]
   };
+}
+
+function ensureModuleTranscriptPrompt(stage, prompt, ctx){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE) return {prompt, transcriptInjected:false, transcriptPresent:false};
+  const text=String(transcriptText(ctx)||'').trim();
+  if(!text) return {prompt, transcriptInjected:false, transcriptPresent:false};
+  const kind=moduleStageKind(stage);
+  if(!['facts','needs','outcome'].includes(kind) && stage.type!=='check' && stage.type!=='hybrid') {
+    return {prompt, transcriptInjected:false, transcriptPresent:false};
+  }
+  const probe=text.slice(0, Math.min(240, text.length)).trim();
+  const transcriptPresent=!!probe && String(prompt||'').includes(probe);
+  if(transcriptPresent) return {prompt, transcriptInjected:false, transcriptPresent:true};
+  return {
+    prompt:String(prompt||'')+'\n\n---\nПОЛНАЯ ТРАНСКРИПЦИЯ ДЛЯ ЭТОГО ЭТАПА:\n'+text,
+    transcriptInjected:true,
+    transcriptPresent:true
+  };
+}
+
+function moduleGenericCheck(kind, raw){
+  const source=raw&&typeof raw==='object'?raw:{};
+  const list=kind==='facts'
+    ? moduleOutputList(source, ['facts'])
+    : kind==='needs'
+      ? moduleOutputList(source, ['needs','crm_needs'])
+      : [];
+  const empty=kind==='outcome' ? moduleExtractionEmpty('outcome', source) : list.length===0;
+  const missingTranscript=kind==='outcome' && textMentionsMissingTranscript(source);
+  const status=empty||missingTranscript?'fail':'pass';
+  const explanation=empty
+    ? (kind==='facts'?'Пустой список фактов при непустой транскрипции.':kind==='needs'?'Пустой список потребностей при непустой транскрипции.':'Результат звонка не извлечён.')
+    : 'Базовая структура нового модуля принята.';
+  return {
+    criteria:[{name:'Generic module extraction', checker:'code', status, score:status==='pass'?100:0, explanation}],
+    fieldStatus:{module_payload:status},
+    hardFail:status==='fail',
+    issues:status==='fail'?[explanation]:[]
+  };
+}
+
+function shrinkSummaryToLimit(summary, limit=700){
+  let text=String(summary||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+  if(text.length<=limit) return {summary:text, shortened:false};
+  const lines=text.split(/\n+/);
+  const important=lines.filter(line=>/^(Статус|Следующий шаг|Договорились)\s*:/i.test(line.trim()));
+  const body=lines.filter(line=>!/^(Статус|Следующий шаг|Договорились)\s*:/i.test(line.trim())).join(' ');
+  const sentences=(body.match(/[^.!?\n]+[.!?]?/g)||[body]).map(x=>x.trim()).filter(Boolean);
+  let out='';
+  for(const sentence of sentences){
+    const candidate=(out?out+' ':'')+sentence;
+    const withImportant=[candidate, ...important].filter(Boolean).join('\n');
+    if(withImportant.length>limit-1) break;
+    out=candidate;
+  }
+  if(!out) out=body.slice(0, Math.max(0, limit-important.join('\n').length-4)).replace(/\s+\S*$/,'').trim();
+  text=[out, ...important].filter(Boolean).join('\n').trim();
+  if(text.length>limit) text=text.slice(0, limit-1).replace(/\s+\S*$/,'').trim()+'…';
+  return {summary:text, shortened:true};
 }
 
 function summaryText(ctx){
@@ -1770,6 +1859,10 @@ const ENUMS = {
 const ROLE_RX=['Агент','Клиент','Оператор','Менеджер'];
 const TRANSCRIPT_ALLOWED_ROLES=['Оператор','Агент','Клиент'];
 
+function transcriptAllowedRoles(){
+  return IS_TRANSCRIPTION_SUMMARY_MODULE ? ['Оператор','Агент','Клиент','Менеджер','Консультант','Сотрудник','Клиентка','Пользователь'] : TRANSCRIPT_ALLOWED_ROLES;
+}
+
 function clamp01(n){
   const x=Number(n);
   if(!Number.isFinite(x)) return 0;
@@ -1808,6 +1901,11 @@ function parseTranscriptTurns(transcript){
 function isUnknownTranscriptRole(role){
   const r=String(role||'').trim();
   if(!r) return true;
+  if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+    if(/^(unknown|неизвестн)$/i.test(r)) return true;
+    if(/^(спикер|speaker|участник)\s*\d*$/i.test(r)) return false;
+    return !transcriptAllowedRoles().some(allowed=>allowed.toLowerCase()===r.toLowerCase());
+  }
   return /^(unknown|неизвестн|спикер|speaker|участник)/i.test(r) || !TRANSCRIPT_ALLOWED_ROLES.includes(r);
 }
 
@@ -1868,6 +1966,7 @@ function hasCompleteEnding(turns){
   if(wordCount(trimmed)<3) return false;
   if(/[а-яёa-z],\s*$/i.test(trimmed)) return false;
   if(/\b(?:и|а|ну|так|сейчас)$/i.test(trimmed)) return false;
+  if(IS_TRANSCRIPTION_SUMMARY_MODULE && wordCount(trimmed)>=6) return true;
   if(/(?:до свидания|всего доброго|спасибо|хорошо|договорились|перезвон|свяж|отправ|пока|будем ждать)/i.test(trimmed)) return true;
   return /[.!?]$/.test(trimmed) || wordCount(trimmed)>=8;
 }
@@ -1877,7 +1976,8 @@ function analyzeTranscriptQuality(transcript){
   const rawLines=t.split(/\r?\n/).filter(x=>x.trim());
   const turns=parseTranscriptTurns(t);
   const turnCount=turns.length;
-  const roles=[...new Set(turns.map(x=>x.role).filter(r=>TRANSCRIPT_ALLOWED_ROLES.includes(r)))];
+  const allowed=transcriptAllowedRoles();
+  const roles=[...new Set(turns.map(x=>x.role).filter(r=>allowed.some(a=>a.toLowerCase()===String(r).toLowerCase())))];
   const unknownTurns=turns.filter(x=>isUnknownTranscriptRole(x.role));
   const damagedTurns=turns.filter(x=>isDamagedPhrase(x.text));
   const unknown_speaker_ratio=turnCount?unknownTurns.length/turnCount:0;
@@ -1940,6 +2040,9 @@ function agentClientTurnsAfterOperator(turns){
 }
 
 function goalDetected(turns){
+  if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+    return turns.slice(0,40).some(x=>/(нужно|хочу|интерес|вопрос|проблем|обращ|звон|заказ|заявк|помощ|подскаж|расскаж|уточн|сдела|получ|отправ|провер|оформ)/i.test(x.text||''));
+  }
   return turns.slice(0,30).some(x=>/(купить|продать|снять|сдать|интересует объект|подбор|ипотек|консультац|интересует квартир|хочу посмотреть)/i.test(x.text||''));
 }
 
@@ -2116,14 +2219,16 @@ const CODE_FUNCS = {
     const turns=analysis.turns;
     const agent_client_turns=agentClientTurnsAfterOperator(analysis.parsedTurns);
     const operator_turns=analysis.parsedTurns.filter(x=>x.role==='Оператор').length;
+    const moduleMode=IS_TRANSCRIPTION_SUMMARY_MODULE;
+    const participantRoles=roles.filter(r=>r!=='Оператор');
     const checksObj={
       length_ok:analysis.chars>=200,
-      roles_ok:roles.length>=2,
+      roles_ok:moduleMode ? roles.length>=1 : roles.length>=2,
       min_turns_ok:turns>=4,
-      client_present:roles.includes('Клиент'),
-      agent_present:roles.includes('Агент'),
+      client_present:moduleMode ? participantRoles.length>=1 : roles.includes('Клиент'),
+      agent_present:moduleMode ? participantRoles.length>=1 : roles.includes('Агент'),
       operator_present:operator_turns>0,
-      agent_client_dialog_present:agent_client_turns>=4 && roles.includes('Агент') && roles.includes('Клиент'),
+      agent_client_dialog_present:moduleMode ? turns>=4 : (agent_client_turns>=4 && roles.includes('Агент') && roles.includes('Клиент')),
       operator_only:false,
       ending_complete:analysis.ending_complete,
       unknown_speaker_ratio_ok:q.unknown_speaker_ratio<=0.1,
@@ -2155,10 +2260,10 @@ const CODE_FUNCS = {
     else if(score>=0.9 && checksObj.agent_client_dialog_present && !checksObj.operator_only && checksObj.role_confusion_risk_ok && checksObj.noise_ratio_ok) decision='PASS';
 
     const issues=[...analysis.issues];
-    if(!checksObj.agent_client_dialog_present) issues.push(transcriptIssue('agent_client_dialog_missing','critical','Нет содержательного блока Агент ↔ Клиент минимум из 4 реплик.', []));
+    if(!checksObj.agent_client_dialog_present) issues.push(transcriptIssue('agent_client_dialog_missing',moduleMode?'warning':'critical',moduleMode?'Недостаточно реплик для уверенного анализа звонка.':'Нет содержательного блока Агент ↔ Клиент минимум из 4 реплик.', []));
     if(checksObj.operator_only) issues.push(transcriptIssue('operator_only','critical','Транскрипция похожа на операторский блок без полноценного звонка агента.', []));
-    if(!checksObj.ending_complete) issues.push(transcriptIssue('ending_incomplete','warning','Последняя реплика выглядит как резкий обрыв или незаконченная мысль.', analysis.parsedTurns.slice(-1).map(x=>x.raw)));
-    if(!checksObj.goal_detected) issues.push(transcriptIssue('goal_missing','info','В первых репликах не найден явный признак цели клиента.', []));
+    if(!checksObj.ending_complete && !moduleMode) issues.push(transcriptIssue('ending_incomplete','warning','Последняя реплика выглядит как резкий обрыв или незаконченная мысль.', analysis.parsedTurns.slice(-1).map(x=>x.raw)));
+    if(!checksObj.goal_detected && !moduleMode) issues.push(transcriptIssue('goal_missing','info','В первых репликах не найден явный признак цели клиента.', []));
 
     const recommendations=[...analysis.recommendations];
     if(decision==='STOP') recommendations.unshift('Остановить пайплайн: вход не похож на полноценный клиентский звонок.');
@@ -2261,6 +2366,9 @@ const CODE_FUNCS = {
   // runStage(), который объединяет его с ответом LLM Judge.
   factCheckCode(stage,ctx){
     const f=ctx.facts||{};
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+      return moduleGenericCheck('facts', f);
+    }
     const requiredFields=['client_name','intent','source_of_funds','city_or_district','budget','phone_mentioned','client_availability'];
     const fieldStatus={};
     const missing=requiredFields.filter(k=>!f[k]||typeof f[k]!=='object');
@@ -2295,6 +2403,9 @@ const CODE_FUNCS = {
 
   needCheckCode(stage,ctx){
     const n=ctx.needs||{};
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+      return moduleGenericCheck('needs', n);
+    }
     const requiredFields=['interested_in','market_type_interest','source_of_funds','timeline'];
     const fieldStatus={};
     const missing=requiredFields.filter(k=>!n[k]||typeof n[k]!=='object');
@@ -2334,6 +2445,9 @@ const CODE_FUNCS = {
 
   outcomeCheckCode(stage,ctx){
     const o=ctx.outcome||{};
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+      return moduleGenericCheck('outcome', o);
+    }
     const fieldStatus={};
     const issues=[];
     let hardFail=false;
@@ -2439,22 +2553,16 @@ const CODE_FUNCS = {
     let needs=keepVerified(nc.verified_needs);
     let outcome=keepVerified(oc.verified_outcome);
     if(IS_TRANSCRIPTION_SUMMARY_MODULE){
-      if(Object.keys(facts).length===0) facts={...fieldsFromList(ctx.facts&&ctx.facts.facts, 'fact')};
-      if(Object.keys(needs).length===0) needs={...fieldsFromList(ctx.needs&&ctx.needs.needs, 'need'), ...fieldsFromList(ctx.needs&&ctx.needs.crm_needs, 'crm_need')};
-      if(Object.keys(outcome).length===0 && ctx.outcome&&typeof ctx.outcome==='object'){
-        ['call_result','next_step','agreements','client_status','risks','channel'].forEach(key=>{
-          const value=ctx.outcome[key];
-          if(value!==undefined&&value!==null&&!(Array.isArray(value)&&value.length===0)){
-            outcome[key]={value, confidence:0.9, evidence:ctx.outcome.evidence||'', verified:ctx.outcome.verification_status!=='failed'};
-          }
-        });
-      }
+      if(Object.keys(facts).length===0) facts={...fieldsFromList(moduleOutputList(fc, ['verified_facts','facts']), 'fact')};
+      if(Object.keys(needs).length===0) needs={...fieldsFromList(moduleOutputList(nc, ['verified_needs','needs']), 'need'), ...fieldsFromList(moduleOutputList(nc, ['crm_needs','verified_crm_needs']), 'crm_need')};
+      if(Object.keys(outcome).length===0) outcome={...fieldsFromList(moduleOutputList(oc, ['verified_outcome','outcome']), 'outcome')};
+      if(Object.keys(outcome).length===0 && oc.verified_outcome&&typeof oc.verified_outcome==='object') outcome=keepVerified(oc.verified_outcome);
     }
     // property_requirements -- отдельный верхнеуровневый блок (не внутри
     // needs): mergeNeedCheck() уже сохраняет только verified-подполя, если
     // часть блока не прошла проверку -- отбрасывается ровно неё, а не весь
     // property_requirements целиком.
-    const property_requirements=nc.property_requirements||ctx.needs?.property_requirements||{};
+    const property_requirements=IS_TRANSCRIPTION_SUMMARY_MODULE ? (nc.property_requirements||{}) : (nc.property_requirements||ctx.needs?.property_requirements||{});
 
     // Нормализация бюджета (перенесена из старого codeFn 'store'): ×1000/
     // ×1 000 000 эвристика по формулировке evidence, если это похоже на
@@ -2670,7 +2778,7 @@ const CODE_FUNCS = {
     const availableKeys=judgeKeys.filter(k=>judges[k].status!=='unavailable');
     const unavailableKeys=judgeKeys.filter(k=>judges[k].status==='unavailable');
     const availableWeightSum=availableKeys.reduce((s,k)=>s+weights[k],0) || 1;
-    const summary_quality_score=availableKeys.reduce((sum,key)=>sum+scores[key]*(weights[key]/availableWeightSum),0);
+    let summary_quality_score=availableKeys.reduce((sum,key)=>sum+scores[key]*(weights[key]/availableWeightSum),0);
 
     const truth=judges.truth_check.raw;
     const criticalFacts=judges.critical_facts_check.raw;
@@ -2742,6 +2850,10 @@ const CODE_FUNCS = {
     const stt=decision==='AUTO_SAVE'?'ok':(decision==='MANUAL_REVIEW'?'warn':'bad');
     const uniqueCritical=uniqTextList(critical_errors);
     const uniqueWarnings=uniqTextList(warnings).slice(0,5);
+    const scoreBeforeCriticalPenalty=summary_quality_score;
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE && uniqueCritical.length>0){
+      summary_quality_score=Math.min(summary_quality_score, Math.max(35, 74 - (uniqueCritical.length-1)*8));
+    }
     // Задача 6.1: key_problems/главная причина решения собираются СТРОГО из
     // структурированных полей JSON пяти судей текущего прогона (плюс двух
     // детерминированных проверок кода выше) -- никакого повторного
@@ -2776,6 +2888,8 @@ const CODE_FUNCS = {
     return {
       output:{
         summary_quality_score:+summary_quality_score.toFixed(1),
+        score_before_critical_penalty:+scoreBeforeCriticalPenalty.toFixed(1),
+        critical_penalty_applied:IS_TRANSCRIPTION_SUMMARY_MODULE && uniqueCritical.length>0,
         decision,
         scores,
         critical_errors:uniqueCritical,
@@ -2824,7 +2938,8 @@ const CODE_FUNCS = {
       if(cs.outcome&&cs.outcome.next_step) o.next_step_owner=cs.outcome.next_step.owner;
     } else {
       const st=ctx.store||{};
-      rec=st.record||ctx.facts||{}; n=ctx.needs||{}; o=ctx.outcome||{}; pr={};
+      if(IS_TRANSCRIPTION_SUMMARY_MODULE){ rec={}; n={}; o={}; pr={}; }
+      else { rec=st.record||ctx.facts||{}; n=ctx.needs||{}; o=ctx.outcome||{}; pr={}; }
     }
     const sm=ctx.summary||{}, g=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate||{};
     const card={
@@ -2839,7 +2954,8 @@ const CODE_FUNCS = {
       summary: sm.summary ?? null,
       quality: {confidence: (g.summary_quality_score ?? (g.confidence!=null ? Math.round(g.confidence*100) : 0)), decision: g.decision ?? '—'}
     };
-    const saved= g.decision==='AUTO_SAVE' || g.decision==='AUTO_SAVE + лог';
+    const moduleHasFinalData=!IS_TRANSCRIPTION_SUMMARY_MODULE || (!!cs && Object.keys(cs.facts||{}).length>0 && Object.keys(cs.needs||{}).length>0 && Object.keys(cs.outcome||{}).length>0 && !textMentionsMissingTranscript(cs.outcome));
+    const saved= moduleHasFinalData && (g.decision==='AUTO_SAVE' || g.decision==='AUTO_SAVE + лог');
     return {output:{card, saved},
       metrics:[['Решение Gate', g.decision||'—'],['Сохранение', saved?'выполнено':'отложено']],
       status: saved?'ok':'warn',
@@ -2965,10 +3081,40 @@ async function callModel(prompt, model){
   }
 }
 function parseJSON(text){
-  let t=text.trim().replace(/```json/gi,'').replace(/```/g,'').trim();
-  const a=t.indexOf('{'), b=t.lastIndexOf('}');
-  if(a>=0&&b>a) t=t.slice(a,b+1);
-  return JSON.parse(t);
+  const raw=String(text||'');
+  const attempts=[];
+  const cleaned=raw.trim().replace(/```json/gi,'').replace(/```/g,'').trim();
+  attempts.push(cleaned);
+  function balancedCandidate(str){
+    const starts=[...str].map((ch,i)=>ch==='{'||ch==='['?i:-1).filter(i=>i>=0);
+    for(const start of starts){
+      const open=str[start], close=open==='{'?'}':']';
+      let depth=0, inString=false, escape=false;
+      for(let i=start;i<str.length;i++){
+        const ch=str[i];
+        if(escape){ escape=false; continue; }
+        if(ch==='\\'){ escape=true; continue; }
+        if(ch==='"'){ inString=!inString; continue; }
+        if(inString) continue;
+        if(ch===open) depth++;
+        else if(ch===close){
+          depth--;
+          if(depth===0) return str.slice(start,i+1);
+        }
+      }
+    }
+    return '';
+  }
+  const balanced=balancedCandidate(cleaned);
+  if(balanced) attempts.push(balanced);
+  const a=cleaned.indexOf('{'), b=cleaned.lastIndexOf('}');
+  if(a>=0&&b>a) attempts.push(cleaned.slice(a,b+1));
+  let lastErr;
+  for(const candidate of [...new Set(attempts.filter(Boolean))]){
+    try{ return JSON.parse(candidate); }
+    catch(e){ lastErr=e; }
+  }
+  throw lastErr||new Error('JSON не найден в ответе модели');
 }
 
 async function runStage(stage, ctx){
@@ -2981,7 +3127,8 @@ async function runStage(stage, ctx){
     const codeFn=CODE_FUNCS[stage.codeFn];
     if(!codeFn) throw new Error('нет код-функции '+stage.codeFn);
     const codeResult=codeFn(stage,ctx);
-    const prompt=tmpl(stage.prompt, ctx);
+    const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
+    const prompt=promptAudit.prompt;
     const {text:raw, tokens, actualModel, fallbackNote}=await callModel(prompt, stage.model);
     let parsed=null, parseErr=null;
     try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
@@ -2998,6 +3145,7 @@ async function runStage(stage, ctx){
 
     const rep={ output:merged, raw, parseErr, ms, tokens, cost,
       actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
+      prompt_audit:{transcript_present:promptAudit.transcriptPresent, transcript_injected:promptAudit.transcriptInjected, transcript_chars:String(transcriptText(ctx)||'').length, prompt_chars:prompt.length},
       stage_version:stage.stageVersion||'v1', prompt_version:'v'+(stage.promptVersion||1),
       model:actualModel, timestamp:new Date().toISOString(),
       status: statusFromDecision(merged.decision),
@@ -3022,20 +3170,26 @@ async function runStage(stage, ctx){
     r.meta=buildStageMeta(stage,r);
     return r;
   } else {
-    const prompt=tmpl(stage.prompt, ctx);
+    const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
+    const prompt=promptAudit.prompt;
     const {text:raw, tokens, actualModel, fallbackNote}=await callModel(prompt, stage.model);
     let parsed=null, parseErr=null;
     try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
     const ms=Math.round(performance.now()-t0);
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=(actualModel&&actualModel.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)')+(fallbackNote?' ('+fallbackNote+')':'');
-    const output = guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
+    let output = guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE && stage.outKey==='summary' && output && typeof output==='object' && typeof output.summary==='string'){
+      const shrunk=shrinkSummaryToLimit(output.summary, 700);
+      if(shrunk.shortened) output={...output, summary:shrunk.summary, auto_shortened:true, original_length:output.summary.length, final_length:shrunk.summary.length};
+    }
     const rep={ output, raw, parseErr, ms, tokens, cost,
       // Задача 8: фактически использованная модель как первоклассное поле
       // результата шага (не только текстовое примечание в metrics), чтобы
       // калибровка судей по прогонам была воспроизводимой даже когда
       // vendor-fallback молча подменил вендора.
       actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
+      prompt_audit:{transcript_present:promptAudit.transcriptPresent, transcript_injected:promptAudit.transcriptInjected, transcript_chars:String(transcriptText(ctx)||'').length, prompt_chars:prompt.length},
       // Общие требования ТЗ (stages 1-9 rework): версионирование каждого этапа.
       stage_version:stage.stageVersion||'v1', prompt_version:'v'+(stage.promptVersion||1),
       model:actualModel, timestamp:new Date().toISOString(),
