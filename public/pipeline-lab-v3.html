@@ -1053,10 +1053,14 @@ const PRODUCT_ID = new URLSearchParams(location.search).get('productId') || null
 // across every product Playground embeds it for (AI Product Studio v2
 // follow-up). Falls back to a neutral label when opened standalone.
 const PRODUCT_NAME = new URLSearchParams(location.search).get('productName') || null;
+if(window.top === window.self && PRODUCT_ID){
+  window.location.replace('/?view=playground');
+}
 if(PRODUCT_NAME){
   document.getElementById('productTitle').textContent = PRODUCT_NAME;
   document.title = PRODUCT_NAME + ' — AI Product Studio';
 }
+const INITIAL_PRESET = new URLSearchParams(location.search).get('preset') === 'blank' ? 'blank' : 'default';
 const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID : PIPELINE_CONFIG_STORAGE;
 // Bumped whenever a shipped default prompt/rule changes (V8.1, 2026-07-06:
 // transcript passed to step 7, budget/timeline extraction rules, Summary
@@ -1139,6 +1143,10 @@ function loadPipelineConfig(){
     if(!stages || !stages.length) return null;
     return migratePipelineConfig(stages.map(x=>({id:s(), ...x})));
   }catch(e){ return null; }
+}
+
+function blankPipeline(){
+  return [];
 }
 
 function isOldSummaryCheck(stage){
@@ -1260,7 +1268,7 @@ function migratePipelineConfig(stages){
   return result;
 }
 
-let pipeline = loadPipelineConfig() || defaultPipeline();
+let pipeline = loadPipelineConfig() || (INITIAL_PRESET === 'blank' ? blankPipeline() : defaultPipeline());
 let ctx = {};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3341,6 +3349,10 @@ function syncPipelineFromEditor(){
 
 function renderStages(){
   stagesEl.innerHTML='';
+  if(!pipeline.length){
+    stagesEl.innerHTML='<div class="empty" style="padding:24px 12px"><div class="big">＋</div>Шаги пайплайна ещё не созданы.<br>Нажмите «Добавить шаг», чтобы создать первый этап.</div>';
+    return;
+  }
   pipeline.forEach((stage,i)=>{
     const M=stageTypeMeta(stage);
     const isModelStep = stage.type==='llm' || stage.type==='check';
@@ -3442,7 +3454,7 @@ document.getElementById('clearBtn').addEventListener('click',()=>{reportsEl.inne
 document.getElementById('addStage').addEventListener('click',()=>{pipeline.push({id:s(),enabled:true,type:'llm',name:'Новый шаг',model:'claude-sonnet-4-6',outKey:'step'+(pipeline.length+1),prompt:'Промт... {{transcript}}'});renderStages();});
 document.getElementById('preset').addEventListener('change',e=>{
   if(e.target.value==='default'){pipeline=defaultPipeline();}
-  else{pipeline=[{id:s(),enabled:true,type:'llm',name:'Шаг',model:'claude-sonnet-4-6',outKey:'step1',prompt:'{{transcript}}'}];}
+  else{pipeline=blankPipeline();}
   renderStages();
 });
 
@@ -3515,6 +3527,7 @@ document.getElementById('clearOpenaiKeyBtn').addEventListener('click',()=>{
 });
 
 // инициализация
+document.getElementById('preset').value = INITIAL_PRESET;
 renderStages(); updateCount(); updateKeyStatus(); updateOpenaiKeyStatus();
 </script>
 </body>

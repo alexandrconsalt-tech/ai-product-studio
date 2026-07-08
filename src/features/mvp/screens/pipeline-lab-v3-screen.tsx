@@ -24,10 +24,11 @@ import { isPipelineLabV3RunMessage, type PipelineLabV3RunPayload } from "@/share
 export type PipelineLabV3ScreenProps = Readonly<{
   productId?: string;
   productName?: string;
+  preset?: "default" | "blank";
   onRunComplete?: (payload: PipelineLabV3RunPayload) => void;
 }>;
 
-export function PipelineLabV3Screen({ productId, productName, onRunComplete }: PipelineLabV3ScreenProps) {
+export function PipelineLabV3Screen({ productId, productName, preset, onRunComplete }: PipelineLabV3ScreenProps) {
   React.useEffect(() => {
     if (!onRunComplete) return;
     const handleMessage = (event: MessageEvent) => {
@@ -42,6 +43,7 @@ export function PipelineLabV3Screen({ productId, productName, onRunComplete }: P
   const params = new URLSearchParams();
   if (productId) params.set("productId", productId);
   if (productName) params.set("productName", productName);
+  if (preset) params.set("preset", preset);
   const query = params.toString();
   const src = query ? `/pipeline-lab-v3.html?${query}` : "/pipeline-lab-v3.html";
 

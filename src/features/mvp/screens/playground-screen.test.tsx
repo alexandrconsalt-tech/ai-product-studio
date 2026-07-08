@@ -64,4 +64,21 @@ describe("PlaygroundScreen", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ projectId: project.id, status: "succeeded", costUsd: 0.012, qualityScore: 92 });
   });
+
+  it("opens a product without a pipeline in the blank Pipeline Lab preset", () => {
+    const project = { ...demoSnapshot.projects[0], id: "project_without_pipeline", name: "Новый продукт", pipelineId: undefined, architectureId: undefined };
+    useRepositoryStore.setState({
+      snapshot: { ...demoSnapshot, projects: [project], pipelines: [] },
+      selectedProjectId: project.id,
+    });
+
+    render(<PlaygroundScreen />);
+
+    const iframe = screen.getByTitle("Pipeline Lab v3") as HTMLIFrameElement;
+    const iframeUrl = new URL(iframe.src);
+    expect(iframeUrl.searchParams.get("productId")).toBe(project.id);
+    expect(iframeUrl.searchParams.get("productName")).toBe(project.name);
+    expect(iframeUrl.searchParams.get("preset")).toBe("blank");
+    expect(screen.queryByText("Для этого продукта ещё не создан Pipeline.")).not.toBeInTheDocument();
+  });
 });

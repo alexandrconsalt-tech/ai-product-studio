@@ -351,7 +351,15 @@ export function PlaygroundScreen() {
       {!selectedProject ? (
         <EmptyState>Выберите продукт выше, чтобы открыть его pipeline.</EmptyState>
       ) : !pipeline ? (
-        <EmptyState>Для этого продукта ещё не создан Pipeline.</EmptyState>
+        <Section className="flex min-h-0 flex-1 flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <Layers className="size-4 text-text-muted" aria-hidden="true" />
+            <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
+          </div>
+          <Card className="h-[75vh] min-h-[560px] overflow-hidden p-0">
+            <PipelineLabV3Screen productId={selectedProject.id} productName={selectedProject.name} preset="blank" onRunComplete={handleRunComplete} />
+          </Card>
+        </Section>
       ) : pipeline.id === AD_COPY_PIPELINE_ID ? (
         <Section>
           <div className="flex items-center gap-2">
