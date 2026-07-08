@@ -1130,19 +1130,59 @@ const PIPELINE_VERSION = 11;
 function savePipelineConfig(){
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
 }
+function parsePipelineStorage(raw){
+  const parsed=JSON.parse(raw);
+  const stages=Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.stages) ? parsed.stages : null;
+  return stages && stages.length ? stages : null;
+}
+function pipelineConfigRestoreScore(key, stages){
+  if(!Array.isArray(stages)||!stages.length) return -999;
+  if(key===CONFIG_STORAGE_KEY) return -999;
+  if(key===PIPELINE_CONFIG_STORAGE+'.project_demo_pipeline_lab_v3') return -999;
+  const text=stages.map(stage=>[stage.name,stage.outKey,stage.codeFn,stage.description,stage.prompt].filter(Boolean).join(' ')).join('\n').toLowerCase();
+  let score=stages.length;
+  if(/транскрибац|саммари|summary|звонк|conversation store|publish|quality gate/.test(text)) score+=40;
+  if(/недвижим|квартир|ипотек|жк|адрес объекта|риелтор/.test(text)) score-=35;
+  if(stages.some(stage=>stage&&stage.userEdited)) score+=20;
+  if(stages.some(stage=>stage&&stage.description)) score+=10;
+  if(/project_demo_|product_demo_|ad_copy|lead_qualification|chat_classification/.test(key)) score-=30;
+  return score;
+}
+function restoreTranscriptionModulePipelineConfig(){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE) return null;
+  try{
+    const candidates=[];
+    for(let i=0;i<localStorage.length;i++){
+      const key=localStorage.key(i)||'';
+      if(key!==PIPELINE_CONFIG_STORAGE && !key.startsWith(PIPELINE_CONFIG_STORAGE+'.')) continue;
+      const raw=localStorage.getItem(key);
+      if(!raw) continue;
+      let stages=null;
+      try{ stages=parsePipelineStorage(raw); }catch(e){ stages=null; }
+      if(!stages||!stages.length) continue;
+      const score=pipelineConfigRestoreScore(key, stages);
+      if(score>=25) candidates.push({key, stages, score});
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    const best=candidates[0];
+    if(!best) return null;
+    const restored=migratePipelineConfig(best.stages.map(x=>({id:s(), ...x})));
+    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, restoredFrom:best.key, stages:restored.map(sanitize)}));
+    return restored;
+  }catch(e){ return null; }
+}
 function loadPipelineConfig(){
   try{
     const raw=localStorage.getItem(CONFIG_STORAGE_KEY);
-    if(!raw) return null;
-    const parsed=JSON.parse(raw);
+    if(!raw) return restoreTranscriptionModulePipelineConfig();
     // User-edited configs are authoritative. Earlier builds discarded a
     // saved stage list when `PIPELINE_VERSION` changed, which protected
     // shipped defaults but also erased real user work after a deploy. From
     // V8.4 onward, version is migration metadata only: any saved stage list
     // is loaded and then re-saved under the current version on the next save
     // or run. Legacy bare-array exports are accepted for the same reason.
-    const stages=Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.stages) ? parsed.stages : null;
-    if(!stages || !stages.length) return null;
+    const stages=parsePipelineStorage(raw);
+    if(!stages || !stages.length) return restoreTranscriptionModulePipelineConfig();
     return migratePipelineConfig(stages.map(x=>({id:s(), ...x})));
   }catch(e){ return null; }
 }

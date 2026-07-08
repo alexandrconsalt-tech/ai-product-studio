@@ -34,13 +34,15 @@ const RepositorySnapshotSchema = z.object({
 const cloneSnapshot = (snapshot: RepositorySnapshot): RepositorySnapshot => RepositorySnapshotSchema.parse(JSON.parse(JSON.stringify(snapshot)));
 
 function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): RepositorySnapshot {
-  const hasProject = snapshot.projects.some((project) => project.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || project.name === TRANSCRIPTION_SUMMARY_NAME);
-  const hasProduct = snapshot.products.some((product) => product.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID || product.projectId === TRANSCRIPTION_SUMMARY_PROJECT_ID);
+  const existingProject = snapshot.projects.find((project) => project.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || /^Модуль транскрибации и AI-саммари звонков/i.test(project.name));
+  const targetProjectId = existingProject?.id ?? TRANSCRIPTION_SUMMARY_PROJECT_ID;
+  const hasProject = Boolean(existingProject);
+  const hasProduct = snapshot.products.some((product) => product.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID || product.projectId === targetProjectId);
 
   if (hasProject && hasProduct) return snapshot;
 
   const project = {
-    id: TRANSCRIPTION_SUMMARY_PROJECT_ID,
+    id: targetProjectId,
     name: TRANSCRIPTION_SUMMARY_NAME,
     description: "Модуль для расшифровки звонков, генерации AI-саммари, проверки качества Summary и тестирования собственного pipeline в Песочнице.",
     status: "testing" as const,
@@ -54,7 +56,7 @@ function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): Repositor
 
   const product = {
     id: TRANSCRIPTION_SUMMARY_PRODUCT_ID,
-    projectId: TRANSCRIPTION_SUMMARY_PROJECT_ID,
+    projectId: targetProjectId,
     status: "ready" as const,
     idea: {
       statement: "Автоматически превращать транскрибацию звонка в проверенное CRM-саммари и структурированные данные для последующей работы.",
