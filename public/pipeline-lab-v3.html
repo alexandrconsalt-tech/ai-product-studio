@@ -1054,6 +1054,7 @@ const PRODUCT_ID = new URLSearchParams(location.search).get('productId') || null
 // follow-up). Falls back to a neutral label when opened standalone.
 const PRODUCT_NAME = new URLSearchParams(location.search).get('productName') || null;
 const ENABLE_STAGE_DESCRIPTION = /^Модуль транскрибации и AI-саммари звонков/i.test(PRODUCT_NAME||'');
+const IS_TRANSCRIPTION_SUMMARY_MODULE = ENABLE_STAGE_DESCRIPTION;
 if(window.top === window.self && PRODUCT_ID){
   window.location.replace('/?view=playground');
 }
@@ -1596,6 +1597,75 @@ function uniqTextList(list){
     seen.add(key); out.push(item);
   }
   return out;
+}
+
+function ctxValue(ctx, key){
+  if(!ctx) return undefined;
+  if(key==='context_utility_check') return ctx.context_check || ctx.context_utility_check;
+  if(key==='summary_quality_gate') return ctx.quality_gate || ctx.summary_quality_gate || ctx.gate || ctx.summaryQualityGate;
+  return ctx[key];
+}
+
+function transcriptText(ctx){
+  return (ctx && (ctx.transcript || ctx.__transcript)) || '';
+}
+
+function hasUsefulTranscript(ctx){
+  return String(transcriptText(ctx)||'').trim().length>200;
+}
+
+function listFrom(value){
+  if(Array.isArray(value)) return value;
+  if(value&&typeof value==='object') return Object.values(value);
+  return [];
+}
+
+function itemToField(item, fallbackKey){
+  if(!item||typeof item!=='object') return null;
+  const key=String(item.key||item.type||item.name||item.field||fallbackKey||'item').replace(/\s+/g,'_');
+  return {
+    value:item.value ?? item.text ?? item.fact ?? item.need ?? item.result ?? item,
+    confidence:typeof item.confidence==='number'?item.confidence:0.9,
+    evidence:item.evidence || item.evidence_from_transcript || item.quote || item.citation || '',
+    verified:item.verified!==false && item.verification_status!=='rejected' && item.status!=='rejected'
+  };
+}
+
+function fieldsFromList(list, prefix){
+  const out={};
+  listFrom(list).forEach((item,index)=>{
+    const field=itemToField(item, prefix+'_'+(index+1));
+    if(field) out[prefix+'_'+(index+1)]=field;
+  });
+  return out;
+}
+
+function extractionListEmpty(value, keys){
+  const record=value&&typeof value==='object'?value:{};
+  return keys.every(key=>!Array.isArray(record[key]) || record[key].length===0);
+}
+
+function textMentionsMissingTranscript(value){
+  return /транскрипц(?:ия|ии|ию)\s+не\s+предостав|transcript\s+(?:is\s+)?not\s+provided|данные\s+отсутств/i.test(JSON.stringify(value||''));
+}
+
+function guardEmptyExtraction(stage, output, ctx){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE || !hasUsefulTranscript(ctx) || !output || typeof output!=='object') return output;
+  const outKey=stage.outKey||'';
+  const issues=[];
+  if(/fact_(?:judge|check)/i.test(outKey) && extractionListEmpty(ctx.facts, ['facts'])) issues.push('Fact Agent вернул пустой список фактов при непустой транскрипции.');
+  if(/need_(?:judge|check)/i.test(outKey) && extractionListEmpty(ctx.needs, ['needs','crm_needs'])) issues.push('Need Agent вернул пустой список потребностей при непустой транскрипции.');
+  if(/outcome_(?:judge|check)/i.test(outKey) && (textMentionsMissingTranscript(ctx.outcome) || ctx.outcome?.verification_status==='failed')) issues.push('Outcome Agent не обработал переданную транскрипцию.');
+  if(!issues.length) return output;
+  return {
+    ...output,
+    status:'fail',
+    decision:'FAIL',
+    score:0,
+    explanation:issues[0],
+    critical_errors:[...toList(output.critical_errors), ...issues],
+    issues:[...toList(output.issues), ...issues]
+  };
 }
 
 function summaryText(ctx){
@@ -2341,7 +2411,7 @@ const CODE_FUNCS = {
   // ── Conversation Store: единый источник истины перед Summary — только
   // verified-данные из fact_check/need_check/outcome_check, детерминированно ──
   conversationStore(stage,ctx){
-    const fc=ctx.fact_check||{}, nc=ctx.need_check||{}, oc=ctx.outcome_check||{};
+    const fc=ctx.fact_judge||ctx.fact_check||{}, nc=ctx.need_judge||ctx.need_check||{}, oc=ctx.outcome_judge||ctx.outcome_check||{};
     const validation=ctx.validation||{};
     const validationScore=typeof validation.score==='number'?validation.score:0;
 
@@ -2365,14 +2435,26 @@ const CODE_FUNCS = {
       return out;
     }
 
-    const facts=keepVerified(fc.verified_facts);
-    const needs=keepVerified(nc.verified_needs);
-    const outcome=keepVerified(oc.verified_outcome);
+    let facts=keepVerified(fc.verified_facts);
+    let needs=keepVerified(nc.verified_needs);
+    let outcome=keepVerified(oc.verified_outcome);
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+      if(Object.keys(facts).length===0) facts={...fieldsFromList(ctx.facts&&ctx.facts.facts, 'fact')};
+      if(Object.keys(needs).length===0) needs={...fieldsFromList(ctx.needs&&ctx.needs.needs, 'need'), ...fieldsFromList(ctx.needs&&ctx.needs.crm_needs, 'crm_need')};
+      if(Object.keys(outcome).length===0 && ctx.outcome&&typeof ctx.outcome==='object'){
+        ['call_result','next_step','agreements','client_status','risks','channel'].forEach(key=>{
+          const value=ctx.outcome[key];
+          if(value!==undefined&&value!==null&&!(Array.isArray(value)&&value.length===0)){
+            outcome[key]={value, confidence:0.9, evidence:ctx.outcome.evidence||'', verified:ctx.outcome.verification_status!=='failed'};
+          }
+        });
+      }
+    }
     // property_requirements -- отдельный верхнеуровневый блок (не внутри
     // needs): mergeNeedCheck() уже сохраняет только verified-подполя, если
     // часть блока не прошла проверку -- отбрасывается ровно неё, а не весь
     // property_requirements целиком.
-    const property_requirements=nc.property_requirements||{};
+    const property_requirements=nc.property_requirements||ctx.needs?.property_requirements||{};
 
     // Нормализация бюджета (перенесена из старого codeFn 'store'): ×1000/
     // ×1 000 000 эвристика по формулировке evidence, если это похоже на
@@ -2541,7 +2623,7 @@ const CODE_FUNCS = {
       presentation_check:'Проверка формата и правил'
     };
     const judgeKeys=Object.keys(weights);
-    const judges=Object.fromEntries(judgeKeys.map(key=>[key, normalizeSummaryJudge(ctx[key], key, labels[key])]));
+    const judges=Object.fromEntries(judgeKeys.map(key=>[key, normalizeSummaryJudge(ctxValue(ctx,key), key, labels[key])]));
     const smText=summaryText(ctx);
     const styleIssues=detectDialogueStyle(smText);
     if(styleIssues.length && judges.presentation_check.status!=='unavailable'){
@@ -2744,7 +2826,7 @@ const CODE_FUNCS = {
       const st=ctx.store||{};
       rec=st.record||ctx.facts||{}; n=ctx.needs||{}; o=ctx.outcome||{}; pr={};
     }
-    const sm=ctx.summary||{}, g=ctx.summary_quality_gate||ctx.gate||{};
+    const sm=ctx.summary||{}, g=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate||{};
     const card={
       client_name: rec.client_name ?? null,
       budget: rec.budget_normalized ?? rec.budget ?? null,
@@ -2774,11 +2856,11 @@ const CODE_FUNCS = {
 function tmpl(str, ctx){
   return str.replace(/\{\{([^}]+)\}\}/g, (_,expr)=>{
     expr=expr.trim();
-    if(expr==='transcript') return ctx.__transcript||'';
+    if(expr==='transcript') return transcriptText(ctx);
     if(expr.startsWith('ctx.')){
       const path=expr.slice(4).split('.');
-      let v=ctx;
-      for(const p of path){ v = (v==null)?undefined:v[p]; }
+      let v=path.length===1 ? ctxValue(ctx,path[0]) : ctxValue(ctx,path[0]);
+      for(const p of path.slice(1)){ v = (v==null)?undefined:v[p]; }
       if(v===undefined) return '';
       return typeof v==='object'? JSON.stringify(v,null,2) : String(v);
     }
@@ -2912,6 +2994,7 @@ async function runStage(stage, ctx){
     else if(stage.outKey==='need_check') merged=mergeNeedCheck(codeResult, parsed, parseErr, ctx.needs);
     else if(stage.outKey==='outcome_check') merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_outcome', rejectedKey:'rejected_outcome', qualityKey:'outcome_check_quality'});
     else merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified', rejectedKey:'rejected', qualityKey:'quality'});
+    merged=guardEmptyExtraction(stage, merged, ctx);
 
     const rep={ output:merged, raw, parseErr, ms, tokens, cost,
       actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
@@ -2946,7 +3029,7 @@ async function runStage(stage, ctx){
     const ms=Math.round(performance.now()-t0);
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=(actualModel&&actualModel.includes('gpt')?'GPT-5 mini (OpenAI)':'Claude Sonnet 4.6 (Anthropic)')+(fallbackNote?' ('+fallbackNote+')':'');
-    const output = parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw});
+    const output = guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
     const rep={ output, raw, parseErr, ms, tokens, cost,
       // Задача 8: фактически использованная модель как первоклассное поле
       // результата шага (не только текстовое примечание в metrics), чтобы
@@ -2982,6 +3065,7 @@ async function runPipeline(){
   if(!active.length){ toast('Нет активных шагов'); return; }
 
   ctx={ __transcript:transcript, stored_files: storedFilesForCtx() };
+  if(IS_TRANSCRIPTION_SUMMARY_MODULE) ctx.transcript=transcript;
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
   let totalTokens=0, totalCost=0, errorCount=0, warningCount=0;
@@ -3076,7 +3160,7 @@ async function runPipeline(){
 // this can never break the tool's own behavior.
 function reportRunToParent(run){
   try{
-    const gate=ctx.summary_quality_gate||ctx.gate, check=ctx.presentation_check||ctx.summary_check;
+    const gate=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate, check=ctx.presentation_check||ctx.summary_check;
     // Same shape as the "Скачать полный отчёт (JSON)" button builds
     // (dlReport, see renderFinal) -- so a test opened later from
     // Dashboard's run history shows exactly what that download would
@@ -3310,7 +3394,7 @@ function renderSummaryQualityPanel(gate){
 }
 
 function renderFinal(totalTokens, totalCost, stageReports){
-  const sm=ctx.summary, gate=ctx.summary_quality_gate||ctx.gate, crm=ctx.crm, n=displayNeeds();
+  const sm=ctx.summary, gate=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate, crm=ctx.crm||ctx.publish_result, n=displayNeeds();
   const summary = (sm&&sm.summary) || '—';
   const el=document.createElement('div'); el.className='final';
   const decision = gate? gate.decision : '—';
