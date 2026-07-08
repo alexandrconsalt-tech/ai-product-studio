@@ -65,6 +65,73 @@ describe("PlaygroundScreen", () => {
     expect(runs[0]).toMatchObject({ projectId: project.id, status: "succeeded", costUsd: 0.012, qualityScore: 92 });
   });
 
+  it("records a PlaygroundTestRun from an older iframe message without productId", () => {
+    const project = demoSnapshot.projects[0];
+    useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: project.id });
+    render(<PlaygroundScreen />);
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            source: "pipeline-lab-v3",
+            type: "run-complete",
+            productId: null,
+            payload: {
+              startedAt: "2026-07-08T10:00:00.000Z",
+              finishedAt: "2026-07-08T10:00:05.000Z",
+              durationMs: 5000,
+              stageCount: 10,
+              errorCount: 0,
+              warningCount: 0,
+              tokens: 1200,
+              costUsd: 0.012,
+              status: "succeeded",
+              confidence: 0.9,
+              qualityScore: 92,
+              decision: "AUTO_SAVE",
+            },
+          },
+        }),
+      );
+    });
+
+    const runs = usePlaygroundTestRunStore.getState().getRuns(project.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ projectId: project.id, status: "succeeded", decision: "AUTO_SAVE" });
+  });
+
+  it("ignores a PlaygroundTestRun for another explicit product", () => {
+    const [firstProject, secondProject] = demoSnapshot.projects;
+    useRepositoryStore.setState({ snapshot: demoSnapshot, selectedProjectId: firstProject.id });
+    render(<PlaygroundScreen />);
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            source: "pipeline-lab-v3",
+            type: "run-complete",
+            productId: secondProject.id,
+            payload: {
+              startedAt: "2026-07-08T10:00:00.000Z",
+              finishedAt: "2026-07-08T10:00:05.000Z",
+              durationMs: 5000,
+              stageCount: 10,
+              errorCount: 0,
+              warningCount: 0,
+              tokens: 1200,
+              costUsd: 0.012,
+              status: "succeeded",
+            },
+          },
+        }),
+      );
+    });
+
+    expect(usePlaygroundTestRunStore.getState().getRuns(firstProject.id)).toHaveLength(0);
+  });
+
   it("opens a product without a pipeline in the blank Pipeline Lab preset", () => {
     const project = { ...demoSnapshot.projects[0], id: "project_without_pipeline", name: "Новый продукт", pipelineId: undefined, architectureId: undefined };
     useRepositoryStore.setState({

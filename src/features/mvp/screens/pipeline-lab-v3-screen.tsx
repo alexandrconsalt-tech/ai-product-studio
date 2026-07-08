@@ -33,7 +33,7 @@ export function PipelineLabV3Screen({ productId, productName, preset, onRunCompl
     if (!onRunComplete) return;
     const handleMessage = (event: MessageEvent) => {
       if (!isPipelineLabV3RunMessage(event.data)) return;
-      if (productId && event.data.productId !== productId) return;
+      if (productId && event.data.productId && event.data.productId !== productId) return;
       onRunComplete(event.data.payload);
     };
     window.addEventListener("message", handleMessage);

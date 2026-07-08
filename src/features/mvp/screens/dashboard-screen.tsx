@@ -11,6 +11,7 @@ import type { PlaygroundTestRun } from "@/entities/PlaygroundTestRun/model/types
 
 const RANGE_OPTIONS = ["all", 5, 10, 20, 50, 100] as const;
 type RangeOption = (typeof RANGE_OPTIONS)[number];
+const ALL_PROJECTS = "__all__";
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(4)}`;
@@ -222,12 +223,17 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
  * yet, rather than showing zeroed-out charts as if they were real.
  */
 export function DashboardScreen() {
-  const { snapshot, selectedProjectId, selectProject } = useRepositoryStore();
-  const { getRuns } = usePlaygroundTestRunStore();
+  const { snapshot, selectProject } = useRepositoryStore();
+  const { getRuns, runsByProjectId } = usePlaygroundTestRunStore();
   const [range, setRange] = React.useState<RangeOption>("all");
+  const [projectFilter, setProjectFilter] = React.useState<string>(ALL_PROJECTS);
   const projects = snapshot?.projects ?? [];
 
-  const allRuns = selectedProjectId ? getRuns(selectedProjectId) : [];
+  const allProjectRuns = React.useMemo(
+    () => Object.values(runsByProjectId).flat().sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()),
+    [runsByProjectId],
+  );
+  const allRuns = projectFilter === ALL_PROJECTS ? allProjectRuns : getRuns(projectFilter);
   const runs = range === "all" ? allRuns : allRuns.slice(0, range);
   const stats = computeDashboardStats(runs);
 
@@ -242,7 +248,17 @@ export function DashboardScreen() {
         <div className="flex flex-wrap items-center gap-4">
           <label className="grid gap-1 text-sm">
             Продукт
-            <Select value={selectedProjectId ?? ""} onChange={(event) => selectProject(event.target.value)} className="min-w-64" aria-label="Выбрать продукт">
+            <Select
+              value={projectFilter}
+              onChange={(event) => {
+                const nextProjectId = event.target.value;
+                setProjectFilter(nextProjectId);
+                if (nextProjectId !== ALL_PROJECTS) selectProject(nextProjectId);
+              }}
+              className="min-w-64"
+              aria-label="Выбрать продукт"
+            >
+              <option value={ALL_PROJECTS}>Все продукты</option>
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
