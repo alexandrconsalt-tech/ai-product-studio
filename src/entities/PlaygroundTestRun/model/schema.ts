@@ -44,6 +44,12 @@ export const PlaygroundTestRunSchema = z.object({
   // plain untyped JS, same reasoning as PipelineLabV3RunPayload.
   transcript: z.string().optional(),
   report: z.unknown().optional(),
+  productName: z.string().optional(),
+  moduleName: z.string().optional(),
+  pipelineName: z.string().optional(),
+  finalScore: z.number().optional(),
+  finalDecision: z.string().optional(),
+  summary: z.string().optional(),
   startedAt: IsoDateTimeSchema,
   finishedAt: IsoDateTimeSchema,
   version: VersionSchema,

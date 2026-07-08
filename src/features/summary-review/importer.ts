@@ -25,6 +25,37 @@ function pickObject(source: Record<string, unknown>, keys: string[]): Record<str
   return {};
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function pickArray(source: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const value = source[key];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function nestedRecord(source: Record<string, unknown>, path: string[]): Record<string, unknown> {
+  let current: unknown = source;
+  for (const key of path) {
+    const record = asRecord(current);
+    if (!record) return {};
+    current = record[key];
+  }
+  return asRecord(current) ?? {};
+}
+
+function nestedString(source: Record<string, unknown>, paths: string[][]): string {
+  for (const path of paths) {
+    const parent = nestedRecord(source, path.slice(0, -1));
+    const value = parent[path[path.length - 1]];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "";
+}
+
 // Pipeline Lab v3's own fields (facts/needs/outcome, and since the
 // stages-1-9 rework, conversation_store) are {value, confidence, evidence,
 // verification_status} objects, not flat strings/arrays -- but a report
@@ -63,7 +94,28 @@ function pickSummaryText(merged: Record<string, unknown>): string {
     const text = (summary as Record<string, unknown>).summary;
     if (typeof text === "string" && text.trim()) return text;
   }
-  return pickString(merged, ["summary", "final_summary", "finalSummary", "ai_summary"], "");
+  const direct = pickString(merged, ["summary", "final_summary", "finalSummary", "ai_summary"], "");
+  if (direct) return direct;
+  const nested = nestedString(merged, [
+    ["result", "summary", "summary"],
+    ["result", "final_summary"],
+    ["result", "card", "summary"],
+    ["card", "summary"],
+    ["crm", "card", "summary"],
+    ["result", "crm", "card", "summary"],
+  ]);
+  if (nested) return nested;
+  const steps = [...pickArray(merged, ["steps"]), ...pickArray(merged, ["stageReports"])];
+  for (const item of steps) {
+    const record = asRecord(item);
+    const stage = asRecord(record?.stage);
+    const report = asRecord(record?.report) ?? record;
+    const output = asRecord(report?.output);
+    const name = String(stage?.name ?? record?.name ?? "");
+    const outputText = output?.summary;
+    if (/Генерация саммари|summary/i.test(name) && typeof outputText === "string" && outputText.trim()) return outputText;
+  }
+  return "";
 }
 
 // The 5 post-summary judges are 5 separate top-level ctx keys
@@ -83,10 +135,13 @@ function pickJudgesBag(merged: Record<string, unknown>): Record<string, unknown>
 
 export function normalizePlaygroundRun(input: unknown): SummaryRun {
   const source = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const reportJson = source.report_json && typeof source.report_json === "object" ? (source.report_json as Record<string, unknown>) : {};
   const nested = {
+    ...reportJson,
     ...(source.pipeline_report && typeof source.pipeline_report === "object" ? source.pipeline_report : {}),
     ...(source.result && typeof source.result === "object" ? source.result : {}),
     ...(source.output && typeof source.output === "object" ? source.output : {}),
+    ...(reportJson.result && typeof reportJson.result === "object" ? reportJson.result : {}),
   } as Record<string, unknown>;
   const merged = { ...nested, ...source };
 
@@ -97,7 +152,7 @@ export function normalizePlaygroundRun(input: unknown): SummaryRun {
   // The Quality Orchestrator's output (score/decision) is `ctx.summary_quality_gate`
   // (or the legacy `ctx.gate`), never a flat top-level field -- see
   // public/pipeline-lab-v3.html's summaryQualityGate()/gate() codeFns.
-  const gate = pickObject(merged, ["summary_quality_gate", "gate"]);
+  const gate = pickObject(merged, ["summary_quality_gate", "quality_gate", "gate"]);
   const hasGate = Object.keys(gate).length > 0;
 
   return {
@@ -118,4 +173,3 @@ export function normalizePlaygroundRun(input: unknown): SummaryRun {
     sourceRunJson: input ?? {},
   };
 }
-

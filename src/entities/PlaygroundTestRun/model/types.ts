@@ -19,6 +19,12 @@ export type PlaygroundTestRun = Readonly<{
   decision?: string;
   transcript?: string;
   report?: unknown;
+  productName?: string;
+  moduleName?: string;
+  pipelineName?: string;
+  finalScore?: number;
+  finalDecision?: string;
+  summary?: string;
   startedAt: IsoDateTime;
   finishedAt: IsoDateTime;
   version: Version;

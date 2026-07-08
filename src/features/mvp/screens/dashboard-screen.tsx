@@ -26,6 +26,10 @@ function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("ru-RU");
 }
 
+function runProductLabel(run: PlaygroundTestRun): string {
+  return run.productName ?? run.moduleName ?? run.pipelineName ?? run.projectId;
+}
+
 function getFinalSummary(report: unknown): string | null {
   if (!report || typeof report !== "object") return null;
   const result = "result" in report ? (report as { result?: unknown }).result : undefined;
@@ -188,10 +192,11 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
           <button
             key={run.id}
             type="button"
-            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.4fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
+            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
             onClick={() => setSelectedRun(run)}
           >
             <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
+            <span className="truncate text-text-muted">{runProductLabel(run)}</span>
             <span className="flex items-center gap-1">
               {run.status === "succeeded" ? <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" /> : <XCircle className="size-3.5 text-error" aria-hidden="true" />}
               {run.status === "succeeded" ? "успешно" : "с ошибкой"}
@@ -227,7 +232,7 @@ export function DashboardScreen() {
   const { getRuns, runsByProjectId } = usePlaygroundTestRunStore();
   const [range, setRange] = React.useState<RangeOption>("all");
   const [projectFilter, setProjectFilter] = React.useState<string>(ALL_PROJECTS);
-  const projects = snapshot?.projects ?? [];
+  const projects = React.useMemo(() => snapshot?.projects ?? [], [snapshot?.projects]);
 
   const allProjectRuns = React.useMemo(
     () => Object.values(runsByProjectId).flat().sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()),
@@ -236,6 +241,13 @@ export function DashboardScreen() {
   const allRuns = projectFilter === ALL_PROJECTS ? allProjectRuns : getRuns(projectFilter);
   const runs = range === "all" ? allRuns : allRuns.slice(0, range);
   const stats = computeDashboardStats(runs);
+  const productOptions = React.useMemo(() => {
+    const byId = new Map(projects.map((project) => [project.id, project.name]));
+    for (const run of allProjectRuns) {
+      if (!byId.has(run.projectId)) byId.set(run.projectId, runProductLabel(run));
+    }
+    return [...byId.entries()].map(([id, name]) => ({ id, name }));
+  }, [allProjectRuns, projects]);
 
   return (
     <Page className="max-w-none">
@@ -259,7 +271,7 @@ export function DashboardScreen() {
               aria-label="Выбрать продукт"
             >
               <option value={ALL_PROJECTS}>Все продукты</option>
-              {projects.map((project) => (
+              {productOptions.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
                 </option>

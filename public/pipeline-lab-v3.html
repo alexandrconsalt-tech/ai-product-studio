@@ -1602,7 +1602,7 @@ function uniqTextList(list){
 function ctxValue(ctx, key){
   if(!ctx) return undefined;
   if(key==='context_utility_check') return ctx.context_check || ctx.context_utility_check;
-  if(key==='summary_quality_gate') return ctx.quality_gate || ctx.summary_quality_gate || ctx.gate || ctx.summaryQualityGate;
+  if(key==='summary_quality_gate') return currentSummaryGate(ctx);
   return ctx[key];
 }
 
@@ -1666,6 +1666,11 @@ function moduleOutputList(value, keys){
     if(Array.isArray(value[key])) return value[key];
   }
   return [];
+}
+
+function moduleObjectFields(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)) return {};
+  return value;
 }
 
 function moduleExtractionEmpty(kind, value){
@@ -1755,6 +1760,90 @@ function shrinkSummaryToLimit(summary, limit=700){
   text=[out, ...important].filter(Boolean).join('\n').trim();
   if(text.length>limit) text=text.slice(0, limit-1).replace(/\s+\S*$/,'').trim()+'…';
   return {summary:text, shortened:true};
+}
+
+function structuredStore(ctx){
+  const cs=ctx&&ctx.conversation_store&&typeof ctx.conversation_store==='object'?ctx.conversation_store:{};
+  return {
+    facts: moduleObjectFields(cs.facts),
+    needs: moduleObjectFields(cs.needs),
+    property_requirements: moduleObjectFields(cs.property_requirements),
+    outcome: moduleObjectFields(cs.outcome)
+  };
+}
+
+function factText(value){
+  if(value==null) return '';
+  if(typeof value==='string') return value;
+  try{ return JSON.stringify(value); }catch(e){ return String(value); }
+}
+
+function isCardContextFact(item){
+  const text=factText(item).toLowerCase();
+  return /(адрес|улиц|дом|корпус|цена|стоимост|площад|кв\.?\s*м|этаж|жк|район|объект|характеристик|телефон|номер|source_of_funds|источник|purchase_timeline|timeline|срок|interested_in|интерес)/i.test(text);
+}
+
+function storeHasCardContext(ctx, item){
+  const text=factText(item).toLowerCase();
+  const store=structuredStore(ctx);
+  const all=JSON.stringify(store).toLowerCase();
+  if(!all || all==='{}') return false;
+  if(/source_of_funds|источник/.test(text)) return /source_of_funds|источник|ипотек|налич/.test(all);
+  if(/purchase_timeline|timeline|срок/.test(text)) return /timeline|срок|месяц|дата/.test(all);
+  if(/interested_in|интерес/.test(text)) return /interested_in|интерес/.test(all);
+  if(/адрес|улиц|дом|корпус|район|жк/.test(text)) return /(address|адрес|улиц|дом|корпус|district|район|жк|residential)/.test(all);
+  if(/цена|стоимост/.test(text)) return /(price|цена|стоимост|budget|бюджет)/.test(all);
+  if(/площад|кв\.?\s*м/.test(text)) return /(area|площад|кв\.?\s*м)/.test(all);
+  if(/этаж/.test(text)) return /(floor|этаж)/.test(all);
+  if(/телефон|номер/.test(text)) return /(phone|телефон|номер)/.test(all);
+  return true;
+}
+
+function splitCriticalFactsBySummaryNeed(ctx, facts){
+  const all=toList(facts);
+  const card_context_facts=[];
+  const summary_required_facts=[];
+  for(const item of all){
+    if(isCardContextFact(item) && storeHasCardContext(ctx,item)) card_context_facts.push(item);
+    else summary_required_facts.push(item);
+  }
+  return {summary_required_facts, card_context_facts};
+}
+
+function currentSummaryGate(ctx){
+  if(!ctx) return undefined;
+  return ctx.__latest_summary_quality_gate || ctx.quality_gate || ctx.summary_quality_gate || ctx.gate || ctx.summaryQualityGate;
+}
+
+function isSummaryGateStage(stage){
+  return stage && (stage.codeFn==='summaryQualityGate' || /summary_quality_gate|quality_gate/i.test(stage.outKey||'') || /Summary Quality Gate/i.test(stage.name||''));
+}
+
+function moduleCheckGroup(stage){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE || !stage) return '';
+  const text=((stage.outKey||'')+' '+(stage.codeFn||'')+' '+(stage.name||'')).toLowerCase();
+  if(/summary quality gate|summary_quality_gate/.test(text)) return 'summary_quality_gate';
+  if(/truth_check|достоверност/.test(text)) return 'truth_check';
+  if(/critical_facts_check|критически важных/.test(text)) return 'critical_facts_check';
+  if(/context_utility_check|полезност/.test(text)) return 'context_utility_check';
+  if(/action_check|договор/.test(text)) return 'action_check';
+  if(/presentation_check|формат/.test(text)) return 'presentation_check';
+  if(/factcheckcode|fact_check|проверка фактов/.test(text)) return 'fact_check';
+  if(/needcheckcode|need_check|проверка потребност/.test(text)) return 'need_check';
+  if(/outcomecheckcode|outcome_check|проверка результата/.test(text)) return 'outcome_check';
+  return '';
+}
+
+function dedupeModuleVisibleChecks(stages){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE) return stages;
+  const seen=new Set();
+  return stages.filter(stage=>{
+    const group=moduleCheckGroup(stage);
+    if(!group) return true;
+    if(seen.has(group)) return false;
+    seen.add(group);
+    return true;
+  });
 }
 
 function summaryText(ctx){
@@ -2548,15 +2637,34 @@ const CODE_FUNCS = {
       });
       return out;
     }
+    function keepModuleOutcome(source){
+      const out=keepVerified(source);
+      if(Object.keys(out).length) return out;
+      Object.entries(source||{}).forEach(([key,field])=>{
+        if(!field||typeof field!=='object') return;
+        if(field.verified===false || field.verification_status==='rejected' || field.status==='rejected') return;
+        const value='value' in field ? field.value : field;
+        if(value===undefined||value===null||(Array.isArray(value)&&value.length===0)) return;
+        out[key]={
+          value,
+          confidence:typeof field.confidence==='number'?field.confidence:0.9,
+          evidence:field.evidence||field.quote||'',
+          verified:true,
+          source:'outcome_check'
+        };
+      });
+      return out;
+    }
 
     let facts=keepVerified(fc.verified_facts);
     let needs=keepVerified(nc.verified_needs);
-    let outcome=keepVerified(oc.verified_outcome);
+    let outcome=IS_TRANSCRIPTION_SUMMARY_MODULE ? keepModuleOutcome(oc.verified_outcome) : keepVerified(oc.verified_outcome);
     if(IS_TRANSCRIPTION_SUMMARY_MODULE){
       if(Object.keys(facts).length===0) facts={...fieldsFromList(moduleOutputList(fc, ['verified_facts','facts']), 'fact')};
       if(Object.keys(needs).length===0) needs={...fieldsFromList(moduleOutputList(nc, ['verified_needs','needs']), 'need'), ...fieldsFromList(moduleOutputList(nc, ['crm_needs','verified_crm_needs']), 'crm_need')};
       if(Object.keys(outcome).length===0) outcome={...fieldsFromList(moduleOutputList(oc, ['verified_outcome','outcome']), 'outcome')};
-      if(Object.keys(outcome).length===0 && oc.verified_outcome&&typeof oc.verified_outcome==='object') outcome=keepVerified(oc.verified_outcome);
+      if(Object.keys(outcome).length===0 && oc.verified_outcome&&typeof oc.verified_outcome==='object') outcome=keepModuleOutcome(oc.verified_outcome);
+      if(Object.keys(outcome).length===0 && oc.decision && /PASS|WARNING/i.test(oc.decision) && ctx.outcome && !textMentionsMissingTranscript(ctx.outcome)) outcome=keepModuleOutcome(ctx.outcome);
     }
     // property_requirements -- отдельный верхнеуровневый блок (не внутри
     // needs): mergeNeedCheck() уже сохраняет только verified-подполя, если
@@ -2785,6 +2893,17 @@ const CODE_FUNCS = {
     const utility=judges.context_utility_check.raw;
     const action=judges.action_check.raw;
     const presentation=judges.presentation_check.raw;
+    const criticalFactSplit=IS_TRANSCRIPTION_SUMMARY_MODULE
+      ? splitCriticalFactsBySummaryNeed(ctx, criticalFacts.missed_critical_facts)
+      : {summary_required_facts:toList(criticalFacts.missed_critical_facts), card_context_facts:[]};
+    if(IS_TRANSCRIPTION_SUMMARY_MODULE){
+      criticalFacts.summary_required_facts=criticalFactSplit.summary_required_facts;
+      criticalFacts.card_context_facts=criticalFactSplit.card_context_facts;
+      criticalFacts.card_context_explanation=criticalFactSplit.card_context_facts.length
+        ? 'Эти данные доступны в structured store / CRM-карточке и не обязательны в тексте summary.'
+        : '';
+      criticalFacts.missed_critical_facts=criticalFactSplit.summary_required_facts;
+    }
     // Не блокировать AUTO_SAVE только из-за недоступности судьи: "pass" ИЛИ
     // "unavailable" обе допускают автосохранение (недоступность сама по себе
     // не должна форсировать RETRY/MANUAL_REVIEW).
@@ -2896,6 +3015,11 @@ const CODE_FUNCS = {
         warnings:uniqueWarnings,
         warning_details:uniqueWarningDetails,
         recommendations:uniqueRecommendations,
+        summary_required_facts:criticalFactSplit.summary_required_facts,
+        card_context_facts:criticalFactSplit.card_context_facts,
+        card_context_explanation:criticalFactSplit.card_context_facts.length
+          ? 'Не влияют на RETRY, потому что доступны в structured store / CRM-карточке.'
+          : '',
         main_reason,
         key_problems:keyProblems,
         top_recommendations:uniqueRecommendations,
@@ -2941,7 +3065,7 @@ const CODE_FUNCS = {
       if(IS_TRANSCRIPTION_SUMMARY_MODULE){ rec={}; n={}; o={}; pr={}; }
       else { rec=st.record||ctx.facts||{}; n=ctx.needs||{}; o=ctx.outcome||{}; pr={}; }
     }
-    const sm=ctx.summary||{}, g=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate||{};
+    const sm=ctx.summary||{}, g=currentSummaryGate(ctx)||{};
     const card={
       client_name: rec.client_name ?? null,
       budget: rec.budget_normalized ?? rec.budget ?? null,
@@ -3215,7 +3339,7 @@ async function runPipeline(){
   savePipelineConfig();
   const transcript=document.getElementById('transcript').value.trim();
   if(!transcript){ toast('Загрузите транскрипцию'); return; }
-  const active=pipeline.filter(s=>s.enabled);
+  const active=dedupeModuleVisibleChecks(pipeline.filter(s=>s.enabled));
   if(!active.length){ toast('Нет активных шагов'); return; }
 
   ctx={ __transcript:transcript, stored_files: storedFilesForCtx() };
@@ -3289,6 +3413,7 @@ async function runPipeline(){
       if(stage.outKey === 'needs' && rep.output) rep.output = cleanupNeedsV9(rep.output);
       if(stage.outKey === 'outcome' && rep.output) rep.output = cleanupOutcomeV9(rep.output);
       ctx[stage.outKey]=rep.output;
+      if(isSummaryGateStage(stage)) ctx.__latest_summary_quality_gate=rep.output;
     }
     if(rep.tokens) totalTokens+=rep.tokens;
     if(rep.cost) totalCost+=rep.cost;
@@ -3314,7 +3439,7 @@ async function runPipeline(){
 // this can never break the tool's own behavior.
 function reportRunToParent(run){
   try{
-    const gate=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate, check=ctx.presentation_check||ctx.summary_check;
+    const gate=currentSummaryGate(ctx), check=ctx.presentation_check||ctx.summary_check;
     // Same shape as the "Скачать полный отчёт (JSON)" button builds
     // (dlReport, see renderFinal) -- so a test opened later from
     // Dashboard's run history shows exactly what that download would
@@ -3336,7 +3461,21 @@ function reportRunToParent(run){
       qualityScore: gate ? (gate.summary_quality_score ?? check?.score) : check ? check.score : undefined,
       transcript: ctx.__transcript,
       report: report,
+      run_id:null,
+      product_id:PRODUCT_ID||'standalone',
+      product_name:PRODUCT_NAME||'Pipeline Lab v3',
+      module_name:IS_TRANSCRIPTION_SUMMARY_MODULE?'AI-саммари звонков':undefined,
+      pipeline_name:IS_TRANSCRIPTION_SUMMARY_MODULE?'AI-саммари звонков':'Pipeline Lab v3',
+      created_at:run.startedAt,
+      final_score:gate ? (gate.summary_quality_score ?? check?.score ?? 0) : (check?.score ?? 0),
+      final_decision:gate ? gate.decision : undefined,
+      steps_total:run.stageCount,
+      tokens_total:run.totalTokens,
+      cost_total:run.totalCost,
+      summary:summaryText(ctx),
+      report_json:report,
     };
+    payload.run_id=payload.id;
     persistDashboardRun(payload);
     window.parent.postMessage({
       source:'pipeline-lab-v3', type:'run-complete', productId: PRODUCT_ID,
@@ -3375,6 +3514,12 @@ function persistDashboardRun(payload){
       decision:payload.decision,
       transcript:payload.transcript,
       report:payload.report,
+      productName:payload.product_name,
+      moduleName:payload.module_name,
+      pipelineName:payload.pipeline_name,
+      finalScore:payload.final_score,
+      finalDecision:payload.final_decision,
+      summary:payload.summary,
       startedAt:payload.startedAt,
       finishedAt:payload.finishedAt,
       version:'1.0.0'
@@ -3548,7 +3693,7 @@ function renderSummaryQualityPanel(gate){
 }
 
 function renderFinal(totalTokens, totalCost, stageReports){
-  const sm=ctx.summary, gate=ctx.quality_gate||ctx.summary_quality_gate||ctx.gate||ctx.summaryQualityGate, crm=ctx.crm||ctx.publish_result, n=displayNeeds();
+  const sm=ctx.summary, gate=currentSummaryGate(ctx), crm=ctx.crm||ctx.publish_result, n=displayNeeds();
   const summary = (sm&&sm.summary) || '—';
   const el=document.createElement('div'); el.className='final';
   const decision = gate? gate.decision : '—';

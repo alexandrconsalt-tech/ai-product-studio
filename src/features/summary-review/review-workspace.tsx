@@ -73,6 +73,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
   const [query, setQuery] = React.useState("");
   const [visibleRoles, setVisibleRoles] = React.useState<Record<string, boolean>>({ Оператор: true, Агент: true, Клиент: true });
   const [saved, setSaved] = React.useState(false);
+  const [importError, setImportError] = React.useState("");
 
   React.useEffect(() => {
     const payloadRun = decodePayload(searchParams.get("payload"));
@@ -105,12 +106,21 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
 
   const importFile = async (file: File | undefined) => {
     if (!file) return;
-    const json = JSON.parse(await file.text());
-    const imported = normalizePlaygroundRun(json);
-    saveRun(imported);
-    setRun(imported);
-    setSaved(false);
-    router.push(embedded ? `/?view=summary-review&runId=${imported.id}` : `/review/${imported.id}`);
+    setImportError("");
+    try {
+      const json = JSON.parse(await file.text());
+      const imported = normalizePlaygroundRun(json);
+      if (!imported.summary.trim() && !imported.transcript.trim()) {
+        throw new Error("В файле не найдено summary или транскрипция. Проверьте, что это pipeline_report.json из Playground.");
+      }
+      saveRun(imported);
+      setRun(imported);
+      setSaved(false);
+      router.push(embedded ? `/?view=summary-review&runId=${imported.id}` : `/review/${imported.id}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Не удалось прочитать JSON-файл.";
+      setImportError(message);
+    }
   };
 
   const loadDemo = () => {
@@ -142,6 +152,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
             <input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => void importFile(event.target.files?.[0])} />
           </label>
           <Button onClick={loadDemo}>Открыть демо-запуск</Button>
+          {importError ? <p className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">{importError}</p> : null}
         </Panel>
       </div>
     );
