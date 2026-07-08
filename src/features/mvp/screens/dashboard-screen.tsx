@@ -238,9 +238,6 @@ export function DashboardScreen() {
     () => Object.values(runsByProjectId).flat().sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()),
     [runsByProjectId],
   );
-  const allRuns = projectFilter === ALL_PROJECTS ? allProjectRuns : getRuns(projectFilter);
-  const runs = range === "all" ? allRuns : allRuns.slice(0, range);
-  const stats = computeDashboardStats(runs);
   const productOptions = React.useMemo(() => {
     const byId = new Map(projects.map((project) => [project.id, project.name]));
     for (const run of allProjectRuns) {
@@ -248,6 +245,12 @@ export function DashboardScreen() {
     }
     return [...byId.entries()].map(([id, name]) => ({ id, name }));
   }, [allProjectRuns, projects]);
+  const selectedProductName = productOptions.find((project) => project.id === projectFilter)?.name;
+  const allRuns = projectFilter === ALL_PROJECTS
+    ? allProjectRuns
+    : allProjectRuns.filter((run) => run.projectId === projectFilter || (selectedProductName && runProductLabel(run) === selectedProductName));
+  const runs = range === "all" ? allRuns : allRuns.slice(0, range);
+  const stats = computeDashboardStats(runs);
 
   return (
     <Page className="max-w-none">

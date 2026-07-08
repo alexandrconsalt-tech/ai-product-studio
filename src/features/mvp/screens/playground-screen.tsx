@@ -216,11 +216,12 @@ export function PlaygroundScreen() {
 
   const handleRunComplete = React.useCallback(
     (payload: PipelineLabV3RunPayload) => {
-      if (!selectedProjectId) return;
+      const runProjectId = payload.productId ?? selectedProjectId;
+      if (!runProjectId) return;
       recordRun(
         createPlaygroundTestRun({
           id: payload.id,
-          projectId: selectedProjectId,
+          projectId: runProjectId,
           source: IFRAME_SOURCE,
           status: payload.status,
           stageCount: payload.stageCount,
@@ -234,6 +235,12 @@ export function PlaygroundScreen() {
           decision: payload.decision,
           transcript: payload.transcript,
           report: payload.report,
+          productName: payload.productName,
+          moduleName: payload.moduleName,
+          pipelineName: payload.pipelineName,
+          finalScore: payload.finalScore,
+          finalDecision: payload.finalDecision,
+          summary: payload.summary,
           startedAt: payload.startedAt,
           finishedAt: payload.finishedAt,
         }),
