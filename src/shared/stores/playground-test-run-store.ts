@@ -29,7 +29,7 @@ export function withCappedRun(
   const existing = runsByProjectId[run.projectId] ?? [];
   // Newest first, matching the convention already used by
   // playground-store.ts's addRun (prepends to Run history).
-  const next = [run, ...existing].slice(0, MAX_RUNS_PER_PROJECT);
+  const next = [run, ...existing.filter((item) => item.id !== run.id)].slice(0, MAX_RUNS_PER_PROJECT);
   return { ...runsByProjectId, [run.projectId]: next };
 }
 

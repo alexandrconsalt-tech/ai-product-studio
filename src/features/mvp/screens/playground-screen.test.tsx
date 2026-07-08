@@ -42,6 +42,7 @@ describe("PlaygroundScreen", () => {
             type: "run-complete",
             productId: project.id,
             payload: {
+              id: "playground_test_run_fixed",
               startedAt: "2026-07-05T10:00:00.000Z",
               finishedAt: "2026-07-05T10:00:05.000Z",
               durationMs: 5000,
@@ -62,7 +63,7 @@ describe("PlaygroundScreen", () => {
 
     const runs = usePlaygroundTestRunStore.getState().getRuns(project.id);
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ projectId: project.id, status: "succeeded", costUsd: 0.012, qualityScore: 92 });
+    expect(runs[0]).toMatchObject({ id: "playground_test_run_fixed", projectId: project.id, status: "succeeded", costUsd: 0.012, qualityScore: 92 });
   });
 
   it("records a PlaygroundTestRun from an older iframe message without productId", () => {

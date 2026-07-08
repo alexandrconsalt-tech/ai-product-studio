@@ -3081,26 +3081,68 @@ function reportRunToParent(run){
     // Dashboard's run history shows exactly what that download would
     // have shown, not a lighter summary.
     const report={ pipeline: pipeline.map(sanitize), result: ctx, stageReports: run.stageReports||[], usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
+    const payload={
+      id:createDashboardRunId(),
+      startedAt: run.startedAt,
+      finishedAt: new Date().toISOString(),
+      durationMs: run.durationMs,
+      stageCount: run.stageCount,
+      errorCount: run.errorCount,
+      warningCount: run.warningCount,
+      tokens: run.totalTokens,
+      costUsd: run.totalCost,
+      status: run.errorCount>0 ? 'failed' : 'succeeded',
+      confidence: gate ? (gate.summary_quality_score!=null ? gate.summary_quality_score/100 : gate.confidence) : undefined,
+      decision: gate ? gate.decision : undefined,
+      qualityScore: gate ? (gate.summary_quality_score ?? check?.score) : check ? check.score : undefined,
+      transcript: ctx.__transcript,
+      report: report,
+    };
+    persistDashboardRun(payload);
     window.parent.postMessage({
       source:'pipeline-lab-v3', type:'run-complete', productId: PRODUCT_ID,
-      payload:{
-        startedAt: run.startedAt,
-        finishedAt: new Date().toISOString(),
-        durationMs: run.durationMs,
-        stageCount: run.stageCount,
-        errorCount: run.errorCount,
-        warningCount: run.warningCount,
-        tokens: run.totalTokens,
-        costUsd: run.totalCost,
-        status: run.errorCount>0 ? 'failed' : 'succeeded',
-        confidence: gate ? (gate.summary_quality_score!=null ? gate.summary_quality_score/100 : gate.confidence) : undefined,
-        decision: gate ? gate.decision : undefined,
-        qualityScore: gate ? (gate.summary_quality_score ?? check?.score) : check ? check.score : undefined,
-        transcript: ctx.__transcript,
-        report: report,
-      },
+      payload,
     }, '*');
   }catch(e){ /* no parent listening, or postMessage unsupported -- harmless */ }
+}
+
+function createDashboardRunId(){
+  const suffix = (typeof crypto!=='undefined'&&crypto.randomUUID) ? crypto.randomUUID() : String(Date.now())+'_'+Math.random().toString(16).slice(2);
+  return 'playground_test_run_'+suffix;
+}
+
+function persistDashboardRun(payload){
+  if(!PRODUCT_ID) return;
+  try{
+    const key='ai-product-studio.playground-test-runs.v1';
+    const raw=localStorage.getItem(key);
+    const store=raw ? JSON.parse(raw) : {state:{runsByProjectId:{}},version:0};
+    const state=store.state && typeof store.state==='object' ? store.state : {};
+    const runsByProjectId=state.runsByProjectId && typeof state.runsByProjectId==='object' ? state.runsByProjectId : {};
+    const existing=Array.isArray(runsByProjectId[PRODUCT_ID]) ? runsByProjectId[PRODUCT_ID] : [];
+    const run={
+      id:payload.id,
+      projectId:PRODUCT_ID,
+      source:'pipeline-lab-v3',
+      status:payload.status,
+      stageCount:payload.stageCount,
+      errorCount:payload.errorCount,
+      warningCount:payload.warningCount,
+      tokens:payload.tokens,
+      costUsd:payload.costUsd,
+      durationMs:payload.durationMs,
+      confidence:payload.confidence,
+      qualityScore:payload.qualityScore,
+      decision:payload.decision,
+      transcript:payload.transcript,
+      report:payload.report,
+      startedAt:payload.startedAt,
+      finishedAt:payload.finishedAt,
+      version:'1.0.0'
+    };
+    runsByProjectId[PRODUCT_ID]=[run, ...existing.filter(item=>item&&item.id!==run.id)].slice(0,200);
+    localStorage.setItem(key, JSON.stringify({...store, state:{...state, runsByProjectId}, version:store.version??0}));
+  }catch(e){ /* Dashboard history persistence must never break the run UI. */ }
 }
 
 function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='attn'?'attn':st==='bad'?'bad':'run';}

@@ -7,6 +7,7 @@
  * Lab v3 itself is plain untyped JS, not a Zod-validated boundary.
  */
 export type PipelineLabV3RunPayload = Readonly<{
+  id?: string;
   startedAt: string;
   finishedAt: string;
   durationMs: number;

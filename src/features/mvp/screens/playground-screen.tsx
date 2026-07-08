@@ -219,6 +219,7 @@ export function PlaygroundScreen() {
       if (!selectedProjectId) return;
       recordRun(
         createPlaygroundTestRun({
+          id: payload.id,
           projectId: selectedProjectId,
           source: IFRAME_SOURCE,
           status: payload.status,
