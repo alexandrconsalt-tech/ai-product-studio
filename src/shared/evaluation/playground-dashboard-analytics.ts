@@ -58,6 +58,13 @@ function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+export function normalizeScore(value: unknown): number | undefined {
+  const score = num(value);
+  if (score === undefined) return undefined;
+  const normalized = score >= 0 && score <= 1 ? score * 100 : score;
+  return Math.max(0, Math.min(100, normalized));
+}
+
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -96,10 +103,39 @@ function stageKey(label: string): string {
   return pairs.find(([rx]) => rx.test(label))?.[1] ?? label;
 }
 
-function stageScore(item: Record<string, unknown>): { score: number; durationMs: number; costUsd: number } | null {
+function scoreFromRecord(value: unknown): number | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  return (
+    normalizeScore(record.score) ??
+    normalizeScore(record.summary_quality_score) ??
+    normalizeScore(asRecord(record.raw)?.score) ??
+    normalizeScore(asRecord(record.fact_check_quality)?.score) ??
+    normalizeScore(asRecord(record.need_check_quality)?.score) ??
+    normalizeScore(asRecord(record.outcome_check_quality)?.score) ??
+    normalizeScore(asRecord(record.quality)?.store_score) ??
+    normalizeScore(asRecord(record.quality)?.stt_quality_score)
+  );
+}
+
+export function scoreFromReportResult(report: unknown, key: string): number | undefined {
+  const result = asRecord(asRecord(report)?.result);
+  const direct = scoreFromRecord(result?.[key]);
+  if (direct !== undefined) return direct;
+
+  const gate = asRecord(result?.summary_quality_gate);
+  const scores = asRecord(gate?.scores);
+  const fromGateScores = normalizeScore(scores?.[key]);
+  if (fromGateScores !== undefined) return fromGateScores;
+
+  const judges = asRecord(gate?.judges);
+  return scoreFromRecord(judges?.[key]);
+}
+
+export function scoreFromStageReport(item: Record<string, unknown>): { score: number; durationMs: number; costUsd: number } | null {
   const report = asRecord(item.report);
   const meta = asRecord(report?.meta);
-  const score = num(meta?.score);
+  const score = scoreFromRecord(meta) ?? scoreFromRecord(report?.output) ?? scoreFromRecord(report);
   if (score === undefined) return null;
   return { score, durationMs: num(meta?.durationMs) ?? num(report?.ms) ?? 0, costUsd: num(meta?.cost) ?? num(report?.cost) ?? 0 };
 }
@@ -110,7 +146,7 @@ function aggregateStages(runs: readonly PlaygroundTestRun[], judgeOnly: boolean)
   for (const run of runs) {
     for (const item of stageReports(run)) {
       const label = stageLabel(item);
-      const stat = stageScore(item);
+      const stat = scoreFromStageReport(item);
       if (!label || !stat) continue;
       const key = stageKey(label);
       if (judgeOnly !== judgeKeys.has(key)) continue;

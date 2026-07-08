@@ -5,11 +5,11 @@ import { AlertTriangle, CheckCircle2, Download, Gauge, History, LineChart as Lin
 import { Badge, Button, Card, Dialog, EmptyState, LineChart, Page, Section, SegmentedControl, Select, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
-import { computeDashboardStats } from "@/shared/evaluation/playground-dashboard-analytics";
+import { computeDashboardStats, scoreFromReportResult, scoreFromStageReport } from "@/shared/evaluation/playground-dashboard-analytics";
 import { downloadJson } from "@/shared/lib/download-json";
 import type { PlaygroundTestRun } from "@/entities/PlaygroundTestRun/model/types";
 
-const RANGE_OPTIONS = [5, 10, 20, 50, 100] as const;
+const RANGE_OPTIONS = ["all", 5, 10, 20, 50, 100] as const;
 type RangeOption = (typeof RANGE_OPTIONS)[number];
 
 function formatUsd(value: number): string {
@@ -56,19 +56,13 @@ function resultFromReport(report: unknown): Record<string, unknown> | null {
   return asRecord(asRecord(report)?.result);
 }
 
-function scoreFromResult(report: unknown, key: string): number | undefined {
-  const result = resultFromReport(report);
-  const value = asRecord(result?.[key]);
-  const score = value?.score ?? (key === "summary_quality_gate" ? value?.summary_quality_score : undefined);
-  return typeof score === "number" ? score : undefined;
-}
-
 function mainIssue(report: unknown): string {
   const gate = asRecord(resultFromReport(report)?.summary_quality_gate);
-  const lists = [gate?.critical_errors, gate?.warnings, gate?.recommendations];
+  const lists = [gate?.key_problems, gate?.critical_errors, gate?.warnings, gate?.top_recommendations, gate?.recommendations];
   for (const list of lists) {
     if (Array.isArray(list) && list.length > 0) return typeof list[0] === "string" ? list[0] : JSON.stringify(list[0]);
   }
+  if (typeof gate?.main_reason === "string" && gate.main_reason.trim()) return gate.main_reason;
   return "—";
 }
 
@@ -91,14 +85,14 @@ function StageScoresBlock({ report }: Readonly<{ report: unknown }>) {
       <p className="text-sm font-medium">Оценки по этапам</p>
       <div className="max-h-48 overflow-auto rounded-md border border-border">
         {stages.map((item, index) => {
+          const itemRecord = asRecord(item);
           const stage = asRecord(asRecord(item)?.stage);
-          const rep = asRecord(asRecord(item)?.report);
-          const meta = asRecord(rep?.meta);
+          const stat = itemRecord ? scoreFromStageReport(itemRecord) : null;
           return (
             <div key={`${String(stage?.name ?? index)}-${index}`} className="grid grid-cols-[1fr_80px_90px] gap-2 border-b border-border px-3 py-2 text-xs last:border-b-0">
               <span className="truncate">{String(stage?.name ?? "Этап")}</span>
-              <span>{typeof meta?.score === "number" ? `${Math.round(meta.score)}%` : "—"}</span>
-              <span>{typeof meta?.durationMs === "number" ? formatMs(meta.durationMs) : "—"}</span>
+              <span>{stat ? `${Math.round(stat.score)}%` : "—"}</span>
+              <span>{stat ? formatMs(stat.durationMs) : "—"}</span>
             </div>
           );
         })}
@@ -193,7 +187,7 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
           <button
             key={run.id}
             type="button"
-            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-12"
+            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.4fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
             onClick={() => setSelectedRun(run)}
           >
             <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
@@ -205,11 +199,11 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
             <span>{formatMs(run.durationMs)}</span>
             <span>{run.qualityScore !== undefined ? `SQS ${Math.round(run.qualityScore)}%` : "—"}</span>
             <span className="truncate">{run.decision ?? "—"}</span>
-            <span>{scoreFromResult(run.report, "truth_check") !== undefined ? `${Math.round(scoreFromResult(run.report, "truth_check")!)}%` : "—"}</span>
-            <span>{scoreFromResult(run.report, "critical_facts_check") !== undefined ? `${Math.round(scoreFromResult(run.report, "critical_facts_check")!)}%` : "—"}</span>
-            <span>{scoreFromResult(run.report, "context_utility_check") !== undefined ? `${Math.round(scoreFromResult(run.report, "context_utility_check")!)}%` : "—"}</span>
-            <span>{scoreFromResult(run.report, "action_check") !== undefined ? `${Math.round(scoreFromResult(run.report, "action_check")!)}%` : "—"}</span>
-            <span>{scoreFromResult(run.report, "presentation_check") !== undefined ? `${Math.round(scoreFromResult(run.report, "presentation_check")!)}%` : "—"}</span>
+            <span>{scoreFromReportResult(run.report, "truth_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "truth_check")!)}%` : "—"}</span>
+            <span>{scoreFromReportResult(run.report, "critical_facts_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "critical_facts_check")!)}%` : "—"}</span>
+            <span>{scoreFromReportResult(run.report, "context_utility_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "context_utility_check")!)}%` : "—"}</span>
+            <span>{scoreFromReportResult(run.report, "action_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "action_check")!)}%` : "—"}</span>
+            <span>{scoreFromReportResult(run.report, "presentation_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "presentation_check")!)}%` : "—"}</span>
             <span className="truncate text-text-muted">{failedStage(run.report)}</span>
             <span className="truncate text-text-muted">{mainIssue(run.report)}</span>
           </button>
@@ -230,11 +224,11 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
 export function DashboardScreen() {
   const { snapshot, selectedProjectId, selectProject } = useRepositoryStore();
   const { getRuns } = usePlaygroundTestRunStore();
-  const [range, setRange] = React.useState<RangeOption>(20);
+  const [range, setRange] = React.useState<RangeOption>("all");
   const projects = snapshot?.projects ?? [];
 
   const allRuns = selectedProjectId ? getRuns(selectedProjectId) : [];
-  const runs = allRuns.slice(0, range);
+  const runs = range === "all" ? allRuns : allRuns.slice(0, range);
   const stats = computeDashboardStats(runs);
 
   return (
@@ -257,7 +251,7 @@ export function DashboardScreen() {
             </Select>
           </label>
           <div className="grid gap-1 text-sm">
-            Последние N итераций
+            Период истории
             <SegmentedControl>
               {RANGE_OPTIONS.map((option) => (
                 <button
@@ -266,7 +260,7 @@ export function DashboardScreen() {
                   onClick={() => setRange(option)}
                   className={`rounded-[4px] px-3 py-1 text-sm transition-colors ${option === range ? "bg-primary text-primary-foreground" : "text-text-muted hover:bg-hover"}`}
                 >
-                  {option}
+                  {option === "all" ? "Все" : option}
                 </button>
               ))}
             </SegmentedControl>
