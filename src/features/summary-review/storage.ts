@@ -5,6 +5,9 @@ import type { GoldenDatasetItem, HumanReview, ReviewRecord, SummaryRun } from ".
 
 const RUNS_KEY = "summary_review_runs_v1";
 const REVIEWS_KEY = "summary_review_human_reviews_v1";
+const MAX_STORED_RUNS = 30;
+const MAX_TEXT_CHARS = 60_000;
+const MAX_SOURCE_JSON_CHARS = 120_000;
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -20,6 +23,66 @@ function writeJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function trimText(value: string): string {
+  return value.length > MAX_TEXT_CHARS ? `${value.slice(0, MAX_TEXT_CHARS)}\n\n[Обрезано для локального хранения]` : value;
+}
+
+function compactSourceRunJson(value: unknown): unknown {
+  try {
+    const json = JSON.stringify(value);
+    if (json.length <= MAX_SOURCE_JSON_CHARS) return value;
+    if (value && typeof value === "object") {
+      const source = value as Record<string, unknown>;
+      return {
+        compacted: true,
+        reason: "Полный pipeline_report.json слишком большой для localStorage. Summary, transcript, score и judges сохранены отдельно.",
+        id: source.id ?? source.run_id ?? source.runId,
+        created_at: source.created_at ?? source.createdAt ?? source.finishedAt ?? source.startedAt,
+        summary: source.summary ?? source.final_summary,
+        result: source.result && typeof source.result === "object"
+          ? {
+              summary: (source.result as Record<string, unknown>).summary,
+              summary_quality_gate: (source.result as Record<string, unknown>).summary_quality_gate,
+              quality_gate: (source.result as Record<string, unknown>).quality_gate,
+            }
+          : undefined,
+      };
+    }
+  } catch {
+    // Fall through to a minimal marker below.
+  }
+  return { compacted: true, reason: "Источник отчёта не удалось сохранить полностью в localStorage." };
+}
+
+function compactRun(run: SummaryRun): SummaryRun {
+  return {
+    ...run,
+    transcript: trimText(run.transcript),
+    summary: trimText(run.summary),
+    sourceRunJson: compactSourceRunJson(run.sourceRunJson),
+  };
+}
+
+function saveRunsCompact(runs: SummaryRun[]) {
+  const compact = runs.slice(0, MAX_STORED_RUNS).map(compactRun);
+  try {
+    writeJson(RUNS_KEY, compact);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      window.localStorage.removeItem(RUNS_KEY);
+      try {
+        writeJson(RUNS_KEY, compact.slice(0, 5).map((run) => ({ ...run, sourceRunJson: compactSourceRunJson({}) })));
+      } catch {
+        // Summary Review must remain usable even when the browser storage is
+        // already full from other app areas. The current run is still shown in
+        // React state; only durable local history is skipped.
+      }
+      return;
+    }
+    throw error;
+  }
+}
+
 export function getRuns(): SummaryRun[] {
   return readJson<SummaryRun[]>(RUNS_KEY, []);
 }
@@ -30,8 +93,8 @@ export function getReviews(): HumanReview[] {
 
 export function saveRun(run: SummaryRun) {
   const runs = getRuns();
-  const next = [run, ...runs.filter((item) => item.id !== run.id)];
-  writeJson(RUNS_KEY, next);
+  const next = [compactRun(run), ...runs.filter((item) => item.id !== run.id).map(compactRun)];
+  saveRunsCompact(next);
 }
 
 export function saveReview(review: HumanReview) {
@@ -102,4 +165,3 @@ export function downloadCsv(filename: string, rows: string[][]) {
   link.click();
   URL.revokeObjectURL(url);
 }
-
