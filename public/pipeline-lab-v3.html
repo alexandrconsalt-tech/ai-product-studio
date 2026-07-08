@@ -1053,6 +1053,7 @@ const PRODUCT_ID = new URLSearchParams(location.search).get('productId') || null
 // across every product Playground embeds it for (AI Product Studio v2
 // follow-up). Falls back to a neutral label when opened standalone.
 const PRODUCT_NAME = new URLSearchParams(location.search).get('productName') || null;
+const ENABLE_STAGE_DESCRIPTION = /^Модуль транскрибации и AI-саммари звонков/i.test(PRODUCT_NAME||'');
 if(window.top === window.self && PRODUCT_ID){
   window.location.replace('/?view=playground');
 }
@@ -3372,6 +3373,7 @@ function syncPipelineFromEditor(){
     if(!stage) return;
     const enabled=el.querySelector('[data-en]');
     const name=el.querySelector('[data-name]');
+    const description=el.querySelector('[data-description]');
     const type=el.querySelector('[data-type]');
     const outKey=el.querySelector('[data-outkey]');
     const prompt=el.querySelector('[data-prompt]');
@@ -3380,6 +3382,7 @@ function syncPipelineFromEditor(){
     const vendor=el.querySelector('[data-vendor]');
     if(enabled) stage.enabled=enabled.checked;
     if(name) stage.name=name.value;
+    if(description) stage.description=description.value;
     if(type) stage.type=type.value;
     if(outKey) stage.outKey=outKey.value.trim();
     if(prompt) stage.prompt=prompt.value;
@@ -3417,6 +3420,10 @@ function renderStages(){
       +'<div class="mini">'
       +'<div><label class="fld">Название</label>'
       +'<input type="text" data-name value="'+escapeAttr(stage.name)+'"></div>'
+      +(ENABLE_STAGE_DESCRIPTION
+        ? '<div style="grid-column:1/-1"><label class="fld">Описание этапа</label>'
+          +'<textarea data-description rows="3" placeholder="Кратко опишите, что делает этот этап, что получает на входе и что возвращает.">'+escapeHtml(stage.description||'')+'</textarea></div>'
+        : '')
       +'<div style="max-width:130px"><label class="fld">Тип</label>'
       +'<select data-type>'
       +'<option value="llm" '+(stage.type==='llm'?'selected':'')+'>LLM-агент</option>'
@@ -3457,6 +3464,7 @@ function renderStages(){
     el.querySelector('[data-toggle]').addEventListener('click',()=>el.classList.toggle('open'));
     el.querySelector('[data-en]').addEventListener('change',e=>{stage.enabled=e.target.checked;el.classList.toggle('disabled',!stage.enabled);});
     el.querySelector('[data-name]').addEventListener('input',e=>{stage.name=e.target.value;el.querySelector('.st-name').textContent=e.target.value;});
+    const ds=el.querySelector('[data-description]'); if(ds)ds.addEventListener('input',e=>stage.description=e.target.value);
     el.querySelector('[data-type]').addEventListener('change',e=>{
       stage.type=e.target.value;
       const modelStep = stage.type==='llm'||stage.type==='check';
