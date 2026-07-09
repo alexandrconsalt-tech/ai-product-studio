@@ -7,9 +7,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "guard:scope": "node scripts/delivery-guard.mjs scope",
+    "guard:module": "node scripts/delivery-guard.mjs module",
+    "guard:logic": "node scripts/delivery-guard.mjs logic",
+    "smoke": "vitest run",
+    "quality": "npm run guard:scope && npm run guard:module && npm run guard:logic && npm run lint && npm run typecheck && npm run build && npm run smoke"
   },
   "keywords": [],
   "author": "",
