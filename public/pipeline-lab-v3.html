@@ -1064,6 +1064,7 @@ if(PRODUCT_NAME){
 }
 const INITIAL_PRESET = new URLSearchParams(location.search).get('preset') === 'blank' ? 'blank' : 'default';
 const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID : PIPELINE_CONFIG_STORAGE;
+let deletedStageOutKeys = [];
 // Bumped whenever a shipped default prompt/rule changes (V8.1, 2026-07-06:
 // transcript passed to step 7, budget/timeline extraction rules, Summary
 // Agent rewrite, Checker exceptions, Quality Gate hallucination override).
@@ -1128,12 +1129,21 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // these as plain 'check' stages forever.
 const PIPELINE_VERSION = 11;
 function savePipelineConfig(){
-  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, stages:pipeline.map(sanitize)}));
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({
+    version:PIPELINE_VERSION,
+    deletedStageOutKeys:[...new Set(deletedStageOutKeys.filter(Boolean))],
+    stages:pipeline.map(sanitize)
+  }));
 }
-function parsePipelineStorage(raw){
+function parsePipelineStorageEnvelope(raw){
   const parsed=JSON.parse(raw);
   const stages=Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.stages) ? parsed.stages : null;
-  return stages && stages.length ? stages : null;
+  const deleted=parsed && !Array.isArray(parsed) && Array.isArray(parsed.deletedStageOutKeys) ? parsed.deletedStageOutKeys : [];
+  return Array.isArray(stages) ? {stages, deletedStageOutKeys:deleted.filter(Boolean)} : null;
+}
+function parsePipelineStorage(raw){
+  const envelope=parsePipelineStorageEnvelope(raw);
+  return envelope ? envelope.stages : null;
 }
 function pipelineConfigRestoreScore(key, stages){
   if(!Array.isArray(stages)||!stages.length) return -999;
@@ -1166,8 +1176,9 @@ function restoreTranscriptionModulePipelineConfig(){
     candidates.sort((a,b)=>b.score-a.score);
     const best=candidates[0];
     if(!best) return null;
-    const restored=migratePipelineConfig(best.stages.map(x=>({id:s(), ...x})));
-    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, restoredFrom:best.key, stages:restored.map(sanitize)}));
+    const restored=migratePipelineConfig(best.stages.map(x=>({id:s(), ...x})), []);
+    deletedStageOutKeys=[];
+    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({version:PIPELINE_VERSION, restoredFrom:best.key, deletedStageOutKeys, stages:restored.map(sanitize)}));
     return restored;
   }catch(e){ return null; }
 }
@@ -1181,9 +1192,10 @@ function loadPipelineConfig(){
     // V8.4 onward, version is migration metadata only: any saved stage list
     // is loaded and then re-saved under the current version on the next save
     // or run. Legacy bare-array exports are accepted for the same reason.
-    const stages=parsePipelineStorage(raw);
-    if(!stages || !stages.length) return restoreTranscriptionModulePipelineConfig();
-    return migratePipelineConfig(stages.map(x=>({id:s(), ...x})));
+    const envelope=parsePipelineStorageEnvelope(raw);
+    if(!envelope) return restoreTranscriptionModulePipelineConfig();
+    deletedStageOutKeys=envelope.deletedStageOutKeys;
+    return migratePipelineConfig(envelope.stages.map(x=>({id:s(), ...x})), deletedStageOutKeys);
   }catch(e){ return null; }
 }
 
@@ -1197,48 +1209,61 @@ function isOldSummaryCheck(stage){
 function isOldGate(stage){
   return stage && stage.codeFn==='gate' && (stage.outKey==='gate' || /Quality Gate/i.test(stage.name||''));
 }
-function hasSummaryQualityArchitecture(stages){
-  return stages.some(stage=>stage.outKey==='summary_quality_gate' || stage.codeFn==='summaryQualityGate')
+function isDeletedStageOutKey(outKey, deletedOutKeys){
+  return Boolean(outKey) && deletedOutKeys && deletedOutKeys.includes(outKey);
+}
+function rememberDeletedStage(stage){
+  if(stage && stage.outKey && !deletedStageOutKeys.includes(stage.outKey)) deletedStageOutKeys.push(stage.outKey);
+}
+function forgetDeletedStageOutKey(outKey){
+  if(!outKey) return;
+  deletedStageOutKeys=deletedStageOutKeys.filter(key=>key!==outKey);
+}
+function hasStageOrDeleted(stages, outKey, deletedOutKeys){
+  return isDeletedStageOutKey(outKey, deletedOutKeys) || stages.some(stage=>stage.outKey===outKey);
+}
+function hasSummaryQualityArchitecture(stages, deletedOutKeys){
+  return (stages.some(stage=>stage.outKey==='summary_quality_gate' || stage.codeFn==='summaryQualityGate') || isDeletedStageOutKey('summary_quality_gate', deletedOutKeys))
     && ['truth_check','critical_facts_check','context_utility_check','action_check','presentation_check']
-      .every(key=>stages.some(stage=>stage.outKey===key));
+      .every(key=>hasStageOrDeleted(stages, key, deletedOutKeys));
 }
 // stages 1-9 rework (2026-07-08): fact_check/need_check/outcome_check verify
 // each LLM-extraction stage independently, and conversation_store aggregates
 // only their verified output as the single source of truth for Summary.
 // A saved config from before this rework has none of these four stages (and
 // may still have the old flat 'Единое хранилище' store stage instead).
-function hasConversationStoreArchitecture(stages){
+function hasConversationStoreArchitecture(stages, deletedOutKeys){
   return ['fact_check','need_check','outcome_check','conversation_store']
-    .every(key=>stages.some(stage=>stage.outKey===key));
+    .every(key=>hasStageOrDeleted(stages, key, deletedOutKeys));
 }
 function isOldFlatStore(stage){
   return stage && stage.codeFn==='store' && stage.outKey==='store';
 }
-function insertMissingStageAfter(stages, afterOutKey, newOutKey, factory){
-  if(stages.some(s=>s.outKey===newOutKey)) return stages;
+function insertMissingStageAfter(stages, afterOutKey, newOutKey, factory, deletedOutKeys){
+  if(isDeletedStageOutKey(newOutKey, deletedOutKeys) || stages.some(s=>s.outKey===newOutKey)) return stages;
   const idx=stages.findIndex(s=>s.outKey===afterOutKey);
   if(idx<0) return stages;
   const copy=stages.slice();
   copy.splice(idx+1, 0, factory());
   return copy;
 }
-function insertMissingStageBefore(stages, beforeOutKey, newOutKey, factory){
-  if(stages.some(s=>s.outKey===newOutKey)) return stages;
+function insertMissingStageBefore(stages, beforeOutKey, newOutKey, factory, deletedOutKeys){
+  if(isDeletedStageOutKey(newOutKey, deletedOutKeys) || stages.some(s=>s.outKey===newOutKey)) return stages;
   const idx=stages.findIndex(s=>s.outKey===beforeOutKey);
   if(idx<0) return stages;
   const copy=stages.slice();
   copy.splice(idx, 0, factory());
   return copy;
 }
-function migratePipelineConfig(stages){
+function migratePipelineConfig(stages, deletedOutKeys){
   if(!Array.isArray(stages) || !stages.length) return stages;
 
   let result = stages;
-  if(!hasSummaryQualityArchitecture(stages)){
+  if(!hasSummaryQualityArchitecture(stages, deletedOutKeys)){
     const summaryIdx=stages.findIndex(stage=>stage.outKey==='summary' || /Генерация саммари/i.test(stage.name||''));
     const crmIdx=stages.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
     const cleaned=stages.filter(stage=>!isOldSummaryCheck(stage) && !isOldGate(stage));
-    const migrated=summaryQualityStages();
+    const migrated=summaryQualityStages().filter(stage=>!isDeletedStageOutKey(stage.outKey, deletedOutKeys));
 
     let insertAt=cleaned.length;
     const cleanedCrmIdx=cleaned.findIndex(stage=>stage.codeFn==='crm' || stage.outKey==='crm' || /Сохранение в CRM/i.test(stage.name||''));
@@ -1258,14 +1283,14 @@ function migratePipelineConfig(stages){
   // independently of the summary-quality-architecture branch above, since a
   // config can already have the 5-judge summary architecture (from a much
   // earlier session) while still predating this rework entirely.
-  if(!hasConversationStoreArchitecture(result)){
+  if(!hasConversationStoreArchitecture(result, deletedOutKeys)){
     const defaultsForInsert=defaultPipeline();
     const findDefault=key=>defaultsForInsert.find(d=>d.outKey===key);
     let withNewStages=result.filter(stage=>!isOldFlatStore(stage));
-    withNewStages=insertMissingStageAfter(withNewStages,'facts','fact_check',()=>({...findDefault('fact_check'), id:s()}));
-    withNewStages=insertMissingStageAfter(withNewStages,'needs','need_check',()=>({...findDefault('need_check'), id:s()}));
-    withNewStages=insertMissingStageAfter(withNewStages,'outcome','outcome_check',()=>({...findDefault('outcome_check'), id:s()}));
-    withNewStages=insertMissingStageBefore(withNewStages,'summary','conversation_store',()=>({...findDefault('conversation_store'), id:s()}));
+    withNewStages=insertMissingStageAfter(withNewStages,'facts','fact_check',()=>({...findDefault('fact_check'), id:s()}), deletedOutKeys);
+    withNewStages=insertMissingStageAfter(withNewStages,'needs','need_check',()=>({...findDefault('need_check'), id:s()}), deletedOutKeys);
+    withNewStages=insertMissingStageAfter(withNewStages,'outcome','outcome_check',()=>({...findDefault('outcome_check'), id:s()}), deletedOutKeys);
+    withNewStages=insertMissingStageBefore(withNewStages,'summary','conversation_store',()=>({...findDefault('conversation_store'), id:s()}), deletedOutKeys);
     result=withNewStages;
   }
 
@@ -1306,6 +1331,8 @@ function migratePipelineConfig(stages){
       if(def.vendor) stage.vendor = def.vendor;
     }
   });
+
+  result=dedupeModuleVisibleChecks(result);
 
   return result;
 }
@@ -3891,24 +3918,25 @@ function renderStages(){
 
     // события
     el.querySelector('[data-toggle]').addEventListener('click',()=>el.classList.toggle('open'));
-    el.querySelector('[data-en]').addEventListener('change',e=>{stage.enabled=e.target.checked;el.classList.toggle('disabled',!stage.enabled);});
-    el.querySelector('[data-name]').addEventListener('input',e=>{stage.name=e.target.value;el.querySelector('.st-name').textContent=e.target.value;});
-    const ds=el.querySelector('[data-description]'); if(ds)ds.addEventListener('input',e=>stage.description=e.target.value);
+    el.querySelector('[data-en]').addEventListener('change',e=>{stage.enabled=e.target.checked;el.classList.toggle('disabled',!stage.enabled);savePipelineConfig();});
+    el.querySelector('[data-name]').addEventListener('input',e=>{stage.name=e.target.value;el.querySelector('.st-name').textContent=e.target.value;savePipelineConfig();});
+    const ds=el.querySelector('[data-description]'); if(ds)ds.addEventListener('input',e=>{stage.description=e.target.value;savePipelineConfig();});
     el.querySelector('[data-type]').addEventListener('change',e=>{
       stage.type=e.target.value;
       const modelStep = stage.type==='llm'||stage.type==='check';
       if(!modelStep && !stage.codeFn) stage.codeFn='validate';
       if(modelStep && !stage.model) stage.model='claude-sonnet-4-6';
+      savePipelineConfig();
       renderStages();
     });
-    el.querySelector('[data-outkey]').addEventListener('input',e=>stage.outKey=e.target.value.trim());
-    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>{stage.prompt=e.target.value; stage.userEdited=true;});
-    const mm=el.querySelector('[data-model]'); if(mm)mm.addEventListener('change',e=>{stage.model=e.target.value; stage.userEdited=true;});
-    const cf=el.querySelector('[data-codefn]'); if(cf)cf.addEventListener('change',e=>stage.codeFn=e.target.value);
-    const vn=el.querySelector('[data-vendor]'); if(vn)vn.addEventListener('input',e=>stage.vendor=e.target.value.trim());
-    el.querySelector('[data-up]').addEventListener('click',()=>{if(i>0){[pipeline[i-1],pipeline[i]]=[pipeline[i],pipeline[i-1]];renderStages();}});
-    el.querySelector('[data-down]').addEventListener('click',()=>{if(i<pipeline.length-1){[pipeline[i+1],pipeline[i]]=[pipeline[i],pipeline[i+1]];renderStages();}});
-    el.querySelector('[data-del]').addEventListener('click',()=>{pipeline.splice(i,1);renderStages();});
+    el.querySelector('[data-outkey]').addEventListener('input',e=>{stage.outKey=e.target.value.trim();forgetDeletedStageOutKey(stage.outKey);savePipelineConfig();});
+    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>{stage.prompt=e.target.value; stage.userEdited=true;savePipelineConfig();});
+    const mm=el.querySelector('[data-model]'); if(mm)mm.addEventListener('change',e=>{stage.model=e.target.value; stage.userEdited=true;savePipelineConfig();});
+    const cf=el.querySelector('[data-codefn]'); if(cf)cf.addEventListener('change',e=>{stage.codeFn=e.target.value;savePipelineConfig();});
+    const vn=el.querySelector('[data-vendor]'); if(vn)vn.addEventListener('input',e=>{stage.vendor=e.target.value.trim();savePipelineConfig();});
+    el.querySelector('[data-up]').addEventListener('click',()=>{if(i>0){syncPipelineFromEditor();[pipeline[i-1],pipeline[i]]=[pipeline[i],pipeline[i-1]];savePipelineConfig();renderStages();}});
+    el.querySelector('[data-down]').addEventListener('click',()=>{if(i<pipeline.length-1){syncPipelineFromEditor();[pipeline[i+1],pipeline[i]]=[pipeline[i],pipeline[i+1]];savePipelineConfig();renderStages();}});
+    el.querySelector('[data-del]').addEventListener('click',()=>{syncPipelineFromEditor();rememberDeletedStage(pipeline[i]);pipeline.splice(i,1);savePipelineConfig();renderStages();toast('Шаг удалён и сохранён');});
     el.querySelector('[data-save]').addEventListener('click',()=>{
       syncPipelineFromEditor();
       savePipelineConfig();
@@ -3930,10 +3958,13 @@ let toastT; function toast(msg){const t=document.getElementById('toast');t.textC
 
 document.getElementById('runBtn').addEventListener('click',runPipeline);
 document.getElementById('clearBtn').addEventListener('click',()=>{reportsEl.innerHTML='';emptyState.style.display='';reportsEl.appendChild(emptyState);progBar.style.width='0%';runStatus.textContent='готов';ctx={};});
-document.getElementById('addStage').addEventListener('click',()=>{pipeline.push({id:s(),enabled:true,type:'llm',name:'Новый шаг',model:'claude-sonnet-4-6',outKey:'step'+(pipeline.length+1),prompt:'Промт... {{transcript}}'});renderStages();});
+document.getElementById('addStage').addEventListener('click',()=>{syncPipelineFromEditor();pipeline.push({id:s(),enabled:true,type:'llm',name:'Новый шаг',model:'claude-sonnet-4-6',outKey:'step'+(pipeline.length+1),prompt:'Промт... {{transcript}}'});savePipelineConfig();renderStages();});
 document.getElementById('preset').addEventListener('change',e=>{
+  syncPipelineFromEditor();
+  deletedStageOutKeys=[];
   if(e.target.value==='default'){pipeline=defaultPipeline();}
   else{pipeline=blankPipeline();}
+  savePipelineConfig();
   renderStages();
 });
 
