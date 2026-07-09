@@ -55,6 +55,12 @@ describe("PlaygroundScreen", () => {
               confidence: 0.9,
               qualityScore: 92,
               decision: "AUTO_SAVE",
+              productName: project.name,
+              moduleName: "AI-саммари звонков",
+              pipelineName: "AI-саммари звонков",
+              finalScore: 92,
+              finalDecision: "AUTO_SAVE",
+              summary: "Клиент готов к следующему шагу.",
             },
           },
         }),
@@ -63,7 +69,19 @@ describe("PlaygroundScreen", () => {
 
     const runs = usePlaygroundTestRunStore.getState().getRuns(project.id);
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ id: "playground_test_run_fixed", projectId: project.id, status: "succeeded", costUsd: 0.012, qualityScore: 92 });
+    expect(runs[0]).toMatchObject({
+      id: "playground_test_run_fixed",
+      projectId: project.id,
+      status: "succeeded",
+      costUsd: 0.012,
+      qualityScore: 92,
+      productName: project.name,
+      moduleName: "AI-саммари звонков",
+      pipelineName: "AI-саммари звонков",
+      finalScore: 92,
+      finalDecision: "AUTO_SAVE",
+      summary: "Клиент готов к следующему шагу.",
+    });
   });
 
   it("records a PlaygroundTestRun from an older iframe message without productId", () => {

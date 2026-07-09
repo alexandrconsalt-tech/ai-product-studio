@@ -229,10 +229,23 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
  */
 export function DashboardScreen() {
   const { snapshot, selectProject } = useRepositoryStore();
-  const { getRuns, runsByProjectId } = usePlaygroundTestRunStore();
+  const { runsByProjectId, refreshFromStorage } = usePlaygroundTestRunStore();
   const [range, setRange] = React.useState<RangeOption>("all");
   const [projectFilter, setProjectFilter] = React.useState<string>(ALL_PROJECTS);
   const projects = React.useMemo(() => snapshot?.projects ?? [], [snapshot?.projects]);
+
+  React.useEffect(() => {
+    refreshFromStorage();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshFromStorage();
+    };
+    window.addEventListener("storage", refreshFromStorage);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("storage", refreshFromStorage);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refreshFromStorage]);
 
   const allProjectRuns = React.useMemo(
     () => Object.values(runsByProjectId).flat().sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()),
