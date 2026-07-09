@@ -53,10 +53,10 @@ function loadStoredStages(productId: string): AdCopyStageConfig[] | null {
     const raw = window.localStorage.getItem(configStorageKey(productId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
+    if (Array.isArray(parsed)) {
       return parsed;
     }
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.stages) && parsed.stages.length > 0) {
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.stages)) {
       return parsed.stages;
     }
     return null;
