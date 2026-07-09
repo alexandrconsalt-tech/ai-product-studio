@@ -2,18 +2,38 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - dev
+      - "feature/**"
   pull_request:
+    branches:
+      - dev
+      - main
 
 jobs:
-  lint-and-test:
+  quality-gates:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm test
+      - name: Scope guard
+        run: npm run guard:scope
+      - name: Module guard
+        run: npm run guard:module
+      - name: Logic guard
+        run: npm run guard:logic
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Smoke/regression
+        run: npm run smoke
