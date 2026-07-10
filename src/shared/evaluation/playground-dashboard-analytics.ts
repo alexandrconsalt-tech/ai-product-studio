@@ -109,6 +109,10 @@ function scoreFromRecord(value: unknown): number | undefined {
   return (
     normalizeScore(record.score) ??
     normalizeScore(record.summary_quality_score) ??
+    // Кастомные (user-edited) проверщики Pipeline Lab v3 кладут оценку в
+    // scores.overall (шкала 0-100) -- то же чтение добавлено в сам
+    // pipeline-lab-v3.html (2026-07-10, fix "все этапы показывают 90%").
+    normalizeScore(asRecord(record.scores)?.overall) ??
     normalizeScore(asRecord(record.raw)?.score) ??
     normalizeScore(asRecord(record.fact_check_quality)?.score) ??
     normalizeScore(asRecord(record.need_check_quality)?.score) ??
