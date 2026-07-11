@@ -36,4 +36,23 @@ describe("AdCopyTestBenchPanel pipeline steps", () => {
     const afterDelete = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as { stages?: unknown[] };
     expect(afterDelete.stages).toEqual([]);
   });
+
+  it("selects one of the newly added models for a stage, persists it, and keeps it after remount", () => {
+    const { unmount } = render(<AdCopyTestBenchPanel productId={productId} onRunComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Пайплайн/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Агент извлечения преимуществ/ }));
+
+    const modelSelect = screen.getByLabelText("Модель") as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: "qwen3-235b-a22b-2507" } });
+
+    const persisted = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as { stages?: { id: string; model?: string }[] };
+    expect(persisted.stages?.find((stage) => stage.id === "benefits")?.model).toBe("qwen3-235b-a22b-2507");
+
+    unmount();
+    render(<AdCopyTestBenchPanel productId={productId} onRunComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Пайплайн/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Агент извлечения преимуществ/ }));
+
+    expect((screen.getByLabelText("Модель") as HTMLSelectElement).value).toBe("qwen3-235b-a22b-2507");
+  });
 });

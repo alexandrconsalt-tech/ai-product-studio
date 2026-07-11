@@ -15,6 +15,7 @@ import {
   loadOpenAiApiKey,
   loadSelectedLlmProvider,
   maskApiKey,
+  MODEL_OPTIONS,
   saveAiTunnelSettings,
   saveAnthropicApiKey,
   saveOpenAiApiKey,
@@ -151,8 +152,9 @@ function ApiKeysSection() {
         </Badge>
         <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
           <Select aria-label="Тестовая модель AI Tunnel" value={testModel} onChange={(event) => setTestModel(event.target.value)}>
-            <option value="gpt-5-mini">gpt-5-mini</option>
-            <option value="claude-sonnet-4.5">claude-sonnet-4.5</option>
+            {MODEL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.value}</option>
+            ))}
           </Select>
           <Button onClick={handleTestAiTunnel} disabled={!savedAiTunnelKey || isTesting}>{isTesting ? "Проверка…" : "Проверить подключение"}</Button>
         </div>

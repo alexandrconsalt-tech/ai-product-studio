@@ -152,6 +152,50 @@ function migrateLegacyRepositorySnapshot(value: unknown): unknown {
   };
 }
 
+// Legacy demo projects retired from the visible product list (kept as fixture
+// data in demo-data.ts for tests, e.g. pipeline-executor.demo.test.ts's use of
+// the "AI Call Analysis" 8-node pipeline) -- pruned here, at the repository
+// boundary, rather than removed from demo-data.ts, so existing tests that
+// import demoSnapshot directly are unaffected. Applied on every load() (not
+// just first-time seeding) so browsers with an already-persisted snapshot
+// from before this change also converge to the reduced product list.
+const RETIRED_DEMO_PROJECT_IDS = ["project_demo_call_analysis", "project_demo_lead_qualification", "project_demo_chat_classification", "project_ad_copy_generation"];
+
+function cascadeDeleteProject(snapshot: RepositorySnapshot, projectId: string): RepositorySnapshot {
+  const removedProducts = snapshot.products.filter((product) => product.projectId === projectId);
+  const removedArchitectures = snapshot.architectures.filter((architecture) => architecture.projectId === projectId);
+  const removedPipelines = snapshot.pipelines.filter((pipeline) => pipeline.projectId === projectId);
+  const removedPipelineIds = new Set(removedPipelines.map((pipeline) => pipeline.id));
+  const removedRuns = snapshot.runs.filter((run) => removedPipelineIds.has(run.pipelineId));
+
+  // See src/shared/stores/project-store.ts deleteProject for the same cascade rule
+  // (CLAUDE.md §63 debt item 4) — kept in sync deliberately.
+  const removedTargetIds = new Set<string>([
+    projectId,
+    ...removedProducts.map((product) => product.id),
+    ...removedArchitectures.map((architecture) => architecture.id),
+    ...removedPipelines.map((pipeline) => pipeline.id),
+    ...removedRuns.map((run) => run.id),
+  ]);
+
+  return {
+    ...snapshot,
+    projects: snapshot.projects.filter((project) => project.id !== projectId),
+    products: snapshot.products.filter((product) => product.projectId !== projectId),
+    architectures: snapshot.architectures.filter((architecture) => architecture.projectId !== projectId),
+    pipelines: snapshot.pipelines.filter((pipeline) => pipeline.projectId !== projectId),
+    runs: snapshot.runs.filter((run) => !removedPipelineIds.has(run.pipelineId)),
+    reviews: snapshot.reviews.filter((review) => !removedTargetIds.has(review.targetId)),
+  };
+}
+
+function withoutRetiredDemoProjects(snapshot: RepositorySnapshot): RepositorySnapshot {
+  return RETIRED_DEMO_PROJECT_IDS.reduce(
+    (acc, projectId) => (acc.projects.some((project) => project.id === projectId) ? cascadeDeleteProject(acc, projectId) : acc),
+    snapshot,
+  );
+}
+
 function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): RepositorySnapshot {
   const existingProject = snapshot.projects.find((project) => project.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || /^Модуль транскрибации и AI-саммари звонков/i.test(project.name));
   const targetProjectId = existingProject?.id ?? TRANSCRIPTION_SUMMARY_PROJECT_ID;
@@ -228,12 +272,12 @@ function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): Repositor
 export class LocalStorageProjectRepository implements ProjectRepository {
   load(): RepositorySnapshot {
     if (typeof window === "undefined") {
-      return withTranscriptionSummaryModule(cloneSnapshot(demoSnapshot));
+      return withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
     }
 
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      const seeded = withTranscriptionSummaryModule(cloneSnapshot(demoSnapshot));
+      const seeded = withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
       this.save(seeded);
       return seeded;
     }
@@ -243,12 +287,12 @@ export class LocalStorageProjectRepository implements ProjectRepository {
     const parsedSnapshot = RepositorySnapshotSchema.safeParse(migrated);
     if (!parsedSnapshot.success) {
       window.localStorage.setItem(BACKUP_STORAGE_KEY, raw);
-      const seeded = withTranscriptionSummaryModule(cloneSnapshot(demoSnapshot));
+      const seeded = withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
       this.save(seeded);
       return seeded;
     }
 
-    const snapshot = withTranscriptionSummaryModule(parsedSnapshot.data);
+    const snapshot = withTranscriptionSummaryModule(withoutRetiredDemoProjects(parsedSnapshot.data));
     this.save(snapshot);
     return snapshot;
   }
@@ -263,7 +307,7 @@ export class LocalStorageProjectRepository implements ProjectRepository {
   }
 
   reset(): RepositorySnapshot {
-    const seeded = withTranscriptionSummaryModule(cloneSnapshot(demoSnapshot));
+    const seeded = withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
     this.save(seeded);
     return seeded;
   }
@@ -277,31 +321,7 @@ export class LocalStorageProjectRepository implements ProjectRepository {
   }
 
   deleteProject(snapshot: RepositorySnapshot, projectId: string): RepositorySnapshot {
-    const removedProducts = snapshot.products.filter((product) => product.projectId === projectId);
-    const removedArchitectures = snapshot.architectures.filter((architecture) => architecture.projectId === projectId);
-    const removedPipelines = snapshot.pipelines.filter((pipeline) => pipeline.projectId === projectId);
-    const removedPipelineIds = new Set(removedPipelines.map((pipeline) => pipeline.id));
-    const removedRuns = snapshot.runs.filter((run) => removedPipelineIds.has(run.pipelineId));
-
-    // See src/shared/stores/project-store.ts deleteProject for the same cascade rule
-    // (CLAUDE.md §63 debt item 4) — kept in sync deliberately.
-    const removedTargetIds = new Set<string>([
-      projectId,
-      ...removedProducts.map((product) => product.id),
-      ...removedArchitectures.map((architecture) => architecture.id),
-      ...removedPipelines.map((pipeline) => pipeline.id),
-      ...removedRuns.map((run) => run.id),
-    ]);
-
-    return {
-      ...snapshot,
-      projects: snapshot.projects.filter((project) => project.id !== projectId),
-      products: snapshot.products.filter((product) => product.projectId !== projectId),
-      architectures: snapshot.architectures.filter((architecture) => architecture.projectId !== projectId),
-      pipelines: snapshot.pipelines.filter((pipeline) => pipeline.projectId !== projectId),
-      runs: snapshot.runs.filter((run) => !removedPipelineIds.has(run.pipelineId)),
-      reviews: snapshot.reviews.filter((review) => !removedTargetIds.has(review.targetId)),
-    };
+    return cascadeDeleteProject(snapshot, projectId);
   }
 
   upsertProduct(snapshot: RepositorySnapshot, product: RepositorySnapshot["products"][number]): RepositorySnapshot {

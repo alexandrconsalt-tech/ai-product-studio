@@ -167,4 +167,25 @@ describe("PlaygroundScreen", () => {
     expect(iframeUrl.searchParams.get("preset")).toBe("blank");
     expect(screen.queryByText("Для этого продукта ещё не создан Pipeline.")).not.toBeInTheDocument();
   });
+
+  it("opens the transcription-summary module (also a no-domain-Pipeline product) with the full default pipeline, not the blank preset", () => {
+    const project = {
+      ...demoSnapshot.projects[0],
+      id: "project_transcription_summary_module",
+      name: "Модуль транскрибации и AI-саммари звонков",
+      pipelineId: undefined,
+      architectureId: undefined,
+    };
+    useRepositoryStore.setState({
+      snapshot: { ...demoSnapshot, projects: [project], pipelines: [] },
+      selectedProjectId: project.id,
+    });
+
+    render(<PlaygroundScreen />);
+
+    const iframe = screen.getByTitle("Pipeline Lab v3") as HTMLIFrameElement;
+    const iframeUrl = new URL(iframe.src);
+    expect(iframeUrl.searchParams.get("productId")).toBe(project.id);
+    expect(iframeUrl.searchParams.has("preset")).toBe(false);
+  });
 });
