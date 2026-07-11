@@ -25,6 +25,16 @@ import type { AdCopyPipelineResult } from "../lib/ad-copy-test-bench";
 
 const IFRAME_SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
+// Same id local-storage-repository.ts's withTranscriptionSummaryModule() injects.
+// This product has no domain Pipeline entity (falls into the `!pipeline` branch
+// below, same as any hypothetical future no-pipeline product), but -- unlike a
+// brand-new product that should start from a blank canvas -- it's meant to ship
+// with the full featured pipeline (Fact/Need/Outcome Check, Conversation Store,
+// the 5 Summary judges, Summary Quality Gate) by default, same as Pipeline Lab
+// v3's own demo product. A saved localStorage config (once the user has run/
+// edited it) always wins over this regardless -- this only decides what a
+// browser with no saved config yet sees the first time.
+const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
 const TEST_BENCH_SOURCE: PlaygroundTestRunSource = "product-test-bench";
 const AD_COPY_PIPELINE_ID = "pipeline_ad_copy_generation";
 
@@ -365,7 +375,12 @@ export function PlaygroundScreen() {
             <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
           </div>
           <Card className="h-[75vh] min-h-[560px] overflow-hidden p-0">
-            <PipelineLabV3Screen productId={selectedProject.id} productName={selectedProject.name} preset="blank" onRunComplete={handleRunComplete} />
+            <PipelineLabV3Screen
+              productId={selectedProject.id}
+              productName={selectedProject.name}
+              preset={selectedProject.id === TRANSCRIPTION_SUMMARY_PROJECT_ID ? undefined : "blank"}
+              onRunComplete={handleRunComplete}
+            />
           </Card>
         </Section>
       ) : pipeline.id === AD_COPY_PIPELINE_ID ? (

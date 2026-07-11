@@ -112,6 +112,57 @@ describe("LocalStorageProjectRepository.deleteProject", () => {
   });
 });
 
+describe("LocalStorageProjectRepository retired demo project pruning", () => {
+  it("removes the 4 retired demo projects (and their products/architectures/pipelines/runs/reviews) from an already-persisted snapshot on load", () => {
+    const repo = new LocalStorageProjectRepository();
+
+    const retiredIds = ["project_demo_call_analysis", "project_demo_lead_qualification", "project_demo_chat_classification", "project_ad_copy_generation"];
+    const retiredProjects = retiredIds.map((id) => createProject({ name: id, id }));
+    const retiredProducts = retiredProjects.map((project) => createProduct({ projectId: project.id }));
+    const retiredArchitectures = retiredProjects.map((project, i) => createArchitecture({ projectId: project.id, productId: retiredProducts[i].id }));
+    const retiredPipelines = retiredProjects.map((project, i) => createPipeline({ projectId: project.id, architectureId: retiredArchitectures[i].id }));
+    const retiredRuns = retiredPipelines.map((pipeline) => createRun({ pipelineId: pipeline.id, input: "x" }));
+    const retiredReviews = retiredProjects.map((project) => createReview({ targetType: "project", targetId: project.id, status: "approved", score: 90 }));
+
+    const keptProject = createProject({ name: "Pipeline Lab v3 — Анализ звонков (Недвижимость)", id: "project_demo_pipeline_lab_v3" });
+    const keptProduct = createProduct({ projectId: keptProject.id });
+
+    const legacySnapshot: RepositorySnapshot = {
+      ...emptySnapshot(),
+      projects: [...retiredProjects, keptProject],
+      products: [...retiredProducts, keptProduct],
+      architectures: retiredArchitectures,
+      pipelines: retiredPipelines,
+      runs: retiredRuns,
+      reviews: retiredReviews,
+    };
+
+    stubLocalStorage({ [STORAGE_KEY]: JSON.stringify(legacySnapshot) });
+
+    const loaded = repo.load();
+
+    const loadedIds = loaded.projects.map((project) => project.id);
+    for (const retiredId of retiredIds) expect(loadedIds).not.toContain(retiredId);
+    expect(loadedIds).toContain(keptProject.id);
+    expect(loaded.products.some((product) => product.projectId === keptProject.id)).toBe(true);
+    expect(loaded.pipelines).toHaveLength(0);
+    expect(loaded.runs).toHaveLength(0);
+    expect(loaded.reviews).toHaveLength(0);
+  });
+
+  it("leaves a user-created project with an unrelated id untouched", () => {
+    const repo = new LocalStorageProjectRepository();
+    const userProject = createProject({ name: "My Own Product" });
+    const legacySnapshot: RepositorySnapshot = { ...emptySnapshot(), projects: [userProject] };
+
+    stubLocalStorage({ [STORAGE_KEY]: JSON.stringify(legacySnapshot) });
+
+    const loaded = repo.load();
+
+    expect(loaded.projects.some((project) => project.id === userProject.id)).toBe(true);
+  });
+});
+
 describe("LocalStorageProjectRepository.load", () => {
   it("migrates legacy React Flow edge fields from localStorage before schema validation", () => {
     const repo = new LocalStorageProjectRepository();

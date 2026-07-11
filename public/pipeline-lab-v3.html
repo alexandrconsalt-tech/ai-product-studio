@@ -298,11 +298,20 @@ const TYPE_META = {
 };
 // Каждая модель вызывает своего реального вендора напрямую из браузера
 // (см. callModel) -- используется свой сохранённый API-ключ на модель.
-const MODEL_VENDOR = { 'gpt-5-mini':'openai', 'claude-sonnet-4-6':'anthropic', 'deepseek-v3.2-exp':'openai' };
+const MODEL_VENDOR = {
+  'gpt-5-mini':'openai', 'claude-sonnet-4-6':'anthropic', 'deepseek-v3.2-exp':'openai',
+  'deepseek-v4-flash':'openai', 'gpt-4o-mini':'openai', 'gemini-2.5-flash-lite':'openai',
+  'qwen3-235b-a22b-2507':'openai', 'mistral-small-3.2-24b-instruct':'openai',
+};
 const MODEL_OPTIONS = [
   {v:'gpt-5-mini',        t:'GPT-5 mini (OpenAI)'},
   {v:'claude-sonnet-4.5', t:'Claude Sonnet 4.5 (Anthropic)'},
   {v:'deepseek-v3.2-exp', t:'DeepSeek V3.2 Exp (AI Tunnel)'},
+  {v:'deepseek-v4-flash', t:'DeepSeek V4 Flash (AI Tunnel)'},
+  {v:'gpt-4o-mini',       t:'GPT-4o Mini (AI Tunnel)'},
+  {v:'gemini-2.5-flash-lite', t:'Gemini 2.5 Flash Lite (AI Tunnel)'},
+  {v:'qwen3-235b-a22b-2507',  t:'Qwen3 235B A22B (AI Tunnel)'},
+  {v:'mistral-small-3.2-24b-instruct', t:'Mistral Small 3.2 24B (AI Tunnel)'},
 ];
 const LLM_PROVIDER_OPTIONS = [
   {v:'ai-tunnel',t:'AI Tunnel'},
@@ -315,7 +324,11 @@ const CODE_FN_LIST = ['stt','validate','store','factCheckCode','needCheckCode','
 // Ориентировочная стоимость за 1000 токенов -- оценка для отображения
 // расходов теста, а не точный биллинг вендора (реальная стоимость
 // зависит от актуального прайса и соотношения input/output токенов).
-const COST_PER_1K_TOKENS = { 'gpt-5-mini': 0.0006, 'claude-sonnet-4-6': 0.006, 'deepseek-v3.2-exp': 0.0004 };
+const COST_PER_1K_TOKENS = {
+  'gpt-5-mini': 0.0006, 'claude-sonnet-4-6': 0.006, 'deepseek-v3.2-exp': 0.0004,
+  'deepseek-v4-flash': 0.0003, 'gpt-4o-mini': 0.0003, 'gemini-2.5-flash-lite': 0.0002,
+  'qwen3-235b-a22b-2507': 0.0003, 'mistral-small-3.2-24b-instruct': 0.0002,
+};
 function estimateCost(model, tokens){
   const rate = COST_PER_1K_TOKENS[model] ?? 0.001;
   return (tokens/1000)*rate;

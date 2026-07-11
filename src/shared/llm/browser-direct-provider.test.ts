@@ -9,6 +9,8 @@ import {
   loadAiTunnelBaseUrl,
   loadSelectedLlmProvider,
   maskApiKey,
+  MODEL_OPTIONS,
+  MODEL_VENDOR,
   saveAiTunnelSettings,
   saveAnthropicApiKey,
   saveOpenAiApiKey,
@@ -106,7 +108,16 @@ describe("AI Tunnel browser provider", () => {
     expect(maskApiKey("sk-aitunnel-secret-VQeY")).toBe("sk-aitunne…VQeY");
   });
 
-  it.each(["gpt-5-mini", "claude-sonnet-4-6"])("calls %s through the OpenAI-compatible AI Tunnel endpoint", async (model) => {
+  it.each([
+    "gpt-5-mini",
+    "claude-sonnet-4-6",
+    "deepseek-v3.2-exp",
+    "deepseek-v4-flash",
+    "gpt-4o-mini",
+    "gemini-2.5-flash-lite",
+    "qwen3-235b-a22b-2507",
+    "mistral-small-3.2-24b-instruct",
+  ])("calls %s through the OpenAI-compatible AI Tunnel endpoint", async (model) => {
     saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
     saveSelectedLlmProvider("ai-tunnel");
     const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
@@ -128,5 +139,39 @@ describe("AI Tunnel browser provider", () => {
     await expect(testAiTunnelConnection("gpt-5-mini")).resolves.toBe("invalid-key");
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body).toEqual({ model: "gpt-5-mini", messages: [{ role: "user", content: "Ответь одним словом: работает" }], temperature: 0, max_tokens: 2000 });
+  });
+});
+
+describe("model catalog", () => {
+  const newModels: Readonly<Record<string, string>> = {
+    "deepseek-v4-flash": "DeepSeek V4 Flash (AI Tunnel)",
+    "gpt-4o-mini": "GPT-4o Mini (AI Tunnel)",
+    "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite (AI Tunnel)",
+    "qwen3-235b-a22b-2507": "Qwen3 235B A22B (AI Tunnel)",
+    "mistral-small-3.2-24b-instruct": "Mistral Small 3.2 24B (AI Tunnel)",
+  };
+
+  it("lists all 5 newly added models with their AI Tunnel model id and label", () => {
+    for (const [value, label] of Object.entries(newModels)) {
+      expect(MODEL_OPTIONS).toContainEqual({ value, label });
+    }
+  });
+
+  it("does not remove or rename any previously existing model option", () => {
+    const existingValues = ["gpt-5-mini", "claude-sonnet-4.5", "deepseek-v3.2-exp"];
+    for (const value of existingValues) {
+      expect(MODEL_OPTIONS.some((option) => option.value === value)).toBe(true);
+    }
+  });
+
+  it("maps every new model to a resolvable vendor for the callModelByName fallback path", () => {
+    for (const value of Object.keys(newModels)) {
+      expect(MODEL_VENDOR[value]).toBeDefined();
+    }
+  });
+
+  it("has no duplicate model ids", () => {
+    const values = MODEL_OPTIONS.map((option) => option.value);
+    expect(new Set(values).size).toBe(values.length);
   });
 });

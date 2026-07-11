@@ -248,12 +248,22 @@ export const MODEL_VENDOR: Readonly<Record<string, "openai" | "anthropic">> = {
   "gpt-5-mini": "openai",
   "claude-sonnet-4-6": "anthropic",
   "deepseek-v3.2-exp": "openai",
+  "deepseek-v4-flash": "openai",
+  "gpt-4o-mini": "openai",
+  "gemini-2.5-flash-lite": "openai",
+  "qwen3-235b-a22b-2507": "openai",
+  "mistral-small-3.2-24b-instruct": "openai",
 };
 
 export const MODEL_OPTIONS: readonly { value: string; label: string }[] = [
   { value: "gpt-5-mini", label: "GPT-5 mini (OpenAI)" },
   { value: "claude-sonnet-4.5", label: "Claude Sonnet 4.5 (Anthropic)" },
   { value: "deepseek-v3.2-exp", label: "DeepSeek V3.2 Exp (AI Tunnel)" },
+  { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash (AI Tunnel)" },
+  { value: "gpt-4o-mini", label: "GPT-4o Mini (AI Tunnel)" },
+  { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (AI Tunnel)" },
+  { value: "qwen3-235b-a22b-2507", label: "Qwen3 235B A22B (AI Tunnel)" },
+  { value: "mistral-small-3.2-24b-instruct", label: "Mistral Small 3.2 24B (AI Tunnel)" },
 ];
 
 /**
