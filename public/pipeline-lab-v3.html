@@ -1138,6 +1138,9 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 // vendor, not just prompt/model, when promptVersion is behind -- otherwise
 // an already-migrated browser from the previous pass would keep calling
 // these as plain 'check' stages forever.
+// 2026-07-10: scoring-honesty pass -- кастомный формат проверщиков
+// (scores.overall/decision) читается кодовыми этапами, card-context фильтр
+// гейта, аддитивный CARD_CONTEXT_BLOCK для user-edited судьи фактов.
 const PIPELINE_VERSION = 12;
 let deletedStageOutKeys = [];
 function savePipelineConfig(){
@@ -1347,6 +1350,30 @@ function migratePipelineConfig(stages, deletedOutKeys){
       if(def.codeFn) stage.codeFn = def.codeFn; else if(def.type!=='hybrid' && def.type!=='code') delete stage.codeFn;
       if(def.vendor) stage.vendor = def.vendor;
     }
+  });
+
+  // 2026-07-10 точечный хотфикс для user-edited промптов судьи критических
+  // фактов: без блока "КАРТОЧКА CRM" судья требует в саммари адрес/цену/этаж/
+  // площадь/имя/телефон -- ровно то, что судья формата ЗАПРЕЩАЕТ, и любое
+  // саммари гарантированно наказывается одним из двух. Кастомные (userEdited)
+  // промпты никогда не перезаписываются целиком (правило V8.4), поэтому блок
+  // АДДИТИВНО приписывается в начало промпта -- один раз, идемпотентно
+  // (повторная загрузка страницы ничего не дублирует), остальной текст
+  // пользователя не меняется ни на символ.
+  const CARD_CONTEXT_BLOCK=[
+    '==================================================',
+    'ВАЖНЫЙ КОНТЕКСТ — КАРТОЧКА CRM (добавлено платформой)',
+    '==================================================',
+    'Следующий агент читает саммари ВМЕСТЕ с карточкой CRM и structured store, где уже есть: имя и телефон клиента, полный адрес объекта (ЖК/улица/дом), этаж, тип объекта, площадь и цена.',
+    '- НЕ считай отсутствие этих данных в саммари пропуском критически важного факта и НЕ включай их в missed_critical_facts: их отсутствие в тексте саммари — требование стандарта (их запрещает судья формата).',
+    '- Оценивай только информацию, которой нет в карточке: намерение и цель клиента, источник средств, срок сделки, возражения и сомнения, договорённости, следующий шаг, важные ограничения клиента.'
+  ].join('\n');
+  result.forEach(stage=>{
+    if(!stage || typeof stage.prompt!=='string' || !stage.prompt.trim()) return;
+    const isCriticalFactsJudge = stage.outKey==='critical_facts_check' || /критически\s+важных\s+фактов/i.test(stage.name||'');
+    if(!isCriticalFactsJudge) return;
+    if(/КАРТОЧКА CRM/i.test(stage.prompt)) return;
+    stage.prompt = CARD_CONTEXT_BLOCK + '\n\n' + stage.prompt;
   });
 
   return result;
@@ -1632,17 +1659,38 @@ function buildSummaryJudgeCriteria(key, raw){
   return [criterion('JSON и базовый результат', raw.status==='fail', raw.status==='warning', raw.explanation||'Проверен результат этапа.')];
 }
 
+// 2026-07-10 fix "все этапы показывают одинаковые 90%": раньше любой llm/check
+// этап, вернувший валидный JSON без верхнеуровневого поля score, получал
+// заглушку 90% "за то, что JSON распарсился". Кастомные проверщики кладут
+// реальную оценку в scores.overall (0-100) и decision -- теперь читаем их.
+// Агенты извлечения (facts/needs/outcome), у которых своей оценки нет по
+// смыслу, честно возвращают null -> UI показывает "—" вместо фиктивных 90%.
+function decisionToScore(decision){
+  const d=String(decision||'').toUpperCase();
+  if(d==='PASS'||d==='AUTO_SAVE') return 92;
+  if(d==='WARNING'||d==='PASS_WITH_WARNINGS') return 80;
+  if(d==='MANUAL_REVIEW'||d==='REVIEW') return 65;
+  if(d==='FAIL'||d==='RETRY'||d==='RETRY_STT'||d==='STOP') return 40;
+  return null;
+}
 function stageScoreFromOutput(stage, rep){
   const out=rep.output||{};
   if(out.summary_quality_score!=null) return Number(out.summary_quality_score);
   if(stage.codeFn==='stt' && out.quality && out.quality.stt_quality_score!=null) return Number(out.quality.stt_quality_score)*100;
   if(stage.codeFn==='conversationStore' && out.quality && out.quality.store_score!=null) return Number(out.quality.store_score)*100;
   if(out.score!=null) return Number(out.score)>1?Number(out.score):Number(out.score)*100;
-  if(out.scores && out.scores.overall!=null) return Number(out.scores.overall)>1?Number(out.scores.overall):Number(out.scores.overall)*100;
+  if(out.scores && typeof out.scores.overall==='number') return Number(out.scores.overall)>1?Number(out.scores.overall):Number(out.scores.overall)*100;
   if(stage.codeFn==='validate' && out.score!=null) return Number(out.score)*100;
   if(stage.codeFn==='store' && out.score!=null) return Number(out.score)*100;
   if(stage.codeFn==='stt') return rep.status==='ok'?90:(rep.status==='warn'?80:60);
-  if(stage.type==='llm' || stage.type==='check') return rep.parseErr?0:null;
+  if(stage.type==='llm' || stage.type==='check' || stage.type==='hybrid'){
+    if(rep.parseErr) return 0;
+    const fromDecision=decisionToScore(out.decision);
+    if(fromDecision!=null) return fromDecision;
+    // Валидный JSON без какой-либо самооценки (агенты извлечения):
+    // оценки нет -- это не 90% и не 0%, это "оценивает следующий проверщик".
+    return null;
+  }
   if(rep.status==='bad') return 0;
   if(rep.status==='attn') return 60;
   if(rep.status==='warn') return 75;
@@ -1661,7 +1709,8 @@ function metaStatusFromScore(score, rep){
 
 function buildStageMeta(stage, rep){
   const rawScore=stageScoreFromOutput(stage, rep);
-  const score=rawScore==null?null:Math.max(0, Math.min(100, Number(rawScore)||0));
+  const hasScore=rawScore!=null && Number.isFinite(Number(rawScore));
+  const score=hasScore ? Math.max(0, Math.min(100, Number(rawScore))) : null;
   const status=metaStatusFromScore(score, rep);
   const criteria=(rep.output&&Array.isArray(rep.output.criteria)) ? rep.output.criteria : [
     {name:score==null?'Структурная корректность':'Выполнение этапа', status, score:score==null?'—':score, explanation: rep.error || rep.parseErr || (score==null?'JSON получен. Смысловую точность оценивает следующий независимый Judge.':(status==='pass'?'Этап выполнен без критических проблем.':'Этап требует внимания.'))},
@@ -2012,9 +2061,20 @@ function cleanupSummaryFunding(output, transcript){
   return output;
 }
 
+// 2026-07-10 fix: кастомный пайплайн модуля пишет хранилище в ctx.conversation
+// (outKey 'conversation'), а не в канонический ctx.conversation_store. Все
+// читатели хранилища (карточка CRM, фильтр card-context фактов в гейте,
+// "Потребности клиента" в итоговом блоке) обязаны понимать оба ключа --
+// иначе карточка CRM выходит пустой, а фильтр "эти факты уже в карточке"
+// молча не срабатывает (именно это и произошло в реальном прогоне).
+function conversationStoreValue(ctx){
+  if(!ctx) return null;
+  const cs=ctx.conversation_store||ctx.conversation;
+  return cs&&typeof cs==='object'?cs:null;
+}
+
 function structuredStore(ctx){
-  const candidate=ctx&&(ctx.conversation_store||ctx.conversation);
-  const cs=candidate&&typeof candidate==='object'?candidate:{};
+  const cs=conversationStoreValue(ctx)||{};
   return {
     facts: moduleObjectFields(cs.facts),
     needs: moduleObjectFields(cs.needs),
@@ -2048,12 +2108,24 @@ function storeHasCardContext(ctx, item){
   return true;
 }
 
+// 2026-07-10 fix: поля, которые судья формата ЗАПРЕЩАЕТ писать в саммари
+// (адрес/улица/дом, цена, этаж, площадь, телефон, имя клиента), не могут
+// одновременно быть "пропущенным критическим фактом" -- иначе два судьи
+// требуют взаимоисключающего и саммари наказывается при любом исходе.
+// Такие факты демотируются в card-context безусловно, независимо от того,
+// нашлись ли они в structured store.
+function isForbiddenInSummaryFact(item){
+  const text=factText(item).toLowerCase();
+  return /(адрес|улиц|дом\b|корпус|цена|стоимост|площад|кв\.?\s*м|этаж|телефон|номер\s+телефона|контактн|имя\s+клиента|client_contact|address|price|floor|area|unit)/i.test(text);
+}
+
 function splitCriticalFactsBySummaryNeed(ctx, facts){
   const all=toList(facts);
   const card_context_facts=[];
   const summary_required_facts=[];
   for(const item of all){
-    if(isCardContextFact(item) && storeHasCardContext(ctx,item)) card_context_facts.push(item);
+    if(isForbiddenInSummaryFact(item)) card_context_facts.push(item);
+    else if(isCardContextFact(item) && storeHasCardContext(ctx,item)) card_context_facts.push(item);
     else summary_required_facts.push(item);
   }
   return {summary_required_facts, card_context_facts};
@@ -2137,7 +2209,10 @@ function hasOverstatedDealStatus(summary){
 
 function shortIssue(text){
   const s=String(text||'');
-  if(/invented_next_step|придум|следующ/i.test(s)) return 'Придуман следующий шаг';
+  // 2026-07-10 fix: раньше здесь стояло `|следующ`, из-за чего проблема со
+  // словом "последующие консультации" ложно превращалась в рекомендацию
+  // "Убрать выдуманный следующий шаг". Оставлены только точные маркеры.
+  if(/invented_next_step|придуман/i.test(s)) return 'Придуман следующий шаг';
   if(/готов[а-я\s]*к\s+сделке|overstated/i.test(s)) return 'Завышен статус: готов к сделке';
   if(/мотивац|цель|вложить/i.test(s)) return 'Пропущена мотивация клиента';
   if(/огранич|стресс|проблемн|услов/i.test(s)) return 'Пропущено ограничение клиента';
@@ -2254,7 +2329,16 @@ function wordCount(text){
 function isDamagedPhrase(text){
   const raw=String(text||'').trim();
   const clean=raw.toLowerCase();
-  if(/^(?:угу|ага|ну\s+да|да(?:[\s,-]+да)*|хорошо|понятно)[.!?…]*$/i.test(clean)) return false;
+  // 2026-07-10 fix (ложные срабатывания на реальном звонке): короткие живые
+  // реплики-подтверждения ("— Угу.", "— Ну да.", "— Угу, хорошо.") — нормальная
+  // разговорная речь, а не повреждённый STT. Раньше shortNoise считал их
+  // мусором (все слова попадают в фильтр филлеров) и топил оценку валидации.
+  // Пунктуация (тире в начале реплики, запятые) отбрасывается перед проверкой.
+  {
+    const normWords=(clean.replace(/[^а-яёa-z0-9\s-]/gi,' ').trim().split(/\s+/)).filter(Boolean);
+    const BACKCHANNEL=/^(?:угу|ага|да|да-да|ну|ясно|понятно|конечно|хорошо|ладно|ок|окей|спасибо|алло|здравствуйте|добрый|день|вечер|утро|до|свидания|всего|доброго|пока|договорились|верно|правильно)$/i;
+    if(normWords.length>0 && normWords.length<=4 && normWords.every(w=>BACKCHANNEL.test(w))) return false;
+  }
   const words=clean.match(/[а-яёa-z0-9]+/gi)||[];
   const meaningful=words.filter(w=>!/^(э+|а+|м+|ну|да|так|угу|ага|мм+|ээ+|дак)$/i.test(w));
   const hasMixedWord=words.some(w=>/[а-яёa-z]/i.test(w) && /\d/.test(w));
@@ -2291,6 +2375,11 @@ function detectRoleConfusion(turns){
     if(r==='Агент' && /(я хочу купить|мне нужна квартира|хочу продать|я ищу|меня интересует|мой бюджет|у меня ипотека)/i.test(text)){
       examples.push(turn.raw);
     }
+    // 2026-07-10 fix: убрана эвристика "Клиент говорит ≥35 слов с доменными
+    // словами (объект/договор/сделка...) => путаница ролей". На реальном
+    // звонке она ложно срабатывала на обычную длинную реплику клиентки о
+    // цели покупки и снижала оценку валидации на 15-20 п.п. Остаются только
+    // точные фразовые признаки выше ("я как агент", "я хочу купить" у агента).
   }
   return {has:examples.length>0, examples:[...new Set(examples)].slice(0,4)};
 }
@@ -2299,6 +2388,16 @@ function hasCompleteEnding(turns){
   if(!turns.length) return false;
   const last=turns[turns.length-1].text||'';
   const trimmed=last.trim();
+  // 2026-07-10 fix: короткое подтверждение/прощание в конце — нормальное
+  // завершение звонка, а не обрыв ("— Ну да.", "— Угу, хорошо.", "До свидания.").
+  // Проверяем ДО правила "меньше 3 слов = обрыв", которое их ложно резало;
+  // ведущее тире/кавычки реплики отбрасываются перед сравнением.
+  {
+    // ВАЖНО: \b в JS не работает с кириллицей -- граница слова задаётся
+    // явным lookahead на пробел/пунктуацию/конец строки.
+    const normalized=trimmed.replace(/^[\s—–\-"«»]+/,'').toLowerCase();
+    if(/^(?:угу|ага|да(?:-да)?|ну\s+да|хорошо|ладно|понятно|конечно|спасибо|договорились|до свидания|всего доброго|пока)(?=[\s,.!?…—-]|$)/i.test(normalized)) return true;
+  }
   if(wordCount(trimmed)<3) return false;
   if(/[а-яёa-z],\s*$/i.test(trimmed)) return false;
   if(/\b(?:и|а|ну|так|сейчас)$/i.test(trimmed)) return false;
@@ -2990,19 +3089,55 @@ const CODE_FUNCS = {
       facts.budget={...facts.budget, value_normalized:normalized};
     }
 
-    const factScore=judgeScore01(fc,'fact_check_quality');
-    const needScore=judgeScore01(nc,'need_check_quality');
-    const outcomeScore=judgeScore01(oc,'outcome_check_quality');
-    const fact_check_score=factScore??0;
-    const need_check_score=needScore??0;
-    const outcome_check_score=outcomeScore??0;
+    // 2026-07-10 fix "Store Score 13% при реально пройденных проверках":
+    // кастомные (user-edited) проверщики возвращают оценку как
+    // {scores:{overall:94}, decision:"PASS"} (шкала 0-100), а не как
+    // канонический {fact_check_quality:{score:0.95}}. Раньше код читал
+    // ТОЛЬКО канонический ключ, не находил его и считал все три проверки
+    // нулями -- store_score рушился до 13% и решение становилось FAIL,
+    // хотя судьи реально поставили 94/91/88. Теперь читаем оба формата,
+    // плюс decision-фолбэк, если числовой оценки нет вовсе.
+    function checkScore01(chk, qualityKey){
+      const q=chk&&chk[qualityKey];
+      if(q&&typeof q.score==='number') return clamp01(q.score>1?q.score/100:q.score);
+      if(chk&&chk.scores&&typeof chk.scores.overall==='number'){
+        const o=chk.scores.overall; return clamp01(o>1?o/100:o);
+      }
+      const d=String((q&&q.decision)||(chk&&chk.decision)||'').toUpperCase();
+      if(d==='PASS') return 0.95;
+      if(d==='WARNING'||d==='PASS_WITH_WARNINGS') return 0.8;
+      if(d==='MANUAL_REVIEW') return 0.6;
+      if(d==='FAIL'||d==='RETRY') return 0.3;
+      return 0;
+    }
+    function checkReadable(chk, qualityKey){
+      return !!(chk&&(chk[qualityKey]
+        || (chk.scores&&typeof chk.scores.overall==='number')
+        || typeof chk.decision==='string'));
+    }
+    function checkDecision(chk, qualityKey){
+      const q=chk&&chk[qualityKey];
+      return (q&&q.decision)||(chk&&chk.decision)||null;
+    }
+    const fact_check_score=checkScore01(fc,'fact_check_quality');
+    const need_check_score=checkScore01(nc,'need_check_quality');
+    const outcome_check_score=checkScore01(oc,'outcome_check_quality');
     const store_score=clamp01(validationScore*0.2 + fact_check_score*0.25 + need_check_score*0.25 + outcome_check_score*0.3);
 
-    const schemaInvalid=factScore==null || needScore==null || outcomeScore==null;
-    const hasVerifiedIntent=IS_TRANSCRIPTION_SUMMARY_MODULE ? Object.keys(facts).length>0 : !!(facts.intent && facts.intent.verified);
+    const schemaInvalid=!checkReadable(fc,'fact_check_quality') || !checkReadable(nc,'need_check_quality') || !checkReadable(oc,'outcome_check_quality');
+    // Требование "intent обязан быть verified" имеет смысл только для
+    // канонической схемы фактов (там есть ключ intent). Кастомные проверщики
+    // отдают факты списком (fact_1..fact_N) -- для них достаточно того, что
+    // verified-факты вообще есть. Модуль AI-саммари звонков (IS_TRANSCRIPTION_
+    // SUMMARY_MODULE) всегда использует свою собственную, более мягкую проверку
+    // "факты вообще есть" -- она сохраняется отдельно от canonicalFactShape.
+    const canonicalFactShape=!!fc.fact_check_quality;
+    const hasVerifiedIntent=IS_TRANSCRIPTION_SUMMARY_MODULE
+      ? Object.keys(facts).length>0
+      : (canonicalFactShape ? !!(facts.intent && facts.intent.verified) : Object.keys(facts).length>0);
     const hasVerifiedOutcome=Object.keys(outcome).length>0;
     const hasVerifiedNextStep=IS_TRANSCRIPTION_SUMMARY_MODULE ? Object.keys(outcome).length>0 : !!outcome.next_step;
-    const needsManualReview=judgeDecision(nc,'need_check_quality')==='MANUAL_REVIEW';
+    const needsManualReview=checkDecision(nc,'need_check_quality')==='MANUAL_REVIEW';
     const validationManualReview=validation.decision==='MANUAL_REVIEW';
 
     // Приоритет (первое совпадение побеждает): FAIL > MANUAL_REVIEW > PASS > PASS_WITH_WARNINGS (запасной)
@@ -3190,23 +3325,15 @@ const CODE_FUNCS = {
       a.explanation='Придуман следующий шаг.';
       a.raw.score=a.score; a.raw.status=a.status; a.raw.explanation=a.explanation;
     }
-    const scores=Object.fromEntries(judgeKeys.map(key=>[key, judges[key].score]));
-    // UNAVAILABLE-судьи (сетевая ошибка/таймаут, не провал по существу)
-    // исключаются из расчёта, а не считаются как 0 -- их вес перераспределяется
-    // между доступными судьями, чтобы одна сетевая ошибка не топила весь Summary.
-    const availableKeys=judgeKeys.filter(k=>judges[k].status!=='unavailable');
-    const unavailableKeys=judgeKeys.filter(k=>judges[k].status==='unavailable');
-    const availableWeightSum=availableKeys.reduce((s,k)=>s+weights[k],0) || 1;
-    let summary_quality_score=availableKeys.reduce((sum,key)=>sum+scores[key]*(weights[key]/availableWeightSum),0);
-
     const truth=judges.truth_check.raw;
     const criticalFacts=judges.critical_facts_check.raw;
     const utility=judges.context_utility_check.raw;
     const action=judges.action_check.raw;
     const presentation=judges.presentation_check.raw;
-    const originalCriticalMisses=toList(criticalFacts.missed_critical_facts);
+    // 2026-07-10: card-context фильтр перенесён ДО подсчёта весовой оценки,
+    // чтобы скорректированный балл судьи фактов реально попадал в score.
     const criticalFactSplit=IS_TRANSCRIPTION_SUMMARY_MODULE
-      ? splitCriticalFactsBySummaryNeed(ctx, originalCriticalMisses)
+      ? splitCriticalFactsBySummaryNeed(ctx, criticalFacts.missed_critical_facts)
       : {summary_required_facts:toList(criticalFacts.missed_critical_facts), card_context_facts:[]};
     if(IS_TRANSCRIPTION_SUMMARY_MODULE){
       criticalFacts.summary_required_facts=criticalFactSplit.summary_required_facts;
@@ -3215,18 +3342,31 @@ const CODE_FUNCS = {
         ? 'Эти данные доступны в structured store / CRM-карточке и не обязательны в тексте summary.'
         : '';
       criticalFacts.missed_critical_facts=criticalFactSplit.summary_required_facts;
-      if(originalCriticalMisses.length>0 && criticalFactSplit.summary_required_facts.length===0 && criticalFactSplit.card_context_facts.length>0){
-        const judge=judges.critical_facts_check;
-        judge.score=Math.max(90,judge.score);
-        judge.status='pass';
-        judge.explanation='Все отмеченные судьёй поля уже доступны в CRM-карточке или structured store и не обязаны дублироваться в Summary.';
-        judge.raw.score=judge.score;
-        judge.raw.status=judge.status;
-        judge.raw.explanation=judge.explanation;
-        scores.critical_facts_check=judge.score;
-        summary_quality_score=availableKeys.reduce((sum,key)=>sum+scores[key]*(weights[key]/availableWeightSum),0);
+      // 2026-07-10 fix "судьи требуют взаимоисключающего": если судья фактов
+      // провалил саммари ТОЛЬКО из-за полей, которые (а) запрещены в саммари
+      // судьёй формата или (б) уже лежат в structured store/карточке CRM --
+      // его вердикт детерминированно исправляется на pass (по его же
+      // правилам: "если все high-факты отражены -- score 90-100"). Иначе
+      // одно и то же саммари наказывается за соблюдение правил формата.
+      const cfJudge=judges.critical_facts_check;
+      if(cfJudge.status!=='unavailable' && cfJudge.status!=='pass'
+         && criticalFactSplit.card_context_facts.length>0
+         && criticalFactSplit.summary_required_facts.length===0){
+        cfJudge.score=Math.max(cfJudge.score, 90);
+        cfJudge.status='pass';
+        cfJudge.explanation='Все пропуски, найденные судьёй, — данные карточки CRM/structured store (адрес, цена, этаж, площадь, контакты): по стандарту их не должно быть в саммари. Оценка скорректирована детерминированно.';
+        cfJudge.raw.score=cfJudge.score; cfJudge.raw.status=cfJudge.status; cfJudge.raw.explanation=cfJudge.explanation;
       }
     }
+
+    const scores=Object.fromEntries(judgeKeys.map(key=>[key, judges[key].score]));
+    // UNAVAILABLE-судьи (сетевая ошибка/таймаут, не провал по существу)
+    // исключаются из расчёта, а не считаются как 0 -- их вес перераспределяется
+    // между доступными судьями, чтобы одна сетевая ошибка не топила весь Summary.
+    const availableKeys=judgeKeys.filter(k=>judges[k].status!=='unavailable');
+    const unavailableKeys=judgeKeys.filter(k=>judges[k].status==='unavailable');
+    const availableWeightSum=availableKeys.reduce((s,k)=>s+weights[k],0) || 1;
+    let summary_quality_score=availableKeys.reduce((sum,key)=>sum+scores[key]*(weights[key]/availableWeightSum),0);
     // Не блокировать AUTO_SAVE только из-за недоступности судьи: "pass" ИЛИ
     // "unavailable" обе допускают автосохранение (недоступность сама по себе
     // не должна форсировать RETRY/MANUAL_REVIEW).
@@ -3297,8 +3437,14 @@ const CODE_FUNCS = {
     const uniqueCritical=uniqTextList(critical_errors);
     const uniqueWarnings=uniqTextList(warnings).slice(0,5);
     const scoreBeforeCriticalPenalty=summary_quality_score;
+    // 2026-07-10 fix: штраф стал пропорциональным (-8 за каждую критическую
+    // ошибку, пол 30), а не обвальным. Старая формула роняла оценку минимум
+    // до 74 при ЛЮБОЙ критике и до 35 при семи -- при том, что 5 из 7 критик
+    // реального прогона были фантомными (противоречие судей, исправлено выше).
+    // Решение RETRY при наличии критики принимается отдельно и не зависит от
+    // размера штрафа -- оценка теперь честно отражает качество, а не решение.
     if(IS_TRANSCRIPTION_SUMMARY_MODULE && uniqueCritical.length>0){
-      summary_quality_score=Math.max(0, summary_quality_score-Math.min(18, uniqueCritical.length*6));
+      summary_quality_score=Math.max(30, summary_quality_score - uniqueCritical.length*8);
     }
     // Задача 6.1: key_problems/главная причина решения собираются СТРОГО из
     // структурированных полей JSON пяти судей текущего прогона (плюс двух
@@ -3319,7 +3465,8 @@ const CODE_FUNCS = {
     toList(presentation.forbidden_card_duplicates).forEach(x=>structuredProblems.push('Presentation: дубль карточки — '+formatIssue(x)));
     toList(presentation.pii_found).forEach(x=>structuredProblems.push('Presentation: PII/контакт — '+formatIssue(x)));
     toList(presentation.forbidden_phrases).forEach(x=>structuredProblems.push('Presentation: запрещённая формулировка — '+formatIssue(x)));
-    if(presentation.is_too_long) structuredProblems.push('Presentation (код): длина саммари '+(presentation.length_chars||smText.length)+' симв. — больше 800, критическая ошибка.');
+    if(toList(presentation.style_issues).length>=2) structuredProblems.push('Presentation: Summary написано как пересказ диалога ('+toList(presentation.style_issues).slice(0,3).map(formatIssue).join(', ')+') — нужен формат итоговых фактов.');
+    if(presentation.is_too_long) structuredProblems.push('Presentation (код): длина саммари '+(presentation.length_chars||smText.length)+' симв. — больше 700, критическая ошибка.');
     const keyProblems=uniqTextList(structuredProblems).slice(0,3);
     const generatedActions=keyProblems.map(shortAction);
     const uniqueRecommendations=uniqTextList([...generatedActions, ...recommendations]).filter(recommendationAllowed).slice(0,3);
@@ -3375,9 +3522,10 @@ const CODE_FUNCS = {
   // ── этап CRM: сборка карточки и симуляция сохранения ─────────────────────
   crm(stage,ctx){
     // Приоритет источника карточки: Conversation Store (verified-данные,
-    // stages 1-9 rework) → старый плоский ctx.store/ctx.facts (legacy,
-    // если Conversation Store отключён/отсутствует в сохранённом конфиге).
-    const cs=ctx.conversation_store||ctx.conversation;
+    // stages 1-9 rework; включая алиас ctx.conversation кастомного модуля)
+    // → старый плоский ctx.store/ctx.facts (legacy, если Conversation Store
+    // отключён/отсутствует в сохранённом конфиге).
+    const cs=conversationStoreValue(ctx);
     let rec, n, o, pr;
     if(cs){
       const unwrap=(obj)=>Object.fromEntries(Object.entries(obj||{}).map(([k,v])=>[k, v&&typeof v==='object'&&'value' in v ? v.value : v]));
@@ -4072,10 +4220,10 @@ function renderReport(stage, rep, num){
   const el=document.createElement('div'); el.className='report';
   let body='';
   const meta=rep.meta || buildStageMeta(stage,rep);
+  // meta.score === null -- у этапа нет собственной оценки (агент извлечения,
+  // его оценивает следующий проверщик): показываем "—", а не фиктивный процент.
   const hasScore=meta.score!=null;
   const scoreTone=!hasScore?'':(meta.score>=90?'ok':(meta.score>=70?'warn':'bad'));
-  const scoreText=hasScore?Number(meta.score).toFixed(0)+'%':'—';
-  const confidenceText=meta.confidence==null?'—':Number(meta.confidence).toFixed(2);
 
   if(rep.metrics&&rep.metrics.length){
     body+='<div class="metrics">'+rep.metrics.map(([l,v])=>{
@@ -4086,8 +4234,8 @@ function renderReport(stage, rep, num){
   }
 
   body+='<div class="metrics">'
-    +'<div class="metric"><div class="ml">Оценка</div><div class="mv '+scoreTone+'">'+scoreText+'</div></div>'
-    +'<div class="metric"><div class="ml">Confidence</div><div class="mv">'+confidenceText+'</div></div>'
+    +'<div class="metric"><div class="ml">Оценка</div><div class="mv '+scoreTone+'">'+(hasScore?Number(meta.score).toFixed(0)+'%':'—')+'</div></div>'
+    +'<div class="metric"><div class="ml">Confidence</div><div class="mv">'+(hasScore?Number(meta.confidence||0).toFixed(2):'—')+'</div></div>'
     +'</div>';
 
   if(meta.criteria&&meta.criteria.length){
@@ -4135,7 +4283,7 @@ function renderReport(stage, rep, num){
   el.innerHTML='<div class="rep-h">'
     +'<div class="ri" style="background:'+M.bg+';color:'+M.c+'">'+num+'</div>'
     +'<div class="rt"><div class="rn">'+escapeHtml(stage.name)+'</div>'
-    +'<div class="rm">'+M.label+(who?' · '+who:'')+' · '+(rep.ms||0)+' мс · Оценка: '+scoreText+'</div></div>'
+    +'<div class="rm">'+M.label+(who?' · '+who:'')+' · '+(rep.ms||0)+' мс'+(meta.score!=null?' · Оценка: '+Number(meta.score).toFixed(0)+'%':'')+'</div></div>'
     +'<div class="badge '+badgeFor(st)+'">'+badgeText(st)+'</div></div>'
     +'<div class="rep-b">'+(body||'<div class="rm" style="color:var(--dim)">нет данных</div>')+'</div>';
   return el;
@@ -4170,7 +4318,7 @@ function flattenPropertyRequirements(pr){
 // иначе -- падение на сырой ctx.needs (очень старый прогон/конфиг).
 function displayNeeds(){
   if(ctx.crm && ctx.crm.card) return ctx.crm.card;
-  const cs=ctx.conversation_store;
+  const cs=conversationStoreValue(ctx);
   if(cs){
     const unwrap=(obj)=>Object.fromEntries(Object.entries(obj||{}).map(([k,v])=>[k, v&&typeof v==='object'&&'value' in v ? v.value : v]));
     return {...unwrap(cs.needs), property_requirements: cs.property_requirements||{}};
