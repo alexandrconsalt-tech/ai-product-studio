@@ -19,6 +19,12 @@
 
 const ANTHROPIC_KEY_STORAGE = "pipelineLabV3.anthropicApiKey";
 const OPENAI_KEY_STORAGE = "pipelineLabV3.openaiApiKey";
+const AI_TUNNEL_KEY_STORAGE = "aiTunnelApiKey";
+const AI_TUNNEL_BASE_URL_STORAGE = "aiTunnelBaseUrl";
+const SELECTED_LLM_PROVIDER_STORAGE = "selectedLlmProvider";
+
+export const DEFAULT_AI_TUNNEL_BASE_URL = "https://api.aitunnel.ru/v1";
+export type SelectedLlmProvider = "ai-tunnel" | "openai-direct" | "anthropic-direct" | "mock";
 
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
@@ -31,6 +37,47 @@ export function loadAnthropicApiKey(): string {
 export function loadOpenAiApiKey(): string {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(OPENAI_KEY_STORAGE) ?? "";
+}
+
+export function loadAiTunnelApiKey(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(AI_TUNNEL_KEY_STORAGE) ?? "";
+}
+
+export function loadAiTunnelBaseUrl(): string {
+  if (typeof window === "undefined") return DEFAULT_AI_TUNNEL_BASE_URL;
+  return window.localStorage.getItem(AI_TUNNEL_BASE_URL_STORAGE) || DEFAULT_AI_TUNNEL_BASE_URL;
+}
+
+export function loadSelectedLlmProvider(): SelectedLlmProvider {
+  if (typeof window === "undefined") return "mock";
+  const saved = window.localStorage.getItem(SELECTED_LLM_PROVIDER_STORAGE);
+  if (saved === "ai-tunnel" || saved === "openai-direct" || saved === "anthropic-direct" || saved === "mock") return saved;
+  if (loadAnthropicApiKey()) return "anthropic-direct";
+  if (loadOpenAiApiKey()) return "openai-direct";
+  return "mock";
+}
+
+function loadExplicitSelectedLlmProvider(): SelectedLlmProvider | null {
+  if (typeof window === "undefined") return null;
+  const saved = window.localStorage.getItem(SELECTED_LLM_PROVIDER_STORAGE);
+  return saved === "ai-tunnel" || saved === "openai-direct" || saved === "anthropic-direct" || saved === "mock" ? saved : null;
+}
+
+export function saveAiTunnelSettings(key: string, baseUrl: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(AI_TUNNEL_KEY_STORAGE, key);
+  window.localStorage.setItem(AI_TUNNEL_BASE_URL_STORAGE, baseUrl || DEFAULT_AI_TUNNEL_BASE_URL);
+}
+
+export function clearAiTunnelApiKey(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(AI_TUNNEL_KEY_STORAGE);
+}
+
+export function saveSelectedLlmProvider(provider: SelectedLlmProvider): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SELECTED_LLM_PROVIDER_STORAGE, provider);
 }
 
 // Managed from the Настройки (Settings) screen, src/features/mvp/screens/
@@ -56,7 +103,11 @@ export function clearOpenAiApiKey(): void {
 }
 
 export function hasBrowserLlmKeyConfigured(): boolean {
-  return Boolean(loadAnthropicApiKey() || loadOpenAiApiKey());
+  const provider = loadSelectedLlmProvider();
+  if (provider === "mock") return true;
+  if (provider === "ai-tunnel") return Boolean(loadAiTunnelApiKey());
+  if (provider === "openai-direct") return Boolean(loadOpenAiApiKey());
+  return Boolean(loadAnthropicApiKey());
 }
 
 /** Same masking Pipeline Lab v3's own maskKey does: first 10 chars + last 4, never the full key. */
@@ -103,6 +154,42 @@ async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL):
   return data?.choices?.[0]?.message?.content ?? "";
 }
 
+type OpenAiCompatibleResponse = Readonly<{
+  choices?: readonly { message?: { content?: string } }[];
+}>;
+
+async function callAiTunnel(prompt: string, model: string, temperature = 0.2, maxTokens = 2000): Promise<string> {
+  const apiKey = loadAiTunnelApiKey();
+  if (!apiKey) throw new Error("Не задан API-ключ AI Tunnel — задайте его в разделе «Настройки».");
+  const baseUrl = loadAiTunnelBaseUrl().replace(/\/+$/, "");
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature, max_tokens: maxTokens }),
+  });
+  const data = (await res.json().catch(() => ({}))) as OpenAiCompatibleResponse & { error?: { message?: string } };
+  if (!res.ok) throw new Error(`AI Tunnel API ${res.status}${data.error?.message ? `: ${data.error.message}` : ""}`);
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+export type AiTunnelConnectionResult = "success" | "invalid-key" | "insufficient-funds" | "model-unavailable" | "rate-limit" | "network-error" | "unknown-error";
+
+export async function testAiTunnelConnection(model: string): Promise<AiTunnelConnectionResult> {
+  try {
+    await callAiTunnel("Ответь одним словом: работает", model, 0, 2000);
+    return "success";
+  } catch (error) {
+    if (error instanceof TypeError) return "network-error";
+    const message = error instanceof Error ? error.message : String(error);
+    if (/API\s+401|invalid.*(?:key|token)|unauthorized|неверн.*ключ|недейств.*ключ|ошибк.*авторизац/i.test(message)) return "invalid-key";
+    if (/insufficient|balance|funds|credit|billing|API\s+402|недостаточно средств|баланс|пополн/i.test(message)) return "insufficient-funds";
+    if (/model.*(?:not found|unavailable|access|exist)|API\s+404|модел.*(?:недоступ|не найден|нет доступа)/i.test(message)) return "model-unavailable";
+    if (/API\s+429|rate.?limit|too many requests|превышен.*лимит|слишком много запросов/i.test(message)) return "rate-limit";
+    if (/network|failed to fetch|load failed|сетев.*ошиб/i.test(message)) return "network-error";
+    return "unknown-error";
+  }
+}
+
 /**
  * Prefers Anthropic when both keys are set (matches Pipeline Lab v3's
  * own default vendor) -- but a *configured* key isn't the same as a
@@ -114,6 +201,11 @@ async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL):
  * `callConfiguredLlm` already applies in the other direction.
  */
 export async function callBrowserLlm(prompt: string): Promise<string> {
+  const selectedProvider = loadExplicitSelectedLlmProvider();
+  if (selectedProvider === "ai-tunnel") return callAiTunnel(prompt, DEFAULT_OPENAI_MODEL);
+  if (selectedProvider === "openai-direct") return callOpenAi(prompt);
+  if (selectedProvider === "anthropic-direct") return callAnthropic(prompt);
+  if (selectedProvider === "mock") return JSON.stringify({ mock: true, model: DEFAULT_OPENAI_MODEL, echo: prompt.slice(0, 200) });
   const anthropicKey = loadAnthropicApiKey();
   const openAiKey = loadOpenAiApiKey();
   if (anthropicKey) {
@@ -141,17 +233,27 @@ export type ConfiguredLlmResult = Readonly<{ text: string; vendor: "openai" | "a
  * model call, just not the specific one the architecture names.
  */
 export async function callConfiguredLlm(prompt: string): Promise<ConfiguredLlmResult> {
+  const selectedProvider = loadExplicitSelectedLlmProvider();
+  if (selectedProvider === "ai-tunnel") return { text: await callAiTunnel(prompt, DEFAULT_OPENAI_MODEL), vendor: "openai", model: DEFAULT_OPENAI_MODEL };
+  if (selectedProvider === "openai-direct") return { text: await callOpenAi(prompt), vendor: "openai", model: DEFAULT_OPENAI_MODEL };
+  if (selectedProvider === "anthropic-direct") return { text: await callAnthropic(prompt), vendor: "anthropic", model: DEFAULT_ANTHROPIC_MODEL };
+  if (selectedProvider === "mock") return { text: JSON.stringify({ mock: true, model: DEFAULT_OPENAI_MODEL, echo: prompt.slice(0, 200) }), vendor: "openai", model: DEFAULT_OPENAI_MODEL };
   if (loadOpenAiApiKey()) return { text: await callOpenAi(prompt), vendor: "openai", model: DEFAULT_OPENAI_MODEL };
   if (loadAnthropicApiKey()) return { text: await callAnthropic(prompt), vendor: "anthropic", model: DEFAULT_ANTHROPIC_MODEL };
   throw new Error("Не задан ни один API-ключ (Anthropic или OpenAI). Задайте его в разделе «Настройки».");
 }
 
 /** Same vendor mapping public/pipeline-lab-v3.html's own MODEL_VENDOR uses -- kept in sync by name. */
-export const MODEL_VENDOR: Readonly<Record<string, "openai" | "anthropic">> = { "gpt-5-mini": "openai", "claude-sonnet-4-6": "anthropic" };
+export const MODEL_VENDOR: Readonly<Record<string, "openai" | "anthropic">> = {
+  "gpt-5-mini": "openai",
+  "claude-sonnet-4-6": "anthropic",
+  "deepseek-v3.2-exp": "openai",
+};
 
 export const MODEL_OPTIONS: readonly { value: string; label: string }[] = [
   { value: "gpt-5-mini", label: "GPT-5 mini (OpenAI)" },
-  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Anthropic)" },
+  { value: "claude-sonnet-4.5", label: "Claude Sonnet 4.5 (Anthropic)" },
+  { value: "deepseek-v3.2-exp", label: "DeepSeek V3.2 Exp (AI Tunnel)" },
 ];
 
 /**
@@ -164,6 +266,11 @@ export const MODEL_OPTIONS: readonly { value: string; label: string }[] = [
  * Fact/Need/Outcome/Summary agents default to GPT-5 mini.
  */
 export async function callModelByName(prompt: string, model: string): Promise<string> {
+  const selectedProvider = loadExplicitSelectedLlmProvider();
+  if (selectedProvider === "ai-tunnel") return callAiTunnel(prompt, model);
+  if (selectedProvider === "openai-direct") return callOpenAi(prompt, model);
+  if (selectedProvider === "anthropic-direct") return callAnthropic(prompt, model);
+  if (selectedProvider === "mock") return JSON.stringify({ mock: true, model, echo: prompt.slice(0, 200) });
   const vendor = MODEL_VENDOR[model] ?? "anthropic";
   return vendor === "openai" ? callOpenAi(prompt, model) : callAnthropic(prompt, model);
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPlaygroundTestRun } from "@/entities/PlaygroundTestRun/model/factory";
 import { usePlaygroundTestRunStore, withCappedRun } from "./playground-test-run-store";
 
@@ -22,6 +22,7 @@ function testRun(id: string, projectId: string, finishedAt = "2026-07-08T10:00:0
 
 describe("withCappedRun", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     window.localStorage.clear();
     usePlaygroundTestRunStore.setState({ runsByProjectId: {} });
   });
@@ -58,5 +59,33 @@ describe("withCappedRun", () => {
       state?: { runsByProjectId?: Record<string, unknown[]> };
     };
     expect(Object.keys(persisted.state?.runsByProjectId ?? {}).sort()).toEqual(["project_memory", "project_new", "project_persisted"]);
+  });
+
+  it("persists the newest run in compact form when the full report exceeds Local Storage quota", () => {
+    const originalSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function setItem(key, value) {
+      if (key === "ai-product-studio.playground-test-runs.v1" && value.length > 5_000) {
+        throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+      }
+      originalSetItem.call(this, key, value);
+    });
+    const run = {
+      ...testRun("playground_test_run_large", "project_large", "2026-07-08T10:00:05.000Z"),
+      summary: "Итог запуска сохранён.",
+      report: { result: { summary: { summary: "Итог запуска сохранён." } }, raw: "x".repeat(200_000) },
+    };
+
+    usePlaygroundTestRunStore.getState().recordRun(run);
+
+    const raw = window.localStorage.getItem("ai-product-studio.playground-test-runs.v1");
+    expect(raw).not.toBeNull();
+    const persisted = JSON.parse(raw ?? "{}") as {
+      state?: { runsByProjectId?: Record<string, Array<{ id?: string; summary?: string; report?: { compacted?: boolean } }>> };
+    };
+    expect(persisted.state?.runsByProjectId?.project_large?.[0]).toMatchObject({
+      id: "playground_test_run_large",
+      summary: "Итог запуска сохранён.",
+      report: { compacted: true },
+    });
   });
 });

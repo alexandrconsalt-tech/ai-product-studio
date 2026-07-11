@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, Clipboard, FileJson, Search, Upload } from "lucide-react";
+import { ArrowLeft, Check, Clipboard, FileJson, Search, Upload } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Input, Panel, Select, Textarea } from "@/shared/ui";
 import { normalizePlaygroundRun } from "./importer";
@@ -135,7 +135,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
     const review = buildReview({ runId: run.id, reviewerName, reviewerRole, criteria, comment });
     saveReview(review);
     setSaved(true);
-    router.push(embedded ? "/?view=summary-report" : "/reports");
+    router.push(embedded ? "/?view=summary-review" : "/reports");
   };
 
   if (!run) {
@@ -165,8 +165,16 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
           <h1 className="text-2xl font-semibold">Оценка качества Summary</h1>
           <p className="text-sm text-text-muted">{run.clientName} · {new Date(run.createdAt).toLocaleString("ru-RU")} · {run.id}</p>
         </div>
-        <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm">
-          Human Score: <span className="font-semibold">{humanScore.toFixed(1)}</span> · {humanDecision}
+        <div className="flex flex-wrap items-center gap-2">
+          {embedded ? (
+            <Button variant="secondary" onClick={() => router.push("/?view=summary-review")}>
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              К списку запусков
+            </Button>
+          ) : null}
+          <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm">
+            Human Score: <span className="font-semibold">{humanScore.toFixed(1)}</span> · {humanDecision}
+          </div>
         </div>
       </div>
 
