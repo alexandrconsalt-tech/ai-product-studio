@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Communication Studio Workflow"
+  short_description: "Разработка и проверка AI Communication Studio"
+  default_prompt: "Use $ai-communication-studio-workflow to implement and fully verify a change in AI Communication Studio."

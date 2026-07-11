@@ -28,6 +28,8 @@ next-env.d.ts
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
 .vercel
 .env*
 !.env.example

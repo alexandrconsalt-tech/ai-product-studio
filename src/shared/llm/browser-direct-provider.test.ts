@@ -1,6 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callBrowserLlm, clearAnthropicApiKey, clearOpenAiApiKey, saveAnthropicApiKey, saveOpenAiApiKey } from "./browser-direct-provider";
+import {
+  callBrowserLlm,
+  callModelByName,
+  clearAnthropicApiKey,
+  clearOpenAiApiKey,
+  loadAiTunnelApiKey,
+  loadAiTunnelBaseUrl,
+  loadSelectedLlmProvider,
+  maskApiKey,
+  saveAiTunnelSettings,
+  saveAnthropicApiKey,
+  saveOpenAiApiKey,
+  saveSelectedLlmProvider,
+  testAiTunnelConnection,
+} from "./browser-direct-provider";
 
 function anthropicResponse(text: string): Response {
   return new Response(JSON.stringify({ content: [{ type: "text", text }] }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -16,6 +30,7 @@ describe("callBrowserLlm", () => {
   afterEach(() => {
     clearAnthropicApiKey();
     clearOpenAiApiKey();
+    window.localStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -68,5 +83,50 @@ describe("callBrowserLlm", () => {
 
   it("throws a clear error when neither key is configured", async () => {
     await expect(callBrowserLlm("prompt")).rejects.toThrow("Не задан ни один API-ключ");
+  });
+});
+
+describe("AI Tunnel browser provider", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("persists one key, base URL and selected provider without changing direct keys", () => {
+    saveAnthropicApiKey("sk-ant-existing");
+    saveOpenAiApiKey("sk-openai-existing");
+    saveAiTunnelSettings("sk-aitunnel-secret-VQeY", "https://tunnel.example/v1");
+    saveSelectedLlmProvider("ai-tunnel");
+
+    expect(loadAiTunnelApiKey()).toBe("sk-aitunnel-secret-VQeY");
+    expect(loadAiTunnelBaseUrl()).toBe("https://tunnel.example/v1");
+    expect(loadSelectedLlmProvider()).toBe("ai-tunnel");
+    expect(window.localStorage.getItem("pipelineLabV3.anthropicApiKey")).toBe("sk-ant-existing");
+    expect(window.localStorage.getItem("pipelineLabV3.openaiApiKey")).toBe("sk-openai-existing");
+    expect(maskApiKey("sk-aitunnel-secret-VQeY")).toBe("sk-aitunne…VQeY");
+  });
+
+  it.each(["gpt-5-mini", "claude-sonnet-4-6"])("calls %s through the OpenAI-compatible AI Tunnel endpoint", async (model) => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(callModelByName("prompt", model)).resolves.toBe("работает");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.aitunnel.ru/v1/chat/completions");
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(request.headers).toEqual(expect.objectContaining({ Authorization: "Bearer sk-aitunnel-secret" }));
+    expect(JSON.parse(request.body as string)).toEqual({ model, messages: [{ role: "user", content: "prompt" }], temperature: 0.2, max_tokens: 2000 });
+  });
+
+  it("uses the short connection-test payload and maps an invalid key", async () => {
+    saveAiTunnelSettings("sk-aitunnel-invalid", "https://api.aitunnel.ru/v1");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: "invalid api key" } }), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(testAiTunnelConnection("gpt-5-mini")).resolves.toBe("invalid-key");
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toEqual({ model: "gpt-5-mini", messages: [{ role: "user", content: "Ответь одним словом: работает" }], temperature: 0, max_tokens: 2000 });
   });
 });

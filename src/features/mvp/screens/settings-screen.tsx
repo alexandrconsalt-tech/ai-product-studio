@@ -2,16 +2,26 @@
 
 import * as React from "react";
 import { KeyRound } from "lucide-react";
-import { Alert, Badge, Button, Card, Input, Page, Section } from "@/shared/ui";
+import { Alert, Badge, Button, Card, Input, Page, Section, Select } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import {
   clearAnthropicApiKey,
+  clearAiTunnelApiKey,
   clearOpenAiApiKey,
+  DEFAULT_AI_TUNNEL_BASE_URL,
+  loadAiTunnelApiKey,
+  loadAiTunnelBaseUrl,
   loadAnthropicApiKey,
   loadOpenAiApiKey,
+  loadSelectedLlmProvider,
   maskApiKey,
+  saveAiTunnelSettings,
   saveAnthropicApiKey,
   saveOpenAiApiKey,
+  saveSelectedLlmProvider,
+  testAiTunnelConnection,
+  type AiTunnelConnectionResult,
+  type SelectedLlmProvider,
 } from "@/shared/llm/browser-direct-provider";
 
 /**
@@ -29,10 +39,20 @@ function ApiKeysSection() {
   const [openAiKey, setOpenAiKey] = React.useState("");
   const [savedAnthropicKey, setSavedAnthropicKey] = React.useState("");
   const [savedOpenAiKey, setSavedOpenAiKey] = React.useState("");
+  const [aiTunnelKey, setAiTunnelKey] = React.useState("");
+  const [aiTunnelBaseUrl, setAiTunnelBaseUrl] = React.useState(DEFAULT_AI_TUNNEL_BASE_URL);
+  const [savedAiTunnelKey, setSavedAiTunnelKey] = React.useState("");
+  const [selectedProvider, setSelectedProvider] = React.useState<SelectedLlmProvider>("mock");
+  const [testModel, setTestModel] = React.useState("gpt-5-mini");
+  const [connectionResult, setConnectionResult] = React.useState<AiTunnelConnectionResult | null>(null);
+  const [isTesting, setIsTesting] = React.useState(false);
 
   React.useEffect(() => {
     setSavedAnthropicKey(loadAnthropicApiKey());
     setSavedOpenAiKey(loadOpenAiApiKey());
+    setSavedAiTunnelKey(loadAiTunnelApiKey());
+    setAiTunnelBaseUrl(loadAiTunnelBaseUrl());
+    setSelectedProvider(loadSelectedLlmProvider());
   }, []);
 
   const handleSaveAnthropic = () => {
@@ -55,6 +75,41 @@ function ApiKeysSection() {
     clearOpenAiApiKey();
     setSavedOpenAiKey("");
   };
+  const handleSaveAiTunnel = () => {
+    if (!aiTunnelKey.trim()) return;
+    saveAiTunnelSettings(aiTunnelKey.trim(), aiTunnelBaseUrl.trim() || DEFAULT_AI_TUNNEL_BASE_URL);
+    setSavedAiTunnelKey(aiTunnelKey.trim());
+    setAiTunnelBaseUrl(aiTunnelBaseUrl.trim() || DEFAULT_AI_TUNNEL_BASE_URL);
+    setAiTunnelKey("");
+    setConnectionResult(null);
+  };
+  const handleClearAiTunnel = () => {
+    clearAiTunnelApiKey();
+    setSavedAiTunnelKey("");
+    setAiTunnelKey("");
+    setConnectionResult(null);
+  };
+  const handleProviderChange = (provider: SelectedLlmProvider) => {
+    setSelectedProvider(provider);
+    saveSelectedLlmProvider(provider);
+  };
+  const handleTestAiTunnel = async () => {
+    setIsTesting(true);
+    setConnectionResult(null);
+    const result = await testAiTunnelConnection(testModel);
+    setConnectionResult(result);
+    setIsTesting(false);
+  };
+
+  const connectionLabels: Record<AiTunnelConnectionResult, string> = {
+    success: "Подключение работает",
+    "invalid-key": "Неверный API-ключ",
+    "insufficient-funds": "Недостаточно средств",
+    "model-unavailable": "Модель недоступна",
+    "rate-limit": "Превышен лимит",
+    "network-error": "Сетевая ошибка",
+    "unknown-error": "Неизвестная ошибка",
+  };
 
   return (
     <Card className="grid max-w-2xl gap-4">
@@ -64,8 +119,45 @@ function ApiKeysSection() {
       </div>
       <p className="text-sm text-text-muted">
         Один набор ключей для всех продуктов — используется и в Песочнице (Pipeline Lab v3), и в ИИ-помощнике на карточке продукта. Ключи хранятся
-        только в localStorage этого браузера и отправляются напрямую в api.anthropic.com / api.openai.com, никуда больше.
+        только в localStorage этого браузера. В зависимости от выбранного провайдера запросы отправляются напрямую в OpenAI, Anthropic или через AI Tunnel.
       </p>
+
+      <label className="grid gap-1 text-sm">
+        LLM-провайдер
+        <Select value={selectedProvider} onChange={(event) => handleProviderChange(event.target.value as SelectedLlmProvider)}>
+          <option value="ai-tunnel">AI Tunnel</option>
+          <option value="openai-direct">OpenAI Direct</option>
+          <option value="anthropic-direct">Anthropic Direct</option>
+          <option value="mock">Mock LLM Provider</option>
+        </Select>
+      </label>
+
+      <div className="grid gap-3 rounded-md border border-border p-3">
+        <h3 className="font-medium">AI Tunnel</h3>
+        <label className="grid gap-1 text-sm">
+          API key
+          <Input type="password" placeholder="sk-aitunnel-..." value={aiTunnelKey} onChange={(event) => setAiTunnelKey(event.target.value)} autoComplete="off" />
+        </label>
+        <label className="grid gap-1 text-sm">
+          Base URL
+          <Input value={aiTunnelBaseUrl} onChange={(event) => setAiTunnelBaseUrl(event.target.value)} autoComplete="off" />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={handleSaveAiTunnel} disabled={!aiTunnelKey.trim()}>Сохранить</Button>
+          <Button variant="ghost" onClick={handleClearAiTunnel} disabled={!savedAiTunnelKey}>Удалить</Button>
+        </div>
+        <Badge tone={savedAiTunnelKey ? "success" : "neutral"} className="w-fit">
+          {savedAiTunnelKey ? `Сохранён: ${maskApiKey(savedAiTunnelKey)}` : "Ключ не задан"}
+        </Badge>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+          <Select aria-label="Тестовая модель AI Tunnel" value={testModel} onChange={(event) => setTestModel(event.target.value)}>
+            <option value="gpt-5-mini">gpt-5-mini</option>
+            <option value="claude-sonnet-4.5">claude-sonnet-4.5</option>
+          </Select>
+          <Button onClick={handleTestAiTunnel} disabled={!savedAiTunnelKey || isTesting}>{isTesting ? "Проверка…" : "Проверить подключение"}</Button>
+        </div>
+        {connectionResult ? <Alert tone={connectionResult === "success" ? "success" : "error"}>{connectionLabels[connectionResult]}</Alert> : null}
+      </div>
 
       <div className="grid gap-2">
         <label className="grid gap-1 text-sm">
@@ -99,6 +191,7 @@ function ApiKeysSection() {
         Anthropic-ключ создаётся на console.anthropic.com/settings/keys, OpenAI-ключ — на platform.openai.com/api-keys. Никогда не публикуйте эту
         страницу с сохранёнными ключами посторонним и удаляйте ключи после теста на чужом компьютере.
       </Alert>
+      <Alert tone="warning">Не используйте персональные production-ключи на чужом или общем компьютере. Для production-развёртывания ключи должны храниться на сервере.</Alert>
     </Card>
   );
 }

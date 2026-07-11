@@ -1,4 +1,5 @@
 import { ArchitectureSchema } from "@/entities/Architecture/model/schema";
+import { EdgeSchema } from "@/entities/Edge/model/schema";
 import { FrameworkSchema } from "@/entities/Framework/model/schema";
 import { KnowledgeModuleSchema } from "@/entities/KnowledgeModule/model/schema";
 import { ModelSchema } from "@/entities/Model/model/schema";
@@ -13,6 +14,7 @@ import { demoSnapshot } from "./demo-data";
 import type { ProjectRepository, RepositorySnapshot } from "./types";
 
 const STORAGE_KEY = "ai-product-studio.repository.v1";
+const BACKUP_STORAGE_KEY = "ai-product-studio.repository.invalid-backup.v1";
 const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
@@ -32,6 +34,123 @@ const RepositorySnapshotSchema = z.object({
 });
 
 const cloneSnapshot = (snapshot: RepositorySnapshot): RepositorySnapshot => RepositorySnapshotSchema.parse(JSON.parse(JSON.stringify(snapshot)));
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function pickEntityId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  const record = asRecord(value);
+  return typeof record?.id === "string" && record.id.trim() ? record.id : undefined;
+}
+
+function pickString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeLifecycleStatus(value: unknown): string {
+  const status = pickString(value);
+  if (status === "draft" || status === "in_progress" || status === "review" || status === "ready" || status === "completed" || status === "archived") return status;
+  if (status === "discovery" || status === "product_ready" || status === "architecture_ready" || status === "pipeline_ready" || status === "testing") return "ready";
+  if (status === "approved" || status === "published" || status === "active") return "ready";
+  if (status === "pending" || status === "not_started") return "draft";
+  if (status === "requires_changes" || status === "needs_review") return "review";
+  return "draft";
+}
+
+function normalizeProjectStatus(value: unknown): string {
+  const status = pickString(value);
+  if (status === "draft" || status === "discovery" || status === "product_ready" || status === "architecture_ready" || status === "pipeline_ready" || status === "testing" || status === "completed" || status === "archived") return status;
+  if (status === "in_progress") return "discovery";
+  if (status === "review") return "testing";
+  if (status === "ready") return "pipeline_ready";
+  if (status === "approved" || status === "published" || status === "active") return "completed";
+  return "draft";
+}
+
+function normalizeReviewStatus(value: unknown): string {
+  const status = pickString(value);
+  if (status === "not_reviewed" || status === "approved" || status === "requires_changes" || status === "rejected") return status;
+  if (status === "ready" || status === "completed" || status === "accepted") return "approved";
+  if (status === "review" || status === "pending" || status === "draft") return "not_reviewed";
+  if (status === "changes_requested" || status === "needs_review") return "requires_changes";
+  return "not_reviewed";
+}
+
+function normalizeRunStatus(value: unknown): string {
+  const status = pickString(value);
+  if (status === "queued" || status === "running" || status === "succeeded" || status === "failed" || status === "cancelled") return status;
+  if (status === "success" || status === "completed" || status === "done") return "succeeded";
+  if (status === "error" || status === "rejected") return "failed";
+  if (status === "canceled") return "cancelled";
+  return "queued";
+}
+
+function migrateRecordStatus(item: unknown, normalizeStatus: (value: unknown) => string): unknown {
+  const record = asRecord(item);
+  if (!record) return item;
+  return { ...record, status: normalizeStatus(record.status) };
+}
+
+function migrateLegacyRepositorySnapshot(value: unknown): unknown {
+  const snapshot = asRecord(value);
+  if (!snapshot) return value;
+
+  return {
+    ...snapshot,
+    projects: Array.isArray(snapshot.projects) ? snapshot.projects.map((project) => migrateRecordStatus(project, normalizeProjectStatus)) : snapshot.projects,
+    products: Array.isArray(snapshot.products) ? snapshot.products.map((product) => migrateRecordStatus(product, normalizeLifecycleStatus)) : snapshot.products,
+    architectures: Array.isArray(snapshot.architectures) ? snapshot.architectures.map((architecture) => migrateRecordStatus(architecture, normalizeLifecycleStatus)) : snapshot.architectures,
+    pipelines: Array.isArray(snapshot.pipelines) ? snapshot.pipelines.map((pipeline) => {
+      const pipelineRecord = asRecord(pipeline);
+      if (!pipelineRecord || !Array.isArray(pipelineRecord.edges)) return pipeline;
+
+      return {
+        ...pipelineRecord,
+        status: normalizeLifecycleStatus(pipelineRecord.status),
+        edges: pipelineRecord.edges.flatMap((edge, index) => {
+          const edgeRecord = asRecord(edge);
+          if (!edgeRecord) return [];
+
+          const sourceNodeId = pickEntityId(edgeRecord.sourceNodeId) ?? pickEntityId(edgeRecord.source);
+          const targetNodeId = pickEntityId(edgeRecord.targetNodeId) ?? pickEntityId(edgeRecord.target);
+          if (!sourceNodeId || !targetNodeId) return [];
+
+          const sourcePortId = pickEntityId(edgeRecord.sourcePortId) ?? pickEntityId(edgeRecord.sourceHandle);
+          const targetPortId = pickEntityId(edgeRecord.targetPortId) ?? pickEntityId(edgeRecord.targetHandle);
+          const id = pickEntityId(edgeRecord.id) ?? `edge_${sourceNodeId}_${targetNodeId}_${index}`;
+
+          const migratedEdge = {
+            ...edgeRecord,
+            id,
+            sourceNodeId,
+            targetNodeId,
+            sourcePortId,
+            targetPortId,
+            version: edgeRecord.version ?? "1.0.0",
+          };
+          const parsedEdge = EdgeSchema.safeParse(migratedEdge);
+          return parsedEdge.success ? [parsedEdge.data] : [];
+        }),
+      };
+    }) : snapshot.pipelines,
+    runs: Array.isArray(snapshot.runs) ? snapshot.runs.map((run) => {
+      const runRecord = asRecord(run);
+      if (!runRecord) return run;
+
+      return {
+        ...runRecord,
+        status: normalizeRunStatus(runRecord.status),
+        metrics: Array.isArray(runRecord.metrics) ? runRecord.metrics : [],
+        evidence: Array.isArray(runRecord.evidence) ? runRecord.evidence.filter((item): item is string => typeof item === "string") : [],
+        logs: Array.isArray(runRecord.logs) ? runRecord.logs : [],
+      };
+    }) : snapshot.runs,
+    reviews: Array.isArray(snapshot.reviews) ? snapshot.reviews.map((review) => migrateRecordStatus(review, normalizeReviewStatus)) : snapshot.reviews,
+    prompts: Array.isArray(snapshot.prompts) ? snapshot.prompts.map((prompt) => migrateRecordStatus(prompt, normalizeLifecycleStatus)) : snapshot.prompts,
+  };
+}
 
 function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): RepositorySnapshot {
   const existingProject = snapshot.projects.find((project) => project.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || /^Модуль транскрибации и AI-саммари звонков/i.test(project.name));
@@ -120,7 +239,16 @@ export class LocalStorageProjectRepository implements ProjectRepository {
     }
 
     const parsed: unknown = JSON.parse(raw);
-    const snapshot = withTranscriptionSummaryModule(RepositorySnapshotSchema.parse(parsed));
+    const migrated = migrateLegacyRepositorySnapshot(parsed);
+    const parsedSnapshot = RepositorySnapshotSchema.safeParse(migrated);
+    if (!parsedSnapshot.success) {
+      window.localStorage.setItem(BACKUP_STORAGE_KEY, raw);
+      const seeded = withTranscriptionSummaryModule(cloneSnapshot(demoSnapshot));
+      this.save(seeded);
+      return seeded;
+    }
+
+    const snapshot = withTranscriptionSummaryModule(parsedSnapshot.data);
     this.save(snapshot);
     return snapshot;
   }
