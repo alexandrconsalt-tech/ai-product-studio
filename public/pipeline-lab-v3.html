@@ -2604,7 +2604,21 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
 
   const llmCriteria = Array.isArray(llmParsed.criteria) ? llmParsed.criteria : [];
   const llmVerified = llmParsed[verifiedKey] || {};
-  const llmRejected = {...(llmParsed[rejectedKey] || {})};
+  const llmVerifiedIsList = Array.isArray(llmVerified);
+  const llmRejectedRaw = llmParsed[rejectedKey];
+  // 2026-07-11 fix: some judges (Quality Framework v1, matching the actual
+  // production prompt) return verified_needs/verified_facts as an ARRAY of
+  // per-category items ({category, description, citation, reason}), not a
+  // dict keyed by real CRM field names (interested_in/timeline/...). The
+  // per-field double-gate below (Object.entries + fieldStatus lookup) always
+  // used to coerce this into a plain {'0':item0,'1':item1,...} object via
+  // spread/forEach -- which then failed every downstream Array.isArray()
+  // check (moduleOutputList() in conversationStore()), so a judge that
+  // genuinely verified 6 needs with an 85% score still produced a fully
+  // EMPTY needs block in Conversation Store (and forced decision:'FAIL'
+  // despite a 90%+ store_score, since hasVerifiedIntent requires facts
+  // non-empty). Preserve the real array shape end to end instead.
+  const llmRejected = Array.isArray(llmRejectedRaw) ? [...llmRejectedRaw] : {...(llmRejectedRaw || {})};
   // 2026-07-11 fix: judges actually calling the current prompt (Quality
   // Framework v1) reliably return a top-level {scores:{overall:N}, decision}
   // shape (matching the OTHER 5 Summary judges' own format), not the
@@ -2624,14 +2638,24 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
 
   // Двойной гейт: поле попадает в финальный verified только если СОГЛАСНЫ
   // оба уровня -- код (структура/справочник) и LLM (смысл/достоверность).
-  const finalVerified = {};
-  Object.entries(llmVerified).forEach(([field, data])=>{
-    if(fieldStatus[field]==='fail'){
-      llmRejected[field] = {value: data && data.value, reason:'Не прошло код-проверку схемы/справочника'};
-    } else {
-      finalVerified[field] = data;
-    }
-  });
+  // Список-по-категориям (llmVerifiedIsList) не имеет CRM-имён полей для
+  // сверки с fieldStatus -- код-уровень в этом случае уже выполнил свою
+  // генерическую проверку (moduleGenericCheck), так что каждый элемент
+  // списка просто сохраняется как есть.
+  let finalVerified;
+  if(llmVerifiedIsList){
+    finalVerified=[...llmVerified];
+  } else {
+    finalVerified={};
+    Object.entries(llmVerified).forEach(([field, data])=>{
+      if(fieldStatus[field]==='fail'){
+        if(Array.isArray(llmRejected)) llmRejected.push({field, value: data && data.value, reason:'Не прошло код-проверку схемы/справочника'});
+        else llmRejected[field] = {value: data && data.value, reason:'Не прошло код-проверку схемы/справочника'};
+      } else {
+        finalVerified[field] = data;
+      }
+    });
+  }
 
   const criteria = [...codeCriteria, ...llmCriteria];
   let score = hardFail ? Math.min(codeScore, 40) : (codeScore*0.3 + llmScore*0.7);
