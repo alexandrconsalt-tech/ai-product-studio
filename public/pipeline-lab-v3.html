@@ -1670,7 +1670,7 @@ function buildSummaryJudgeCriteria(key, raw){
     criterion('Следующий шаг отражён', raw.next_step_in_transcript && raw.is_next_step_reflected===false, false, 'Проверен следующий шаг и ответственный.')
   ];
   if(key==='presentation_check') return [
-    criterion('Длина до 700 символов', raw.is_too_long===true, false, 'Проверена длина Summary.'),
+    criterion('Длина до '+summaryMaxChars+' символов', raw.is_too_long===true, false, 'Проверена длина Summary.'),
     criterion('Нет дублей карточки', toList(raw.forbidden_card_duplicates).length>0, false, 'Адрес, цена, характеристики и другие поля карточки не должны попадать в Summary.'),
     criterion('Нет PII/контактов', toList(raw.pii_found).length>0, false, 'Телефоны и контакты запрещены.'),
     criterion('Есть «Договорённости / следующий шаг:»', raw.has_status_or_action_line===false, false, raw.has_status_or_action_line===false?'Не найден канонический заголовок «Договорённости / следующий шаг:».':'Канонический заголовок присутствует.'),
@@ -2061,7 +2061,7 @@ const SUMMARY_REQUIRED_CATEGORIES=[
   {id:'constraints',label:'Ограничения и обязательные требования',rx:/(огранич|обязательн|не\s+подходит|важно,?\s+чтобы|требован)/i},
   {id:'objections',label:'Сомнения, возражения или риски',rx:/(сомнен|возраж|риск|смуща|опасен|проблем)/i},
   {id:'result',label:'Результат звонка',rx:/(результат|итог|статус\s*:|показ\s+(?:назначен|не подтвержд)|жд[её]т\s+подтвержден)/i},
-  {id:'agreement',label:'Договорённость',rx:/(договорил|согласовал|назначен[а-яё]*\s+(?:показ|встреч|звон))/i},
+  {id:'agreement',label:'Договорённость',rx:/(договорил|согласу(?:ет|ют|ем|ете|ю|ют|ется)|согласовал|назначен[а-яё]*\s+(?:показ|встреч|звон))/i},
   {id:'next_step',label:'Следующий шаг и ответственный',rx:/(следующий шаг\s*:|перезвон|позвонит|отправит|пришл[её]т|свяжется|ответствен)/i},
   {id:'datetime',label:'Дата или время действия',rx:/(сегодня|завтра|послезавтра|понедельник|вторник|сред[ау]|четверг|пятниц|суббот|воскресень|\b\d{1,2}[:.]\d{2}\b|в течение\s+\d+\s+минут)/i},
   {id:'action_heading',label:'Договорённости / следующий шаг:',rx:/Договорённости\s*\/\s*следующий шаг\s*:/i},
@@ -2102,9 +2102,11 @@ function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summa
   if(original.length>limit){
     const chunks=(original.match(/[^.!?\n]+[.!?]?/g)||[original]).map((text,index)=>({text:text.trim(),index})).filter(item=>item.text);
     const selected=new Map();
-    chunks.forEach(item=>{
-      if(required.some(req=>summaryCoversRequired(item.text,req)) || /^(Статус|Следующий шаг|Договорились|Цитата клиента)\s*:/i.test(item.text)) selected.set(item.index,item);
+    required.forEach(req=>{
+      const candidates=chunks.filter(item=>summaryCoversRequired(item.text,req)).sort((a,b)=>a.text.length-b.text.length||a.index-b.index);
+      if(candidates.length) selected.set(candidates[0].index,candidates[0]);
     });
+    chunks.filter(item=>/^(Статус|Следующий шаг|Договорились|Договорённости\s*\/\s*следующий шаг)\s*:/i.test(item.text)).forEach(item=>selected.set(item.index,item));
     for(const item of chunks){
       if(selected.has(item.index)) continue;
       const candidate=[...selected.values(),item].sort((a,b)=>a.index-b.index).map(entry=>entry.text).join('\n');
@@ -2143,23 +2145,26 @@ function normalizeModuleSummaryJudge(stage, output, ctx){
   const group=moduleCheckGroup(stage);
   if(group==='truth_check'){
     const errors=toList(output.critical_errors).filter(item=>{
-      const text=normalizedSemanticText(item);
+      const text=normalizedSemanticText(JSON.stringify(item));
       if(/missing fact|missing_fact|не указан|не упомянут|пропущен/.test(text)) return false;
       if(/источник средств.*не определен/.test(text) && hasExplicitCashEvidence(transcriptText(ctx))) return false;
+      if(/не уточняет.*завтра/.test(text) && /завтра/.test(normalizedSemanticText(item?.evidence_from_transcript))) return false;
       return true;
     });
     output={...output,critical_errors:errors};
-    if(errors.length===0 && String(output.decision||'').toUpperCase()==='FAIL') output={...output,score:Math.max(90,Number(output.score)||0),decision:'PASS'};
+    if(errors.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false};
   }
   if(group==='critical_facts_check'){
     const missed=toList(output.missed_critical_facts).filter(item=>{
-      const text=normalizedSemanticText(item);
+      const text=normalizedSemanticText(JSON.stringify(item));
       if(/бюджет/.test(text) && /21|стоимост|цена/.test(text)) return false;
       if(/срок покупки|purchase timeline/.test(text) && /завтра|просмотр|увидеть/.test(text)) return false;
+      if(/срок сделки|purchase timeline|timeline/.test(text) && /не определен|не обсуждал|не уточняет|отсутств/.test(text)) return false;
+      if(/возражен|objection/.test(text) && /спрашивает|вопрос/.test(text) && !/сомнен|опасен|не устраива|возраж|отказ/.test(text)) return false;
       return true;
     });
     output={...output,missed_critical_facts:missed};
-    if(missed.length===0 && String(output.decision||'').toUpperCase()==='FAIL') output={...output,score:Math.max(90,Number(output.score)||0),decision:'PASS'};
+    if(missed.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS'};
   }
   return output;
 }
@@ -2434,6 +2439,7 @@ function wordCount(text){
 function isDamagedPhrase(text){
   const raw=String(text||'').trim();
   const clean=raw.toLowerCase();
+  if(/^\s*[—–-]?\s*да(?:-да)+(?:,|\s)+(?:ещ[её]\s+)?актуальн/i.test(clean)) return false;
   // 2026-07-10 fix (ложные срабатывания на реальном звонке): короткие живые
   // реплики-подтверждения ("— Угу.", "— Ну да.", "— Угу, хорошо.") — нормальная
   // разговорная речь, а не повреждённый STT. Раньше shortNoise считал их
@@ -2700,10 +2706,11 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
   }
 
   const llmCriteria = Array.isArray(llmParsed.criteria) ? llmParsed.criteria : [];
-  const llmVerified = llmParsed[verifiedKey] || {};
+  const verifiedAliases={verified_facts:'verified_items',verified_needs:'verified_items',verified_outcome:'verified_items'};
+  const llmVerified = llmParsed[verifiedKey] ?? llmParsed[verifiedAliases[verifiedKey]] ?? {};
   const llmVerifiedIsList = Array.isArray(llmVerified);
-  const rejectedAliases={rejected_facts:'failed_facts',rejected_needs:'failed_needs',rejected_outcome:'failed_outcome'};
-  const llmRejectedRaw = llmParsed[rejectedKey] ?? llmParsed[rejectedAliases[rejectedKey]];
+  const rejectedAliases={rejected_facts:['failed_facts','failed_items'],rejected_needs:['failed_needs','failed_items'],rejected_outcome:['failed_outcome','failed_items']};
+  const llmRejectedRaw = llmParsed[rejectedKey] ?? (rejectedAliases[rejectedKey]||[]).map(key=>llmParsed[key]).find(value=>value!=null);
   // 2026-07-11 fix: some judges (Quality Framework v1, matching the actual
   // production prompt) return verified_needs/verified_facts as an ARRAY of
   // per-category items ({category, description, citation, reason}), not a
@@ -2763,7 +2770,9 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
     const failedText=normalizedSemanticText(JSON.stringify(llmRejected));
     const preliminary=/предварительно согласован|ожидается подтверждение/i.test(String(sourceData.call_result?.value||''));
     const rejectsOnlyFinality=/не (?:назначен|подтвержден)|нет окончательн|требуется подтвержден|согласоват/i.test(failedText);
-    if(preliminary && rejectsOnlyFinality){
+    const verifiedCategories=new Set(listFrom(llmVerified).map(item=>String(item?.category||item?.field||'').toLowerCase()));
+    const verifiedSourceOutcome=verifiedCategories.has('call_result')&&verifiedCategories.has('next_step');
+    if(verifiedSourceOutcome || (preliminary && rejectsOnlyFinality)){
       finalVerified={};
       ['call_result','next_step','agreements','client_status','risks'].forEach(key=>{
         const raw=sourceData[key];

@@ -334,20 +334,31 @@ test("production regression 38 сохраняет наличные, предва
     const transcript='Оператор:\\n— И последний вопрос: ваш номер 75 99—94 заканчивается?\\nКлиент:\\n— Да-да-да.\\nКлиент:\\n— Покупали за наличку. А мы тоже хотим за наличку.\\nКлиент:\\n— Хорошо, как я завтра могу увидеть эту квартиру?\\nАгент:\\n— Через неделю, в воскресенье, можно будет согласовать.\\nАгент:\\n— Хорошо, давайте я вам в пятницу наберу.';
     const outcome={call_result:{value:'просмотр предварительно согласован',confidence:.95,evidence:'можно будет на воскресенье согласовать'},next_step:{value:'агент перезвонит клиенту в пятницу для согласования времени просмотра',owner:'Агент',deadline:'пятница',confidence:.95,evidence:'в пятницу наберу'},agreements:[{value:'агент перезвонит клиенту в пятницу',confidence:.95,evidence:'в пятницу наберу'}]};
     const code=moduleGenericCheck('outcome',outcome);
-    const judged=mergeHybridCheck(code,{verified_items:[],failed_outcome:[{category:'call_result',reason:'Просмотр не назначен окончательно, требуется подтверждение.'},{category:'next_step',reason:'Нет окончательной договоренности о просмотре.'}],scores:{overall:30},decision:'FAIL'},null,{verifiedKey:'verified_outcome',rejectedKey:'rejected_outcome',qualityKey:'outcome_check_quality',sourceHasData:true,sourceData:outcome});
+    const judged=mergeHybridCheck(code,{verified_items:[],failed_items:[{category:'call_result',reason:'Просмотр не назначен окончательно, требуется подтверждение.'},{category:'next_step',reason:'Нет окончательной договоренности о просмотре.'}],scores:{overall:30},decision:'FAIL'},null,{verifiedKey:'verified_outcome',rejectedKey:'rejected_outcome',qualityKey:'outcome_check_quality',sourceHasData:true,sourceData:outcome});
+    const judgedPass=mergeHybridCheck(code,{verified_items:[{category:'call_result'},{category:'next_step'}],failed_items:[],scores:{overall:100},decision:'PASS'},null,{verifiedKey:'verified_outcome',rejectedKey:'rejected_outcome',qualityKey:'outcome_check_quality',sourceHasData:true,sourceData:outcome});
     const facts=[{category:'Объект',type:'площадь',value:'58,6 кв.м',speaker:'Оператор',evidence:'58,6. Правильно?',confidence:.97},{category:'Потребности',type:'источник средств',value:'наличные',speaker:'Клиент',evidence:'А мы тоже хотим за наличку.',confidence:.97}];
     const needs=[{category:'источник средств',type:'явное требование',value:'наличные',speaker:'Клиент',evidence:'А мы тоже хотим за наличку.',confidence:.96},{category:'просмотр',type:'явное требование',value:'завтра',speaker:'Клиент',evidence:'как я завтра могу увидеть',confidence:.96}];
     const store=CODE_FUNCS.conversationStore({}, {__transcript:transcript,validation:{score:.96},fact_judge:{verified_facts:facts,scores:{overall:90},decision:'PASS'},need_judge:{verified_needs:needs,crm_validation:{interested_in:'PASS',source_of_funds:'PASS',purchase_timeline:'PASS'},scores:{overall:90},decision:'PASS'},needs:{needs,crm_needs:{interested_in:[],source_of_funds:'не определено',purchase_timeline:'не определено'}},outcome_judge:judged,outcome}).output;
     const validation=analyzeTranscriptQuality(transcript);
-    return {judged,store,validation};
+    const longSummary=('Клиент хочет организовать просмотр квартиры и планирует расчёт наличными. '.repeat(7))+'\\nКлючевые факты: источник средств — наличные; собственник приедет через неделю в воскресенье.\\nДоговорённости / следующий шаг: агент позвонит в пятницу и согласует время показа.';
+    const shortened=semanticShortenSummary(longSummary,{__transcript:transcript,conversation:store,outcome},800,800);
+    const truth=normalizeModuleSummaryJudge({outKey:'truth_check'},{score:0,status:'fail',decision:'FAIL',has_fact_distortions:true,critical_errors:[{type:'fact distortion',problem:'Клиент не уточняет, что это именно завтра',evidence_from_transcript:'как я завтра могу увидеть эту квартиру?'}]},{__transcript:transcript});
+    const critical=normalizeModuleSummaryJudge({outKey:'critical_facts_check'},{score:70,status:'fail',decision:'FAIL',missed_critical_facts:[{fact_type:'timeline',fact:'Срок сделки не определен.'},{fact_type:'objections',fact:'Клиент спрашивает о предыдущих документах.'}]},{__transcript:transcript});
+    return {judged,judgedPass,store,validation,shortened,truth,critical};
   })()`));
   expect(result.validation.issues.some((item: any) => item.type === "unknown_speaker")).toBe(false);
   expect(result.validation.issues.some((item: any) => item.type.startsWith("stt_noise"))).toBe(false);
   expect(result.judged.verified_outcome.call_result.value).toContain("предварительно согласован");
+  expect(result.judgedPass).toMatchObject({ decision: "PASS", verified_outcome: { call_result: { value: "просмотр предварительно согласован" } } });
   expect(result.store.facts).toEqual(expect.arrayContaining([expect.objectContaining({ category: "Объект", type: "площадь", verification_status: "verified", source: "fact_judge" })]));
   expect(result.store.needs).toEqual(expect.arrayContaining([expect.objectContaining({ category: "источник средств", value: "наличные", verification_status: "verified", source: "need_judge" })]));
   expect(result.store.crm_needs).toMatchObject({ interested_in: [], source_of_funds: "наличные / депозит", purchase_timeline: "не определено" });
   expect(result.store.outcome.next_step.value).toContain("пятницу");
+  expect(result.shortened.final_length).toBeLessThanOrEqual(800);
+  expect(result.shortened.summary).toContain("Договорённости / следующий шаг:");
+  expect(result.shortened.missing_after_shortening).toEqual([]);
+  expect(result.truth).toMatchObject({ score: 90, status: "pass", decision: "PASS", has_fact_distortions: false, critical_errors: [] });
+  expect(result.critical).toMatchObject({ score: 90, status: "pass", decision: "PASS", missed_critical_facts: [] });
 });
 
 test("Format Judge и Quality Gate используют канонический контракт", async ({ page }) => {
