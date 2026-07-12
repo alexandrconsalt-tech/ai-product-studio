@@ -258,7 +258,7 @@ test("Store сохраняет исходные факты, CRM needs и кор�
   });
 });
 
-test("Presentation применяет цель 700 и жёсткий максимум 800", async ({ page }) => {
+test("Presentation применяет единый максимум 800", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => ({
     target:CODE_FUNCS.presentationCheck({}, {summary:{summary:'А'.repeat(720)+'\\nСледующий шаг: звонок'}}).output,
@@ -326,6 +326,28 @@ test("контракты Judge не используют generic score и нор
   expect(result.broken).toMatchObject({ status: "technical_error", score: null, decision: "ERROR", error_code: "JUDGE_RESULT_UNAVAILABLE" });
   expect(result.emptyOutcome).toMatchObject({ status: "technical_error", decision: "ERROR", error_code: "PASS_WITH_EMPTY_VERIFIED_OUTCOME" });
   expect(result.meta).toMatchObject({ score: null, confidence: 0.97 });
+});
+
+test("production regression 38 сохраняет наличные, предварительный outcome и семантику Store", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript='Оператор:\\n— И последний вопрос: ваш номер 75 99—94 заканчивается?\\nКлиент:\\n— Да-да-да.\\nКлиент:\\n— Покупали за наличку. А мы тоже хотим за наличку.\\nКлиент:\\n— Хорошо, как я завтра могу увидеть эту квартиру?\\nАгент:\\n— Через неделю, в воскресенье, можно будет согласовать.\\nАгент:\\n— Хорошо, давайте я вам в пятницу наберу.';
+    const outcome={call_result:{value:'просмотр предварительно согласован',confidence:.95,evidence:'можно будет на воскресенье согласовать'},next_step:{value:'агент перезвонит клиенту в пятницу для согласования времени просмотра',owner:'Агент',deadline:'пятница',confidence:.95,evidence:'в пятницу наберу'},agreements:[{value:'агент перезвонит клиенту в пятницу',confidence:.95,evidence:'в пятницу наберу'}]};
+    const code=moduleGenericCheck('outcome',outcome);
+    const judged=mergeHybridCheck(code,{verified_items:[],failed_outcome:[{category:'call_result',reason:'Просмотр не назначен окончательно, требуется подтверждение.'},{category:'next_step',reason:'Нет окончательной договоренности о просмотре.'}],scores:{overall:30},decision:'FAIL'},null,{verifiedKey:'verified_outcome',rejectedKey:'rejected_outcome',qualityKey:'outcome_check_quality',sourceHasData:true,sourceData:outcome});
+    const facts=[{category:'Объект',type:'площадь',value:'58,6 кв.м',speaker:'Оператор',evidence:'58,6. Правильно?',confidence:.97},{category:'Потребности',type:'источник средств',value:'наличные',speaker:'Клиент',evidence:'А мы тоже хотим за наличку.',confidence:.97}];
+    const needs=[{category:'источник средств',type:'явное требование',value:'наличные',speaker:'Клиент',evidence:'А мы тоже хотим за наличку.',confidence:.96},{category:'просмотр',type:'явное требование',value:'завтра',speaker:'Клиент',evidence:'как я завтра могу увидеть',confidence:.96}];
+    const store=CODE_FUNCS.conversationStore({}, {__transcript:transcript,validation:{score:.96},fact_judge:{verified_facts:facts,scores:{overall:90},decision:'PASS'},need_judge:{verified_needs:needs,crm_validation:{interested_in:'PASS',source_of_funds:'PASS',purchase_timeline:'PASS'},scores:{overall:90},decision:'PASS'},needs:{needs,crm_needs:{interested_in:[],source_of_funds:'не определено',purchase_timeline:'не определено'}},outcome_judge:judged,outcome}).output;
+    const validation=analyzeTranscriptQuality(transcript);
+    return {judged,store,validation};
+  })()`));
+  expect(result.validation.issues.some((item: any) => item.type === "unknown_speaker")).toBe(false);
+  expect(result.validation.issues.some((item: any) => item.type.startsWith("stt_noise"))).toBe(false);
+  expect(result.judged.verified_outcome.call_result.value).toContain("предварительно согласован");
+  expect(result.store.facts).toEqual(expect.arrayContaining([expect.objectContaining({ category: "Объект", type: "площадь", verification_status: "verified", source: "fact_judge" })]));
+  expect(result.store.needs).toEqual(expect.arrayContaining([expect.objectContaining({ category: "источник средств", value: "наличные", verification_status: "verified", source: "need_judge" })]));
+  expect(result.store.crm_needs).toMatchObject({ interested_in: [], source_of_funds: "наличные / депозит", purchase_timeline: "не определено" });
+  expect(result.store.outcome.next_step.value).toContain("пятницу");
 });
 
 test("Format Judge и Quality Gate используют канонический контракт", async ({ page }) => {

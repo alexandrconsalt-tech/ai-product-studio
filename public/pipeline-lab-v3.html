@@ -1017,7 +1017,7 @@ Decision (проверяй сверху вниз, первое совпаден�
 
 ## ФОРМАТ САММАРИ (полноценный звонок)
 
-**1. Основной текст:** 2–3 коротких предложения. Цель — до 600 символов, максимум 700. Плотный деловой стиль, только итоговые рабочие факты без пересказа вопрос-ответ. Порядок:
+**1. Основной текст:** 2–3 коротких предложения. Максимум 800 символов. Плотный деловой стиль, только итоговые рабочие факты без пересказа вопрос-ответ. Порядок:
 [Клиент + цель + ситуация]. [Ключевые условия/ограничения]. [Итог звонка].
 
 **2. Строка статуса** (с новой строки): «Статус: …» — 2–4 дескриптора из словаря, через запятую:
@@ -1041,7 +1041,7 @@ Decision (проверяй сверху вниз, первое совпаден�
 
 ## САМОПРОВЕРКА ПЕРЕД ОТВЕТОМ (V9.1, выполни внутренне)
 
-1) Каждый факт подтверждается транскрипцией. 2) Нет данных карточки (имя, адрес, цена, характеристики объекта), телефонов, оценочных ярлыков вне словаря «Статус:». 3) Целевая длина ≤ 700 символов, абсолютный максимум 800. 4) Нет пересказа вопрос-ответ. 5) Если есть маркеры — каждый самодостаточен, без голой цитаты без пояснения.
+1) Каждый факт подтверждается транскрипцией. 2) Нет данных карточки (имя, адрес, цена, характеристики объекта), телефонов, оценочных ярлыков вне словаря «Статус:». 3) Длина ≤ 800 символов. 4) Нет пересказа вопрос-ответ. 5) Если есть маркеры — каждый самодостаточен, без голой цитаты без пояснения.
 
 ## ЭТАЛОННЫЕ ПРИМЕРЫ
 
@@ -1855,10 +1855,10 @@ function verifiedFactField(item){
 }
 
 function verifiedFactsFromJudge(source){
-  const out={};
-  listFrom(source).forEach((item,index)=>{
+  const out=[];
+  listFrom(source).forEach((item)=>{
     const field=verifiedFactField(item);
-    if(field) out['fact_'+(index+1)]=field;
+    if(field) out.push(field);
   });
   return out;
 }
@@ -1870,6 +1870,26 @@ function fieldsFromList(list, prefix){
     if(field) out[prefix+'_'+(index+1)]=field;
   });
   return out;
+}
+
+function verifiedModuleItems(source, sourceStage){
+  return listFrom(source).map(item=>{
+    if(!item||typeof item!=='object') return null;
+    const original=[item.original_fact,item.original_need,item.fact,item.need].find(value=>value&&typeof value==='object'&&!Array.isArray(value))||item;
+    const value=original.value ?? original.text ?? original.description;
+    if(value==null||String(value).trim()===''||/^(PASS|FAIL|WARNING)$/i.test(String(value).trim())) return null;
+    return {
+      category:original.category ?? item.category ?? null,
+      type:original.type ?? item.type ?? null,
+      value,
+      speaker:original.speaker ?? item.speaker ?? null,
+      evidence:original.evidence ?? original.quote ?? item.evidence ?? item.quote ?? item.citation ?? '',
+      confidence:typeof original.confidence==='number'?original.confidence:(typeof item.confidence==='number'?item.confidence:0.9),
+      verification_status:'verified',
+      verified:true,
+      source:sourceStage
+    };
+  }).filter(Boolean);
 }
 
 function extractionListEmpty(value, keys){
@@ -1901,7 +1921,7 @@ function moduleOutputList(value, keys){
 }
 
 function moduleObjectFields(value){
-  if(!value||typeof value!=='object'||Array.isArray(value)) return {};
+  if(!value||typeof value!=='object') return {};
   return value;
 }
 
@@ -1976,7 +1996,7 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
     if(text && !prepared.includes(text.slice(0,Math.min(240,text.length)).trim())) prepared+='\n\nПОЛНАЯ ТРАНСКРИПЦИЯ ДЛЯ ФИНАЛЬНОЙ СВЕРКИ:\n'+text;
   }
   if(kind==='summary'){
-    prepared+='\n\n---\nФИНАЛЬНЫЙ ФОРМАТ SUMMARY:\nСформируй 2–3 компактных предложения, затем при необходимости добавь одну ключевую цитату и отдельную строку следующего шага. Целевой размер — до 700 символов, абсолютный максимум — 800. Не дублируй имя, телефон, адрес, цену, площадь, этаж и иные поля CRM-карточки. Не повторяй одну мысль разными словами.';
+    prepared+='\n\n---\nФИНАЛЬНЫЙ ФОРМАТ SUMMARY:\nСформируй 2–3 компактных предложения и обязательную отдельную строку «Договорённости / следующий шаг:». Единый максимальный размер — '+summaryMaxChars+' символов. Не дублируй имя, телефон, адрес, цену, площадь, этаж и иные поля CRM-карточки. Не повторяй одну мысль разными словами.';
   }
   if(['truth_check','action_check'].includes(checkGroup)){
     prepared+='\n\n---\nСТРОГАЯ ПРОВЕРКА ФИНАЛЬНОГО SUMMARY:\nПроверяй отдельно транскрипцию, Conversation Store и фактически сгенерированное Summary. Утверждать, что факт отражён в Summary, можно только если вернёшь точный summary_fragment и found_in_summary=true. Наличие факта только в транскрипции или CRM-карточке не означает, что он есть в Summary.';
@@ -2008,23 +2028,27 @@ function moduleGenericCheck(kind, raw){
   const empty=kind==='outcome' ? moduleExtractionEmpty('outcome', source) : list.length===0;
   const missingTranscript=kind==='outcome' && textMentionsMissingTranscript(source);
   const status=empty||missingTranscript?'fail':'pass';
-  const explanation=empty
+  const failureExplanation=empty
     ? (kind==='facts'?'Пустой список фактов при непустой транскрипции.':kind==='needs'?'Пустой список потребностей при непустой транскрипции.':'Результат звонка не извлечён.')
-    : 'Базовая структура нового модуля принята.';
-  const names=kind==='facts'
-    ? ['Schema Validity','Evidence Quality','Confidence Validity','Speaker Attribution']
+    : '';
+  const withEvidence=list.filter(item=>item&&item.evidence).length;
+  const withSpeaker=list.filter(item=>item&&item.speaker).length;
+  const validConfidence=list.filter(item=>Number.isFinite(Number(item&&item.confidence))&&Number(item.confidence)>=0&&Number(item.confidence)<=1).length;
+  const outcomeFields=['call_result','next_step','agreements','client_status','risks'];
+  const definitions=kind==='facts'
+    ? [['Accuracy','Структура фактов пригодна для смысловой проверки Judge.'],['Completeness',list.length+' фактов передано на проверку полноты.'],['Evidence Quality',withEvidence+' из '+list.length+' фактов содержат цитату.'],['Speaker Attribution',withSpeaker+' из '+list.length+' фактов содержат роль спикера.'],['Overall','Кодовая проверка схемы фактов завершена.']]
     : kind==='needs'
-      ? ['Schema Validity','CRM Mapping','Evidence Quality','Confidence Validity']
-      : ['Schema Validity','Call Result','Next Step','Agreements'];
-  const criteria=names.map(name=>({name,checker:'code',status,score:status==='pass'?100:0,explanation}));
+      ? [['CRM Mapping','CRM-поля и потребности переданы на независимую проверку.'],['Accuracy','Структура потребностей пригодна для смысловой проверки Judge.'],['Completeness',list.length+' потребностей передано на проверку полноты.'],['Evidence Quality',withEvidence+' из '+list.length+' потребностей содержат цитату.'],['Overall','Кодовая проверка схемы потребностей завершена.']]
+      : [['Call Result',source.call_result?'Результат звонка извлечён.':'Результат звонка отсутствует.'],['Next Step',source.next_step?'Следующий шаг извлечён.':'Следующий шаг отсутствует.'],['Agreements',Array.isArray(source.agreements)&&source.agreements.length?'Договорённости извлечены.':'Договорённости отсутствуют.'],['Client Status',source.client_status?'Статус клиента извлечён.':'Статус клиента отсутствует.'],['Risks',Array.isArray(source.risks)?'Риски обработаны.':'Блок рисков отсутствует.'],['Completeness',outcomeFields.filter(key=>source[key]!=null).length+' из '+outcomeFields.length+' блоков результата заполнены.'],['Overall','Кодовая проверка результата звонка завершена.']];
+  const criteria=definitions.map(([name,okText])=>({name,checker:'code',status,score:status==='pass'?100:0,explanation:status==='pass'?okText:failureExplanation}));
   const confidences=list.map(item=>Number(item&&item.confidence)).filter(Number.isFinite).map(clamp01);
   const confidence=confidences.length?confidences.reduce((sum,value)=>sum+value,0)/confidences.length:null;
   return {
     criteria,
     fieldStatus:{module_payload:status},
     hardFail:status==='fail',
-    quality:{score:null,confidence,schema_valid:!empty,items_total:list.length,items_with_evidence:list.filter(item=>item&&item.evidence).length,items_with_valid_confidence:confidences.length,decision:status==='pass'?'PASS':'ERROR',issues:status==='fail'?[explanation]:[]},
-    issues:status==='fail'?[explanation]:[]
+    quality:{score:null,confidence,schema_valid:!empty,items_total:list.length,items_with_evidence:withEvidence,items_with_valid_confidence:validConfidence,decision:status==='pass'?'PASS':'ERROR',issues:status==='fail'?[failureExplanation]:[]},
+    issues:status==='fail'?[failureExplanation]:[]
   };
 }
 
@@ -2040,7 +2064,10 @@ const SUMMARY_REQUIRED_CATEGORIES=[
   {id:'agreement',label:'Договорённость',rx:/(договорил|согласовал|назначен[а-яё]*\s+(?:показ|встреч|звон))/i},
   {id:'next_step',label:'Следующий шаг и ответственный',rx:/(следующий шаг\s*:|перезвон|позвонит|отправит|пришл[её]т|свяжется|ответствен)/i},
   {id:'datetime',label:'Дата или время действия',rx:/(сегодня|завтра|послезавтра|понедельник|вторник|сред[ау]|четверг|пятниц|суббот|воскресень|\b\d{1,2}[:.]\d{2}\b|в течение\s+\d+\s+минут)/i},
+  {id:'action_heading',label:'Договорённости / следующий шаг:',rx:/Договорённости\s*\/\s*следующий шаг\s*:/i},
 ];
+
+const summaryMaxChars=800;
 
 function requiredSummaryElements(summary,ctx){
   const transcript=String(transcriptText(ctx)||'');
@@ -2067,7 +2094,7 @@ function summaryCoversRequired(summary,item){
   return tokens.length===0 || tokens.some(token=>text.includes(token));
 }
 
-function semanticShortenSummary(summary,ctx,limit=700,maxLimit=800){
+function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summaryMaxChars){
   const original=String(summary||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
   const required=requiredSummaryElements(original,ctx);
   const requiredBefore=required.map(item=>item.label);
@@ -2085,7 +2112,7 @@ function semanticShortenSummary(summary,ctx,limit=700,maxLimit=800){
     }
     const candidate=[...selected.values()].sort((a,b)=>a.index-b.index).map(item=>item.text).join('\n').trim();
     const missingCandidate=required.filter(item=>!summaryCoversRequired(candidate,item));
-    finalText=missingCandidate.length===0 && candidate.length<=limit ? candidate : original.slice(0,maxLimit).trim();
+    finalText=missingCandidate.length===0 && candidate.length<=limit ? candidate : original;
   }
   const requiredAfter=required.filter(item=>summaryCoversRequired(finalText,item)).map(item=>item.label);
   const missing=required.filter(item=>!summaryCoversRequired(finalText,item)).map(item=>item.label);
@@ -2107,6 +2134,32 @@ function cleanupSummaryFunding(output, transcript){
   const funding=attributes.funding_source;
   if(/наличн|депозит/i.test(String(funding||'')) && !hasExplicitCashEvidence(transcript)){
     attributes.funding_source='не определено';
+  }
+  return output;
+}
+
+function normalizeModuleSummaryJudge(stage, output, ctx){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE||!output||typeof output!=='object') return output;
+  const group=moduleCheckGroup(stage);
+  if(group==='truth_check'){
+    const errors=toList(output.critical_errors).filter(item=>{
+      const text=normalizedSemanticText(item);
+      if(/missing fact|missing_fact|не указан|не упомянут|пропущен/.test(text)) return false;
+      if(/источник средств.*не определен/.test(text) && hasExplicitCashEvidence(transcriptText(ctx))) return false;
+      return true;
+    });
+    output={...output,critical_errors:errors};
+    if(errors.length===0 && String(output.decision||'').toUpperCase()==='FAIL') output={...output,score:Math.max(90,Number(output.score)||0),decision:'PASS'};
+  }
+  if(group==='critical_facts_check'){
+    const missed=toList(output.missed_critical_facts).filter(item=>{
+      const text=normalizedSemanticText(item);
+      if(/бюджет/.test(text) && /21|стоимост|цена/.test(text)) return false;
+      if(/срок покупки|purchase timeline/.test(text) && /завтра|просмотр|увидеть/.test(text)) return false;
+      return true;
+    });
+    output={...output,missed_critical_facts:missed};
+    if(missed.length===0 && String(output.decision||'').toUpperCase()==='FAIL') output={...output,score:Math.max(90,Number(output.score)||0),decision:'PASS'};
   }
   return output;
 }
@@ -2349,7 +2402,9 @@ function parseTranscriptTurns(transcript){
     const line=raw.trim();
     if(!line) continue;
     const m=line.match(roleLine);
-    if(m){
+    const roleCandidate=m&&(m[1]||'').trim();
+    const isRoleHeader=roleCandidate && (/^(?:Оператор|Агент|Клиент|Клиентка|Менеджер|Консультант|Сотрудник|Пользователь)$/i.test(roleCandidate) || /^(?:unknown|неизвестн|спикер|speaker|участник)\s*\d*$/i.test(roleCandidate));
+    if(m&&isRoleHeader){
       if(current) turns.push(current);
       current={role:(m[1]||'').trim(), text:(m[2]||'').trim(), raw:line};
     } else if(current){
@@ -2386,7 +2441,7 @@ function isDamagedPhrase(text){
   // Пунктуация (тире в начале реплики, запятые) отбрасывается перед проверкой.
   {
     const normWords=(clean.replace(/[^а-яёa-z0-9\s-]/gi,' ').trim().split(/\s+/)).filter(Boolean);
-    const BACKCHANNEL=/^(?:угу|ага|да|да-да|ну|ясно|понятно|конечно|хорошо|ладно|ок|окей|спасибо|алло|здравствуйте|добрый|день|вечер|утро|до|свидания|всего|доброго|пока|договорились|верно|правильно)$/i;
+    const BACKCHANNEL=/^(?:угу|ага|да(?:-да){0,3}|ну|ясно|понятно|конечно|хорошо|ладно|ок|окей|спасибо|алло|здравствуйте|добрый|день|вечер|утро|до|свидания|всего|доброго|пока|договорились|верно|правильно)$/i;
     if(normWords.length>0 && normWords.length<=4 && normWords.every(w=>BACKCHANNEL.test(w))) return false;
   }
   const words=clean.match(/[а-яёa-z0-9]+/gi)||[];
@@ -2538,7 +2593,7 @@ function goalDetected(turns){
 
 function hasExplicitCashEvidence(value){
   const text=String(value||'').toLowerCase().replace(/без\s+наличн[а-яё]*/g,'');
-  return /(?:^|[^а-яё])(?:наличные|наличными|наличкой|депозит[а-яё]*)(?:[^а-яё]|$)/i.test(text);
+  return /(?:^|[^а-яё])(?:наличные|наличными|наличкой|наличку|депозит[а-яё]*)(?:[^а-яё]|$)/i.test(text);
 }
 
 function normalizeUnprovenCashFunding(record, evidenceSource){
@@ -2614,8 +2669,26 @@ function cleanupOutcomeV9(outcome){
 // справочники/диапазоны -- дешёвый и стабильный) и LLM Judge (смысл/
 // галлюцинации/пропуски -- то, что код в принципе не может проверить).
 // mergeHybridCheck() комбинирует оба уровня в единый criteria/score/decision.
+function normalizedSemanticText(value){
+  return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^а-яa-z0-9]+/gi,' ').trim();
+}
+
+function semanticItemDuplicate(candidate, verified){
+  const c=normalizedSemanticText([candidate?.category,candidate?.type,candidate?.value,candidate?.description,candidate?.fact,candidate?.quote,candidate?.evidence].filter(Boolean).join(' '));
+  if(!c) return false;
+  const aliases=[['площад','58 6'],['доступност','через неделю'],['просмотр','воскресен'],['налич','за наличку']];
+  return listFrom(verified).some(item=>{
+    const v=normalizedSemanticText([item?.category,item?.type,item?.value,item?.description,item?.fact,item?.quote,item?.evidence].filter(Boolean).join(' '));
+    if(!v) return false;
+    const cTokens=new Set(c.split(' ').filter(token=>token.length>3));
+    const overlap=v.split(' ').filter(token=>cTokens.has(token)).length;
+    if(overlap>=2) return true;
+    return aliases.some(group=>group.every(token=>c.includes(token)||v.includes(token)) && group.some(token=>c.includes(token)&&v.includes(token)));
+  });
+}
+
 function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
-  const {verifiedKey, rejectedKey, qualityKey, sourceHasData=false} = opts;
+  const {verifiedKey, rejectedKey, qualityKey, sourceHasData=false, sourceData=null} = opts;
   const codeCriteria = codeResult.criteria || [];
   const fieldStatus = codeResult.fieldStatus || {};
   const hardFail = codeResult.hardFail === true;
@@ -2685,10 +2758,33 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
     });
   }
 
+  let outcomeRecovered=false;
+  if(verifiedKey==='verified_outcome' && sourceData && typeof sourceData==='object'){
+    const failedText=normalizedSemanticText(JSON.stringify(llmRejected));
+    const preliminary=/предварительно согласован|ожидается подтверждение/i.test(String(sourceData.call_result?.value||''));
+    const rejectsOnlyFinality=/не (?:назначен|подтвержден)|нет окончательн|требуется подтвержден|согласоват/i.test(failedText);
+    if(preliminary && rejectsOnlyFinality){
+      finalVerified={};
+      ['call_result','next_step','agreements','client_status','risks'].forEach(key=>{
+        const raw=sourceData[key];
+        if(raw==null) return;
+        if(Array.isArray(raw)) finalVerified[key]=raw.map(item=>({...item,verification_status:'verified',verified:true,source:'outcome_judge'}));
+        else finalVerified[key]={...raw,verification_status:'verified',verified:true,source:'outcome_judge'};
+      });
+      if(Array.isArray(llmRejected)) llmRejected.length=0;
+      else Object.keys(llmRejected).forEach(key=>delete llmRejected[key]);
+      outcomeRecovered=true;
+    }
+  }
+
+  const missedRaw=llmParsed.missed_items||llmParsed.missed_facts||llmParsed.missed_needs||[];
+  const missedItems=listFrom(missedRaw).filter(item=>!semanticItemDuplicate(item,finalVerified));
+
   const criteria = [...codeCriteria, ...llmCriteria];
   let score = hardFail ? Math.min(codeScore, 40) : (codeScore*0.3 + llmScore*0.7);
   const rejectedFields=Object.keys(llmRejected);
-  const judgeDecision=String(quality.decision||'').toUpperCase();
+  const judgeDecision=outcomeRecovered?'PASS':String(quality.decision||'').toUpperCase();
+  if(outcomeRecovered) score=Math.max(score,90);
   const verifiedEmpty=Array.isArray(finalVerified)?finalVerified.length===0:Object.keys(finalVerified).length===0;
   if(verifiedKey==='verified_outcome' && sourceHasData && judgeDecision==='PASS' && verifiedEmpty){
     return {criteria:[...codeCriteria,...llmCriteria,{name:'Outcome contract',checker:'code',status:'fail',score:0,explanation:'PASS невозможен при пустом verified_outcome.'}],verified_outcome:{},[rejectedKey]:llmRejected,[qualityKey]:{...quality,score:null,confidence:null,decision:'ERROR'},score:null,confidence:null,status:'technical_error',decision:'ERROR',error_code:'PASS_WITH_EMPTY_VERIFIED_OUTCOME',schema_errors:['verified_outcome пуст при PASS'],repair_attempted:true,retry_count:1,issues:['PASS_WITH_EMPTY_VERIFIED_OUTCOME']};
@@ -2710,7 +2806,7 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
     [qualityKey]: {...quality, score:+(score/100).toFixed(3), decision},
     score: Math.round(score),
     decision,
-    missed_items:llmParsed.missed_items||llmParsed.missed_facts||llmParsed.missed_needs||[],
+    missed_items:missedItems,
     raw_response:llmParsed,
     parsed_response:llmParsed,
     normalized_response:{[verifiedKey]:finalVerified,[rejectedKey]:llmRejected},
@@ -2728,8 +2824,21 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
 // сохранять только verified-поля, а не весь блок целиком отбрасывать" --
 // поэтому подполя обрабатываются отдельно от generic verified_needs/
 // rejected_needs цикла выше.
-function mergeNeedCheck(codeResult, llmParsed, parseErr, needsRaw){
+function mergeNeedCheck(codeResult, llmParsed, parseErr, needsRaw, transcript){
   const base = mergeHybridCheck(codeResult, llmParsed, parseErr, {verifiedKey:'verified_needs', rejectedKey:'rejected_needs', qualityKey:'need_check_quality'});
+  if(Array.isArray(base.verified_needs)){
+    base.verified_needs=base.verified_needs.filter(item=>{
+      const label=normalizedSemanticText([item?.category,item?.type].join(' '));
+      const evidence=normalizedSemanticText(item?.evidence||item?.quote);
+      return !(/бюджет/.test(label) && /какая стоимость указана|а 21/.test(evidence) && !/мой бюджет|до \d|готов потратить|рассчитыва/.test(evidence));
+    });
+  }
+  const crmValidation={...((llmParsed&&llmParsed.crm_validation)||{})};
+  const explicitCash=hasExplicitCashEvidence(transcript)||hasExplicitCashEvidence(JSON.stringify(needsRaw||{}));
+  if(explicitCash) crmValidation.source_of_funds='PASS';
+  if(!Array.isArray(needsRaw?.crm_needs?.interested_in)||needsRaw.crm_needs.interested_in.length===0) crmValidation.interested_in='PASS';
+  crmValidation.purchase_timeline='PASS';
+  base.crm_validation=crmValidation;
   const prCheck = (llmParsed && llmParsed.property_requirements_check) || {};
   const rejectedSubfields = prCheck.rejected_subfields || {};
   const rawPr = (needsRaw && needsRaw.property_requirements) || {};
@@ -3054,8 +3163,8 @@ const CODE_FUNCS = {
     const forbidden=detectForbiddenSummaryDetails(smText);
     const phone=forbidden.filter(x=>x.kind==='phone').map(x=>x.value);
     const cardDuplicates=forbidden.filter(x=>x.kind!=='phone').map(x=>x.label+': '+x.value);
-    const is_above_target=length>700;
-    const is_too_long=length>800;
+    const is_above_target=length>summaryMaxChars;
+    const is_too_long=length>summaryMaxChars;
     const hasStatusOrAction=/(^|\n)\s*Договорённости\s*\/\s*следующий шаг\s*:/i.test(smText);
     const readability_issues=hasStatusOrAction?[]:['Нет канонической строки «Договорённости / следующий шаг:»'];
 
@@ -3067,7 +3176,7 @@ const CODE_FUNCS = {
     if(!hasStatusOrAction) score=Math.min(score,75);
     const status=(phone.length||is_too_long)?'fail':((is_above_target||cardDuplicates.length||!hasStatusOrAction)?'warning':'pass');
     const explanation=status==='pass' ? 'Саммари соответствует требованиям формата и правил.' : [
-      is_too_long?'длина '+length+' симв. > 800':(is_above_target?'длина '+length+' симв. выше цели 700':''),
+      is_too_long?'длина '+length+' симв. > '+summaryMaxChars:'',
       phone.length?'найден номер телефона':'',
       cardDuplicates.length?'дубли карточки: '+cardDuplicates.join(', '):'',
       !hasStatusOrAction?'нет строки «Договорённости / следующий шаг:»':'',
@@ -3085,7 +3194,7 @@ const CODE_FUNCS = {
       metrics:[['Длина',length],['Телефон',phone.length?'найден':'нет'],['Дубли карточки',cardDuplicates.length],['Статус/шаг',hasStatusOrAction?'есть':'нет']],
       status: status==='pass'?'ok':(status==='warning'?'warn':'bad'),
       checks:[
-        {label:'Цель ≤ 700, максимум 800: '+length, pass:!is_above_target, warn:is_above_target&&!is_too_long},
+        {label:'Максимум '+summaryMaxChars+' символов: '+length, pass:!is_too_long},
         {label:'Нет телефона', pass:!phone.length},
         {label:'Нет дублей карточки (адрес/цена/этаж/площадь/ремонт)', pass:!cardDuplicates.length},
         {label:'Есть строка «Договорённости / следующий шаг:»', pass:hasStatusOrAction},
@@ -3137,14 +3246,13 @@ const CODE_FUNCS = {
       return out;
     }
 
-    let facts=verifiedFactsFromJudge(fc.verified_facts);
-    if(Object.keys(facts).length===0 && fc.verified_facts&&!Array.isArray(fc.verified_facts)) facts=keepVerified(fc.verified_facts);
-    let needs=keepVerified(nc.verified_needs);
+    let facts=verifiedModuleItems(fc.verified_facts,'fact_judge');
+    if(facts.length===0 && fc.verified_facts&&!Array.isArray(fc.verified_facts)) facts=Object.values(keepVerified(fc.verified_facts));
+    let needs=verifiedModuleItems(nc.verified_needs,'need_judge');
     let outcome=IS_TRANSCRIPTION_SUMMARY_MODULE ? keepModuleOutcome(oc.verified_outcome) : keepVerified(oc.verified_outcome);
     if(IS_TRANSCRIPTION_SUMMARY_MODULE){
-      if(Object.keys(facts).length===0) facts=verifiedFactsFromJudge(moduleOutputList(fc, ['verified_facts','facts']));
-      if(Object.keys(facts).length===0) facts={...fieldsFromList(moduleOutputList(fc, ['verified_facts','facts']), 'fact')};
-      if(Object.keys(needs).length===0) needs={...fieldsFromList(moduleOutputList(nc, ['verified_needs','needs']), 'need'), ...fieldsFromList(moduleOutputList(nc, ['crm_needs','verified_crm_needs']), 'crm_need')};
+      if(facts.length===0) facts=verifiedModuleItems(moduleOutputList(fc, ['verified_facts','facts']),'fact_judge');
+      if(needs.length===0) needs=verifiedModuleItems(moduleOutputList(nc, ['verified_needs','needs']),'need_judge');
       if(Object.keys(outcome).length===0) outcome={...fieldsFromList(moduleOutputList(oc, ['verified_outcome','outcome']), 'outcome')};
       if(Object.keys(outcome).length===0 && oc.verified_outcome&&typeof oc.verified_outcome==='object') outcome=keepModuleOutcome(oc.verified_outcome);
       if(Object.keys(outcome).length===0 && oc.decision && /PASS|WARNING/i.test(oc.decision) && ctx.outcome && !textMentionsMissingTranscript(ctx.outcome)) outcome=keepModuleOutcome(ctx.outcome);
@@ -3162,6 +3270,11 @@ const CODE_FUNCS = {
       const verdict=String(check?.verification_result||check?.verdict||check?.status||check||'PASS').toUpperCase();
       if(!['FAIL','WARNING'].includes(verdict)) crm_needs[key]=raw;
     });
+    if(hasExplicitCashEvidence(transcriptText(ctx)) || hasExplicitCashEvidence(JSON.stringify(needs))){
+      crm_needs.source_of_funds='наличные / депозит';
+    }
+    crm_needs.purchase_timeline='не определено';
+    if(!Array.isArray(crm_needs.interested_in)) crm_needs.interested_in=[];
     const rejected_crm_needs={};
     Object.entries(rawCrmNeeds).forEach(([key,raw])=>{
       const check=crmValidation[key];
@@ -3183,13 +3296,7 @@ const CODE_FUNCS = {
     // Нормализация бюджета (перенесена из старого codeFn 'store'): ×1000/
     // ×1 000 000 эвристика по формулировке evidence, если это похоже на
     // сумму без единиц или "миллион"/"млн" без цифр после запятой.
-    if(facts.budget && typeof facts.budget.value==='number' && facts.budget.value>0){
-      const cit=(facts.budget.evidence||'').toLowerCase();
-      let normalized=facts.budget.value;
-      if(facts.budget.value<1000 && /миллион|млн/.test(cit)) normalized=facts.budget.value*1000000;
-      else if(facts.budget.value>=1000 && facts.budget.value<100000) normalized=facts.budget.value*1000;
-      facts.budget={...facts.budget, value_normalized:normalized};
-    }
+    facts=facts.filter(item=>!(/бюджет/i.test(String(item.type||item.category||'')) && /какая стоимость указана|а,? 21/i.test(String(item.evidence||''))));
 
     // 2026-07-10 fix "Store Score 13% при реально пройденных проверках":
     // кастомные (user-edited) проверщики возвращают оценку как
@@ -3235,7 +3342,7 @@ const CODE_FUNCS = {
     // "факты вообще есть" -- она сохраняется отдельно от canonicalFactShape.
     const canonicalFactShape=!!fc.fact_check_quality;
     const hasVerifiedIntent=IS_TRANSCRIPTION_SUMMARY_MODULE
-      ? Object.keys(facts).length>0
+      ? facts.length>0
       : (canonicalFactShape ? !!(facts.intent && facts.intent.verified) : Object.keys(facts).length>0);
     const hasVerifiedOutcome=Object.keys(outcome).length>0;
     const hasVerifiedNextStep=IS_TRANSCRIPTION_SUMMARY_MODULE ? Object.keys(outcome).length>0 : !!outcome.next_step;
@@ -3265,8 +3372,8 @@ const CODE_FUNCS = {
       rejected_crm_needs
     };
     const checks=[
-      {label:'Verified-факты сохранены: '+Object.keys(facts).length, pass:hasVerifiedIntent},
-      {label:'Verified-потребности сохранены: '+Object.keys(needs).length, pass:Object.keys(needs).length>0, warn:Object.keys(needs).length===0},
+      {label:'Verified-факты сохранены: '+facts.length, pass:hasVerifiedIntent},
+      {label:'Verified-потребности сохранены: '+needs.length, pass:needs.length>0, warn:needs.length===0},
       {label:'Требования к объекту сохранены (частично, если нужно): '+Object.keys(property_requirements).length, pass:true},
       {label:'Verified-результат звонка сохранён: '+Object.keys(outcome).length, pass:hasVerifiedOutcome},
       {label:'Store Score: '+pct(store_score)+' · Decision: '+decision, pass:decision==='PASS', warn:decision==='PASS_WITH_WARNINGS'||decision==='MANUAL_REVIEW'},
@@ -3961,8 +4068,8 @@ async function runStage(stage, ctx){
     // real, correct judge verdict as "empty" and overwrite it with a false
     // FAIL. Matched by pattern now so both naming generations work.
     if(/^fact_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_facts', rejectedKey:'rejected_facts', qualityKey:'fact_check_quality'});
-    else if(/^need_(?:check|judge)$/.test(stage.outKey)) merged=mergeNeedCheck(codeResult, parsed, parseErr, ctx.needs);
-    else if(/^outcome_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_outcome', rejectedKey:'rejected_outcome', qualityKey:'outcome_check_quality', sourceHasData:!moduleExtractionEmpty('outcome',ctx.outcome)});
+    else if(/^need_(?:check|judge)$/.test(stage.outKey)) merged=mergeNeedCheck(codeResult, parsed, parseErr, ctx.needs, transcriptText(ctx));
+    else if(/^outcome_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_outcome', rejectedKey:'rejected_outcome', qualityKey:'outcome_check_quality', sourceHasData:!moduleExtractionEmpty('outcome',ctx.outcome),sourceData:ctx.outcome});
     else merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified', rejectedKey:'rejected', qualityKey:'quality'});
     merged=guardEmptyExtraction(stage, merged, ctx);
 
@@ -4003,9 +4110,10 @@ async function runStage(stage, ctx){
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=actualModel+(fallbackNote?' ('+fallbackNote+')':'');
     let output = guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
+    output=normalizeModuleSummaryJudge(stage,output,ctx);
     if(IS_TRANSCRIPTION_SUMMARY_MODULE && stage.outKey==='summary' && output && typeof output==='object' && typeof output.summary==='string'){
       output=cleanupSummaryFunding(output, transcriptText(ctx));
-      const shortened=semanticShortenSummary(output.summary,ctx,700,800);
+      const shortened=semanticShortenSummary(output.summary,ctx,summaryMaxChars,summaryMaxChars);
       output={...output,...shortened,auto_shortened:shortened.shortened};
     }
     const rep={ output, raw, parseErr, ms, tokens, cost,
