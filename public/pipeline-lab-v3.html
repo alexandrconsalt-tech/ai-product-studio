@@ -47,7 +47,7 @@
 
   label.fld{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
     font-weight:700;margin:0 0 6px}
-  textarea,input[type=text],input[type=password],select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  textarea,input[type=text],input[type=password],input[type=number],select{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
     color:var(--ink);font-family:inherit;font-size:13px;padding:10px 12px;resize:vertical}
   textarea{min-height:120px;line-height:1.55}
   textarea.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px}
@@ -81,7 +81,7 @@
   .stage-body{display:none;padding:0 12px 12px;border-top:1px solid var(--line)}
   .stage.open .stage-body{display:block}
   .stage-body .mini{display:flex;gap:8px;margin:10px 0}
-  .stage-body .mini > div{flex:1}
+  .stage-body .mini > div{flex:1;min-width:0}
   .toggle{position:relative;width:34px;height:20px;flex:0 0 auto}
   .toggle input{opacity:0;width:0;height:0}
   .toggle .sl{position:absolute;inset:0;background:var(--line2);border-radius:20px;cursor:pointer;transition:.2s}
@@ -89,7 +89,14 @@
     border-radius:50%;transition:.2s}
   .toggle input:checked + .sl{background:var(--gpt)}
   .toggle input:checked + .sl::before{transform:translateX(14px)}
-  .stage-actions{display:flex;gap:5px}
+  .stage-actions{display:flex;gap:5px;flex-wrap:wrap}
+  @media (max-width:560px){
+    .app{padding:14px 10px 48px}
+    .stage-body .mini{display:grid;grid-template-columns:1fr}
+    .runbar{flex-wrap:wrap;position:static}
+    .runbar .prog{order:3;flex-basis:100%}
+    .stage-h .st-type{display:none}
+  }
 
   /* панель прогона */
   .runbar{display:flex;gap:10px;align-items:center;padding:12px 16px;background:var(--panel);
@@ -1666,7 +1673,7 @@ function buildSummaryJudgeCriteria(key, raw){
     criterion('Длина до 700 символов', raw.is_too_long===true, false, 'Проверена длина Summary.'),
     criterion('Нет дублей карточки', toList(raw.forbidden_card_duplicates).length>0, false, 'Адрес, цена, характеристики и другие поля карточки не должны попадать в Summary.'),
     criterion('Нет PII/контактов', toList(raw.pii_found).length>0, false, 'Телефоны и контакты запрещены.'),
-    criterion('Есть Статус:/Следующий шаг:/Договорились:', raw.has_status_or_action_line===false, false, raw.has_status_or_action_line===false?'Не найдена ни одна из строк Статус:/Следующий шаг:/Договорились:.':'Строка статуса/действия присутствует.'),
+    criterion('Есть «Договорённости / следующий шаг:»', raw.has_status_or_action_line===false, false, raw.has_status_or_action_line===false?'Не найден канонический заголовок «Договорённости / следующий шаг:».':'Канонический заголовок присутствует.'),
     criterion('Читаемость и формат', toList(raw.readability_issues).length>0, toList(raw.forbidden_phrases).length>0, raw.explanation||'Проверен формат и лаконичность.')
   ];
   return [criterion('JSON и базовый результат', raw.status==='fail', raw.status==='warning', raw.explanation||'Проверен результат этапа.')];
@@ -1710,6 +1717,15 @@ function stageScoreFromOutput(stage, rep){
   return 100;
 }
 
+function stageConfidenceFromOutput(stage,rep){
+  const out=rep.output||{};
+  const explicit=out.quality&&Number(out.quality.confidence);
+  if(Number.isFinite(explicit)) return clamp01(explicit);
+  const items=moduleOutputList(out, stage.outKey==='facts'?['facts']:stage.outKey==='needs'?['needs']:stage.outKey==='outcome'?['agreements','risks']:[]);
+  const values=items.map(item=>Number(item&&item.confidence)).filter(Number.isFinite).map(clamp01);
+  return values.length ? +(values.reduce((sum,value)=>sum+value,0)/values.length).toFixed(3) : null;
+}
+
 function metaStatusFromScore(score, rep){
   const decision=String(rep.output&&rep.output.decision||'').toUpperCase();
   if(decision==='FAIL' || decision==='RETRY' || decision==='RETRY_STT' || decision==='STOP') return 'fail';
@@ -1730,10 +1746,11 @@ function buildStageMeta(stage, rep){
   ];
   const issues=[...toList(rep.error), ...toList(rep.parseErr), ...toList(rep.output&&rep.output.issues)].filter(Boolean).map(formatIssue);
   const recommendations=toList(rep.output&&rep.output.recommendations).map(formatIssue).filter(Boolean);
+  const confidence=stageConfidenceFromOutput(stage,rep);
   return {
     status,
     score:score==null?null:+score.toFixed(1),
-    confidence:score==null?null:+(score/100).toFixed(3),
+    confidence,
     durationMs:rep.ms||0,
     tokens:rep.tokens,
     cost:rep.cost,
@@ -1755,7 +1772,6 @@ function attachReviewerScores(stageReports){
     source.report.meta={
       ...(source.report.meta||buildStageMeta(source.stage,source.report)),
       score:reviewerMeta.score,
-      confidence:reviewerMeta.confidence,
       status:reviewerMeta.status,
       explanation:'Оценка независимого проверщика: '+reviewer.stage.name+'.',
       criteria:[{name:'Оценка независимого Judge',checker:'llm',status:reviewerMeta.status,score:reviewerMeta.score,explanation:reviewerMeta.explanation}]
@@ -1995,10 +2011,19 @@ function moduleGenericCheck(kind, raw){
   const explanation=empty
     ? (kind==='facts'?'Пустой список фактов при непустой транскрипции.':kind==='needs'?'Пустой список потребностей при непустой транскрипции.':'Результат звонка не извлечён.')
     : 'Базовая структура нового модуля принята.';
+  const names=kind==='facts'
+    ? ['Schema Validity','Evidence Quality','Confidence Validity','Speaker Attribution']
+    : kind==='needs'
+      ? ['Schema Validity','CRM Mapping','Evidence Quality','Confidence Validity']
+      : ['Schema Validity','Call Result','Next Step','Agreements'];
+  const criteria=names.map(name=>({name,checker:'code',status,score:status==='pass'?100:0,explanation}));
+  const confidences=list.map(item=>Number(item&&item.confidence)).filter(Number.isFinite).map(clamp01);
+  const confidence=confidences.length?confidences.reduce((sum,value)=>sum+value,0)/confidences.length:null;
   return {
-    criteria:[{name:'Generic module extraction', checker:'code', status, score:status==='pass'?100:0, explanation}],
+    criteria,
     fieldStatus:{module_payload:status},
     hardFail:status==='fail',
+    quality:{score:null,confidence,schema_valid:!empty,items_total:list.length,items_with_evidence:list.filter(item=>item&&item.evidence).length,items_with_valid_confidence:confidences.length,decision:status==='pass'?'PASS':'ERROR',issues:status==='fail'?[explanation]:[]},
     issues:status==='fail'?[explanation]:[]
   };
 }
@@ -2590,7 +2615,7 @@ function cleanupOutcomeV9(outcome){
 // галлюцинации/пропуски -- то, что код в принципе не может проверить).
 // mergeHybridCheck() комбинирует оба уровня в единый criteria/score/decision.
 function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
-  const {verifiedKey, rejectedKey, qualityKey} = opts;
+  const {verifiedKey, rejectedKey, qualityKey, sourceHasData=false} = opts;
   const codeCriteria = codeResult.criteria || [];
   const fieldStatus = codeResult.fieldStatus || {};
   const hardFail = codeResult.hardFail === true;
@@ -2598,14 +2623,14 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
 
   if(parseErr || !llmParsed || typeof llmParsed !== 'object'){
     const criteria=[...codeCriteria, {name:'LLM Judge', checker:'llm', status:'fail', score:0, explanation:'LLM-проверка вернула невалидный JSON: '+(parseErr||'нет ответа')}];
-    const decision = hardFail ? 'FAIL' : 'MANUAL_REVIEW';
-    return {criteria, [verifiedKey]:{}, [rejectedKey]:{}, [qualityKey]:{checked:0,verified:0,rejected:0,score:+(codeScore/100).toFixed(3),decision}, score:Math.round(codeScore*0.3), decision, issues:codeResult.issues||[]};
+    return {criteria, [verifiedKey]:{}, [rejectedKey]:{}, [qualityKey]:{checked:0,verified:0,rejected:0,score:null,confidence:null,decision:'ERROR'}, score:null, confidence:null, status:'technical_error', decision:'ERROR', error_code:'JUDGE_RESULT_UNAVAILABLE', parse_error:parseErr||'нет ответа', schema_errors:[], repair_attempted:false, retry_count:0, issues:[...(codeResult.issues||[]),'JUDGE_RESULT_UNAVAILABLE']};
   }
 
   const llmCriteria = Array.isArray(llmParsed.criteria) ? llmParsed.criteria : [];
   const llmVerified = llmParsed[verifiedKey] || {};
   const llmVerifiedIsList = Array.isArray(llmVerified);
-  const llmRejectedRaw = llmParsed[rejectedKey];
+  const rejectedAliases={rejected_facts:'failed_facts',rejected_needs:'failed_needs',rejected_outcome:'failed_outcome'};
+  const llmRejectedRaw = llmParsed[rejectedKey] ?? llmParsed[rejectedAliases[rejectedKey]];
   // 2026-07-11 fix: some judges (Quality Framework v1, matching the actual
   // production prompt) return verified_needs/verified_facts as an ARRAY of
   // per-category items ({category, description, citation, reason}), not a
@@ -2634,7 +2659,10 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
         ? {score: llmParsed.scores.overall > 1 ? llmParsed.scores.overall/100 : llmParsed.scores.overall, decision: llmParsed.decision}
         : rawQuality);
   const llmScore = typeof quality.score === 'number' ? quality.score*100
-    : (llmCriteria.length ? llmCriteria.reduce((s,c)=>s+(c.score||0),0)/llmCriteria.length : 70);
+    : (llmCriteria.length ? llmCriteria.reduce((s,c)=>s+(c.score||0),0)/llmCriteria.length : null);
+  if(llmScore==null){
+    return {criteria:[...codeCriteria], [verifiedKey]:{}, [rejectedKey]:llmRejected, [qualityKey]:{score:null,confidence:null,decision:'ERROR'}, score:null,confidence:null,status:'technical_error',decision:'ERROR',error_code:'JUDGE_RESULT_UNAVAILABLE',schema_errors:['scores.overall отсутствует'],repair_attempted:false,retry_count:0,issues:['Judge не вернул рассчитываемую оценку.']};
+  }
 
   // Двойной гейт: поле попадает в финальный verified только если СОГЛАСНЫ
   // оба уровня -- код (структура/справочник) и LLM (смысл/достоверность).
@@ -2661,6 +2689,10 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
   let score = hardFail ? Math.min(codeScore, 40) : (codeScore*0.3 + llmScore*0.7);
   const rejectedFields=Object.keys(llmRejected);
   const judgeDecision=String(quality.decision||'').toUpperCase();
+  const verifiedEmpty=Array.isArray(finalVerified)?finalVerified.length===0:Object.keys(finalVerified).length===0;
+  if(verifiedKey==='verified_outcome' && sourceHasData && judgeDecision==='PASS' && verifiedEmpty){
+    return {criteria:[...codeCriteria,...llmCriteria,{name:'Outcome contract',checker:'code',status:'fail',score:0,explanation:'PASS невозможен при пустом verified_outcome.'}],verified_outcome:{},[rejectedKey]:llmRejected,[qualityKey]:{...quality,score:null,confidence:null,decision:'ERROR'},score:null,confidence:null,status:'technical_error',decision:'ERROR',error_code:'PASS_WITH_EMPTY_VERIFIED_OUTCOME',schema_errors:['verified_outcome пуст при PASS'],repair_attempted:true,retry_count:1,issues:['PASS_WITH_EMPTY_VERIFIED_OUTCOME']};
+  }
   const hasCriticalRejection=rejectedFields.some(field=>/intent|source_of_funds|call_result|next_step/i.test(field));
   let decision;
   if(hardFail || judgeDecision==='FAIL') decision='FAIL';
@@ -2678,6 +2710,14 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
     [qualityKey]: {...quality, score:+(score/100).toFixed(3), decision},
     score: Math.round(score),
     decision,
+    missed_items:llmParsed.missed_items||llmParsed.missed_facts||llmParsed.missed_needs||[],
+    raw_response:llmParsed,
+    parsed_response:llmParsed,
+    normalized_response:{[verifiedKey]:finalVerified,[rejectedKey]:llmRejected},
+    parse_error:null,
+    schema_errors:[],
+    repair_attempted:false,
+    retry_count:0,
     issues: codeResult.issues||[]
   };
 }
@@ -3016,8 +3056,8 @@ const CODE_FUNCS = {
     const cardDuplicates=forbidden.filter(x=>x.kind!=='phone').map(x=>x.label+': '+x.value);
     const is_above_target=length>700;
     const is_too_long=length>800;
-    const hasStatusOrAction=/(^|\n)\s*(Статус|Следующий шаг|Договорились)\s*:/i.test(smText);
-    const readability_issues=hasStatusOrAction?[]:['Нет строки "Статус:" или "Следующий шаг:"/"Договорились:"'];
+    const hasStatusOrAction=/(^|\n)\s*Договорённости\s*\/\s*следующий шаг\s*:/i.test(smText);
+    const readability_issues=hasStatusOrAction?[]:['Нет канонической строки «Договорённости / следующий шаг:»'];
 
     let score=100;
     if(is_too_long) score=Math.min(score,60);
@@ -3030,7 +3070,7 @@ const CODE_FUNCS = {
       is_too_long?'длина '+length+' симв. > 800':(is_above_target?'длина '+length+' симв. выше цели 700':''),
       phone.length?'найден номер телефона':'',
       cardDuplicates.length?'дубли карточки: '+cardDuplicates.join(', '):'',
-      !hasStatusOrAction?'нет строки Статус:/Следующий шаг:/Договорились:':'',
+      !hasStatusOrAction?'нет строки «Договорённости / следующий шаг:»':'',
     ].filter(Boolean).join('; ');
 
     return {output:{
@@ -3048,7 +3088,7 @@ const CODE_FUNCS = {
         {label:'Цель ≤ 700, максимум 800: '+length, pass:!is_above_target, warn:is_above_target&&!is_too_long},
         {label:'Нет телефона', pass:!phone.length},
         {label:'Нет дублей карточки (адрес/цена/этаж/площадь/ремонт)', pass:!cardDuplicates.length},
-        {label:'Есть строка Статус:/Следующий шаг:/Договорились:', pass:hasStatusOrAction},
+        {label:'Есть строка «Договорённости / следующий шаг:»', pass:hasStatusOrAction},
       ]};
   },
 
@@ -3333,11 +3373,11 @@ const CODE_FUNCS = {
     // deterministicPhone re-detection) are gone; we read presentation's own
     // fields directly instead of re-deriving them a second time.
     const weights={
-      truth_check:.40,
-      critical_facts_check:.20,
+      truth_check:.30,
+      critical_facts_check:.25,
       context_utility_check:.20,
       action_check:.15,
-      presentation_check:.05
+      presentation_check:.10
     };
     const labels={
       truth_check:'Проверка достоверности',
@@ -3485,17 +3525,18 @@ const CODE_FUNCS = {
     // путаница ролей (Truth Judge): это единственный сигнал, где сама
     // система не уверена, кто что сказал, и решение принципиально требует
     // человека, а не просто повторной генерации.
-    const conflict = judges.truth_check.status!=='unavailable' && truth.has_role_confusion===true;
+    const conflict = judges.truth_check.status==='fail' && [judges.critical_facts_check.status,judges.action_check.status].includes('pass');
     let decision;
-    if(conflict) decision='MANUAL_REVIEW';
-    else if(critical_errors.length>0 || (summary_quality_score>=75 && summary_quality_score<90)) decision='RETRY';
-    else if(summary_quality_score>=90 && critical_errors.length===0 && passOrUnavailable('truth_check') && passOrUnavailable('critical_facts_check') && action.status!=='fail' && !hasPii && !hasForbidden) decision='AUTO_SAVE';
-    else decision='MANUAL_REVIEW';
+    if(unavailableKeys.length>0) decision='TECHNICAL_ERROR';
+    else if(conflict) decision='JUDGE_REVIEW';
+    else if(summary_quality_score>=95 && critical_errors.length===0 && !hasPii && !hasForbidden) decision='AUTO_SAVE';
+    else if(summary_quality_score>=90 && critical_errors.length===0 && !hasPii && !hasForbidden) decision='SAVE_WITH_WARNING';
+    else decision='REVIEW_REQUIRED';
     // hasMissedNextStep -- явный сигнал, что судья Action уже сам пометил
     // проблему; если это как-то проскочило mimo critical_errors (напр. другая
     // формулировка), не даём AUTO_SAVE.
-    if(decision==='AUTO_SAVE' && hasMissedNextStep) decision='RETRY';
-    const stt=decision==='AUTO_SAVE'?'ok':(decision==='MANUAL_REVIEW'?'warn':'bad');
+    if((decision==='AUTO_SAVE'||decision==='SAVE_WITH_WARNING') && hasMissedNextStep) decision='REVIEW_REQUIRED';
+    const stt=decision==='AUTO_SAVE'?'ok':(decision==='SAVE_WITH_WARNING'||decision==='JUDGE_REVIEW'||decision==='REVIEW_REQUIRED'?'warn':'bad');
     const uniqueCritical=uniqTextList(critical_errors);
     const uniqueWarnings=uniqTextList(warnings).slice(0,5);
     const scoreBeforeCriticalPenalty=summary_quality_score;
@@ -3533,12 +3574,12 @@ const CODE_FUNCS = {
     const generatedActions=keyProblems.map(shortAction);
     const uniqueRecommendations=uniqTextList([...generatedActions, ...recommendations]).filter(recommendationAllowed).slice(0,3);
     const uniqueWarningDetails=warning_details.filter((item,i,arr)=>item.message && arr.findIndex(x=>x.warning_type===item.warning_type&&x.message===item.message)===i);
-    const main_reason=keyProblems[0] || (decision==='AUTO_SAVE'?'Критических проблем не найдено':'Требуется ручная проверка Summary');
+    const main_reason=keyProblems[0] || (decision==='AUTO_SAVE'?'Критических проблем не найдено':decision==='TECHNICAL_ERROR'?'Техническая ошибка проверки':'Требуется проверка Summary');
     const explanation = decision==='AUTO_SAVE'
       ? 'Саммари прошло все критические проверки и может быть сохранено автоматически.'
-      : decision==='RETRY'
-        ? 'Найдены критические проблемы качества Summary: нужен повтор генерации или исправление промта.'
-        : 'Критического провала нет, но качество или правила требуют ручной проверки.';
+      : decision==='TECHNICAL_ERROR'
+        ? 'Решение о качестве не принято из-за технической ошибки parser/schema/provider/contract.'
+        : 'Качество или конфликт проверок требуют ручной проверки.';
 
     return {
       output:{
@@ -3551,6 +3592,9 @@ const CODE_FUNCS = {
         warnings:uniqueWarnings,
         warning_details:uniqueWarningDetails,
         recommendations:uniqueRecommendations,
+        judge_conflict:conflict,
+        conflicting_claims:conflict?[{truth:judges.truth_check.status,critical_facts:judges.critical_facts_check.status,action:judges.action_check.status}]:[],
+        technical_errors:unavailableKeys.map(key=>({code:'JUDGE_RESULT_UNAVAILABLE',stage:key})),
         summary_required_facts:criticalFactSplit.summary_required_facts,
         card_context_facts:criticalFactSplit.card_context_facts,
         card_context_explanation:criticalFactSplit.card_context_facts.length
@@ -3634,10 +3678,12 @@ const CODE_FUNCS = {
     };
     const moduleHasFinalData=!IS_TRANSCRIPTION_SUMMARY_MODULE || (!!cs && Object.keys(cs.facts||{}).length>0 && (Object.keys(cs.needs||{}).length>0||Object.keys(cs.crm_needs||{}).length>0) && Object.keys(cs.outcome||{}).length>0 && !textMentionsMissingTranscript(cs.outcome));
     const semanticCoverageOk=!IS_TRANSCRIPTION_SUMMARY_MODULE || sm.semantic_coverage_preserved!==false;
-    const saved= moduleHasFinalData && semanticCoverageOk && (g.decision==='AUTO_SAVE' || g.decision==='AUTO_SAVE + лог');
-    return {output:{card, saved},
+    const technicalError=g.decision==='TECHNICAL_ERROR';
+    const saved= !technicalError && moduleHasFinalData && semanticCoverageOk && g.decision==='AUTO_SAVE';
+    const draft= !technicalError && moduleHasFinalData && ['SAVE_WITH_WARNING','REVIEW_REQUIRED','JUDGE_REVIEW'].includes(g.decision);
+    return {output:{card:technicalError?null:card, saved, draft, review_reasons:draft?(g.key_problems||g.warnings||[]):[], technical_reason:technicalError?(g.technical_errors||[]):[]},
       metrics:[['Решение Gate', g.decision||'—'],['Сохранение', saved?'выполнено':'отложено']],
-      status: saved?'ok':'warn',
+      status: saved?'ok':(technicalError?'bad':'warn'),
       checks:[{label: saved
         ? 'Карточка сохранена в CRM (в песочнице — симуляция)'
         : 'Карточка не пустая, но отправлена на ручную проверку (принцип «Never empty card»)',
@@ -3916,7 +3962,7 @@ async function runStage(stage, ctx){
     // FAIL. Matched by pattern now so both naming generations work.
     if(/^fact_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_facts', rejectedKey:'rejected_facts', qualityKey:'fact_check_quality'});
     else if(/^need_(?:check|judge)$/.test(stage.outKey)) merged=mergeNeedCheck(codeResult, parsed, parseErr, ctx.needs);
-    else if(/^outcome_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_outcome', rejectedKey:'rejected_outcome', qualityKey:'outcome_check_quality'});
+    else if(/^outcome_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_outcome', rejectedKey:'rejected_outcome', qualityKey:'outcome_check_quality', sourceHasData:!moduleExtractionEmpty('outcome',ctx.outcome)});
     else merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified', rejectedKey:'rejected', qualityKey:'quality'});
     merged=guardEmptyExtraction(stage, merged, ctx);
 
@@ -4052,7 +4098,10 @@ async function runPipeline(){
   const active=dedupeModuleVisibleChecks(pipeline.filter(s=>s.enabled));
   if(!active.length){ toast('Нет активных шагов'); return; }
 
-  ctx={ __transcript:transcript, stored_files: storedFilesForCtx() };
+  const runId=createDashboardRunId();
+  const pipelineConfigurationHash=stableHash(active.map(sanitize));
+  const transcriptHash=stableHash(transcript);
+  ctx={ __transcript:transcript, stored_files: storedFilesForCtx(), __run_id:runId, __pipeline_configuration_hash:pipelineConfigurationHash, __transcript_hash:transcriptHash };
   if(IS_TRANSCRIPTION_SUMMARY_MODULE) ctx.transcript=transcript;
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
@@ -4145,6 +4194,7 @@ async function runPipeline(){
     if(rep.cost) totalCost+=rep.cost;
     if(rep.status==='bad') errorCount++;
     else if(rep.status==='warn' || rep.status==='attn') warningCount++;
+    rep.stage_execution_id=runId+':'+String(i+1).padStart(2,'0')+':'+stableHash({stage:stage.outKey,startedAt,model:rep.model});
     stageReports.push({stage:sanitize(stage), report:rep});
 
     card.replaceWith(renderReport(stage, rep, i+1));
@@ -4161,7 +4211,7 @@ async function runPipeline(){
   reportsEl.innerHTML='';
   stageReports.forEach((item,index)=>reportsEl.appendChild(renderReport(item.stage,item.report,index+1)));
   renderFinal(totalTokens, totalCost, stageReports);
-  reportRunToParent({ startedAt, durationMs: Date.now()-startedMs, stageCount: active.length, errorCount, warningCount, totalTokens, totalCost, stageReports });
+  reportRunToParent({ runId, pipelineConfigurationHash, transcriptHash, startedAt, durationMs: Date.now()-startedMs, stageCount: active.length, errorCount, warningCount, totalTokens, totalCost, stageReports });
 }
 
 // Playground (AI Product Studio v2) listens for this from the parent
@@ -4176,9 +4226,9 @@ function reportRunToParent(run){
     // (dlReport, see renderFinal) -- so a test opened later from
     // Dashboard's run history shows exactly what that download would
     // have shown, not a lighter summary.
-    const report={ pipeline: pipeline.map(sanitize), result: ctx, stageReports: run.stageReports||[], usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
+    const report={ run_id:run.runId, started_at:run.startedAt, completed_at:new Date().toISOString(), pipeline_configuration_hash:run.pipelineConfigurationHash, transcript_hash:run.transcriptHash, pipeline: pipeline.map(sanitize), result: ctx, stageReports: run.stageReports||[], usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
     const payload={
-      id:createDashboardRunId(),
+      id:run.runId,
       startedAt: run.startedAt,
       finishedAt: new Date().toISOString(),
       durationMs: run.durationMs,
@@ -4193,7 +4243,7 @@ function reportRunToParent(run){
       qualityScore: gate ? (gate.summary_quality_score ?? check?.score) : check ? check.score : undefined,
       transcript: ctx.__transcript,
       report: report,
-      run_id:null,
+      run_id:run.runId,
       product_id:PRODUCT_ID||'standalone',
       productId:PRODUCT_ID||'standalone',
       product_name:PRODUCT_NAME||'Pipeline Lab v3',
@@ -4213,7 +4263,6 @@ function reportRunToParent(run){
       summary:summaryText(ctx),
       report_json:report,
     };
-    payload.run_id=payload.id;
     persistDashboardRun(payload);
     window.parent.postMessage({
       source:'pipeline-lab-v3', type:'run-complete', productId: PRODUCT_ID,
@@ -4225,6 +4274,13 @@ function reportRunToParent(run){
 function createDashboardRunId(){
   const suffix = (typeof crypto!=='undefined'&&crypto.randomUUID) ? crypto.randomUUID() : String(Date.now())+'_'+Math.random().toString(16).slice(2);
   return 'playground_test_run_'+suffix;
+}
+
+function stableHash(value){
+  let hash=2166136261;
+  const text=typeof value==='string'?value:JSON.stringify(value);
+  for(let i=0;i<text.length;i++){hash^=text.charCodeAt(i);hash=Math.imul(hash,16777619);}
+  return (hash>>>0).toString(16).padStart(8,'0');
 }
 
 function persistDashboardRun(payload){
@@ -4306,8 +4362,8 @@ function renderReport(stage, rep, num){
   }
 
   body+='<div class="metrics">'
-    +'<div class="metric"><div class="ml">Оценка</div><div class="mv '+scoreTone+'">'+(hasScore?Number(meta.score).toFixed(0)+'%':'—')+'</div></div>'
-    +'<div class="metric"><div class="ml">Confidence</div><div class="mv">'+(hasScore?Number(meta.confidence||0).toFixed(2):'—')+'</div></div>'
+    +'<div class="metric"><div class="ml">Оценка</div><div class="mv '+scoreTone+'">'+(hasScore?Number(meta.score).toFixed(0)+'%':'не рассчитана')+'</div></div>'
+    +'<div class="metric"><div class="ml">Confidence</div><div class="mv">'+(meta.confidence==null?'не рассчитан':Number(meta.confidence).toFixed(2))+'</div></div>'
     +'</div>';
 
   if(meta.criteria&&meta.criteria.length){

@@ -1,0 +1,7 @@
+[
+  {"report":32,"run_id":null,"generic_criteria":3,"facts_score":85,"needs_score":85,"fact_judge_score":85,"need_judge_score":85,"outcome_judge_score":72,"outcome_decision":"MANUAL_REVIEW","verified_outcome_empty":true},
+  {"report":33,"run_id":null,"generic_criteria":3,"facts_score":85,"needs_score":85,"fact_judge_score":85,"need_judge_score":85,"outcome_judge_score":72,"outcome_decision":"MANUAL_REVIEW","verified_outcome_empty":true},
+  {"report":34,"run_id":null,"generic_criteria":3,"facts_score":85,"needs_score":85,"fact_judge_score":85,"need_judge_score":85,"outcome_judge_score":72,"outcome_decision":"MANUAL_REVIEW","verified_outcome_empty":true},
+  {"report":35,"run_id":null,"generic_criteria":3,"facts_score":85,"needs_score":85,"fact_judge_score":85,"need_judge_score":85,"outcome_judge_score":100,"outcome_decision":"PASS","verified_outcome_empty":true},
+  {"report":36,"run_id":null,"generic_criteria":3,"facts_score":85,"needs_score":85,"fact_judge_score":85,"need_judge_score":85,"outcome_judge_score":72,"outcome_decision":"MANUAL_REVIEW","verified_outcome_empty":true}
+]

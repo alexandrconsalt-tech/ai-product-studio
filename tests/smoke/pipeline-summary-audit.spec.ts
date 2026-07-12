@@ -1,7 +1,16 @@
 import { expect, test } from "@playwright/test";
+import regressionCases from "../fixtures/transcription-summary-regression-32-36.json";
 
 const moduleUrl = "/pipeline-lab-v3.html?productName=" +
   encodeURIComponent("Модуль транскрибации и AI-саммари звонков");
+
+test("regression 32–36 фиксирует исходные системные дефекты", () => {
+  expect(regressionCases).toHaveLength(5);
+  expect(regressionCases.every((item) => item.run_id === null)).toBe(true);
+  expect(regressionCases.every((item) => item.generic_criteria > 0)).toBe(true);
+  expect(regressionCases.every((item) => item.facts_score === 85 && item.needs_score === 85)).toBe(true);
+  expect(regressionCases.some((item) => item.outcome_decision === "PASS" && item.verified_outcome_empty)).toBe(true);
+});
 
 test("пользовательская legacy-конфигурация сохраняется без дублирования этапов", async ({ page }) => {
   await page.addInitScript(() => {
@@ -121,7 +130,7 @@ test("legacy-оценки корректно пересчитывают Store и
   expect(result.gate.card_context_facts).toHaveLength(6);
   expect(result.gate.critical_errors).toEqual([]);
   expect(result.gate.summary_quality_score).toBeGreaterThanOrEqual(90);
-  expect(result.gate.decision).toBe("AUTO_SAVE");
+  expect(result.gate.decision).toBe("SAVE_WITH_WARNING");
 });
 
 test("семантическое сокращение сохраняет финансы и передаёт обязательные факты в retry", async ({ page }) => {
@@ -298,4 +307,44 @@ test("непроверенное финансирование не получа�
     details: "У клиента есть основная сумма, недостающую часть добирают",
     verified: false,
   });
+});
+
+test("контракты Judge не используют generic score и нормализуют failed-поля", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const code=moduleGenericCheck('facts',{facts:[{category:'goal',value:'купить',confidence:.97,evidence:'Хочу купить',speaker:'Клиент'}]});
+    const fact=mergeHybridCheck(code,{verified_facts:[{category:'goal',value:'купить',confidence:.97,evidence:'Хочу купить'}],failed_facts:[{category:'budget',reason:'нет цитаты'}],scores:{accuracy:98,completeness:96,evidence_quality:99,speaker_attribution:100,overall:98},decision:'WARNING'},null,{verifiedKey:'verified_facts',rejectedKey:'rejected_facts',qualityKey:'fact_check_quality'});
+    const broken=mergeHybridCheck(code,null,"Expected ',' or '}'",{verifiedKey:'verified_facts',rejectedKey:'rejected_facts',qualityKey:'fact_check_quality'});
+    const emptyOutcome=mergeHybridCheck(code,{verified_outcome:{},scores:{overall:100},decision:'PASS'},null,{verifiedKey:'verified_outcome',rejectedKey:'rejected_outcome',qualityKey:'outcome_check_quality',sourceHasData:true});
+    const meta=buildStageMeta({type:'llm',outKey:'facts'},{output:{facts:[{confidence:.97}]},status:'ok'});
+    return {code,fact,broken,emptyOutcome,meta};
+  })()`));
+
+  expect(result.code.criteria.map((item: any) => item.name)).not.toContain("Generic module extraction");
+  expect(result.fact.rejected_facts).toHaveLength(1);
+  expect(result.fact.score).toBeGreaterThanOrEqual(95);
+  expect(result.broken).toMatchObject({ status: "technical_error", score: null, decision: "ERROR", error_code: "JUDGE_RESULT_UNAVAILABLE" });
+  expect(result.emptyOutcome).toMatchObject({ status: "technical_error", decision: "ERROR", error_code: "PASS_WITH_EMPTY_VERIFIED_OUTCOME" });
+  expect(result.meta).toMatchObject({ score: null, confidence: 0.97 });
+});
+
+test("Format Judge и Quality Gate используют канонический контракт", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const format=CODE_FUNCS.presentationCheck({}, {summary:{summary:'Клиент уточнила цену.\\nДоговорённости / следующий шаг: агент перезвонит.'}}).output;
+    const base={score:96,status:'pass',explanation:'ok'};
+    const gate=CODE_FUNCS.summaryQualityGate({}, {
+      summary:{summary:'Клиент уточнила цену.\\nДоговорённости / следующий шаг: агент перезвонит.'},
+      conversation:{facts:{},needs:{},outcome:{}},
+      truth_check:{...base,has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false,critical_errors:[]},
+      critical_facts_check:{...base,missed_critical_facts:[]},
+      context_utility_check:{...base,context_clarity:96,business_usefulness:96,can_continue_without_recording:true,missing_for_next_agent:[]},
+      action_check:{...base,is_next_step_reflected:true,action_errors:[]},
+      presentation_check:format
+    }).output;
+    return {format,gate};
+  })()`));
+  expect(result.format.has_status_or_action_line).toBe(true);
+  expect(result.gate.decision).toBe("AUTO_SAVE");
+  expect(result.gate.summary_quality_score).toBeGreaterThanOrEqual(95);
 });
