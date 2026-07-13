@@ -1695,6 +1695,7 @@ function decisionToScore(decision){
 }
 function stageScoreFromOutput(stage, rep){
   const out=rep.output||{};
+  if(rep.error || rep.parseErr || out.status==='technical_error' || out.status==='unavailable' || String(out.decision||'').toUpperCase()==='ERROR') return 0;
   if(out.summary_quality_score!=null) return Number(out.summary_quality_score);
   if(stage.codeFn==='stt' && out.quality && out.quality.stt_quality_score!=null) return Number(out.quality.stt_quality_score)*100;
   if(stage.codeFn==='conversationStore' && out.quality && out.quality.store_score!=null) return Number(out.quality.store_score)*100;
@@ -1717,13 +1718,44 @@ function stageScoreFromOutput(stage, rep){
   return 100;
 }
 
-function stageConfidenceFromOutput(stage,rep){
+function normalizeConfidence(value){
+  if(value==null || value==='' || typeof value==='boolean') return null;
+  const number=Number(value);
+  if(!Number.isFinite(number)) return null;
+  return clamp01(number>1?number/100:number);
+}
+
+function collectStageItemConfidences(value, found=[]){
+  if(Array.isArray(value)){
+    value.forEach(item=>collectStageItemConfidences(item,found));
+    return found;
+  }
+  if(!value||typeof value!=='object') return found;
+  if(Object.prototype.hasOwnProperty.call(value,'confidence')){
+    const normalized=normalizeConfidence(value.confidence);
+    if(normalized!=null) found.push(normalized);
+  }
+  Object.entries(value).forEach(([key,nested])=>{
+    if(key!=='confidence' && ['facts','needs','outcome','verified_facts','verified_needs','verified_outcome','agreements','risks','call_result','next_step','client_status'].includes(key)) collectStageItemConfidences(nested,found);
+  });
+  return found;
+}
+
+function stageConfidenceFromOutput(stage,rep,score=null){
   const out=rep.output||{};
-  const explicit=out.quality&&Number(out.quality.confidence);
-  if(Number.isFinite(explicit)) return clamp01(explicit);
-  const items=moduleOutputList(out, stage.outKey==='facts'?['facts']:stage.outKey==='needs'?['needs']:stage.outKey==='outcome'?['agreements','risks']:[]);
-  const values=items.map(item=>Number(item&&item.confidence)).filter(Number.isFinite).map(clamp01);
-  return values.length ? +(values.reduce((sum,value)=>sum+value,0)/values.length).toFixed(3) : null;
+  const explicitCandidates=[out.confidence,out.quality&&out.quality.confidence];
+  for(const candidate of explicitCandidates){
+    const normalized=normalizeConfidence(candidate);
+    if(normalized!=null) return +normalized.toFixed(3);
+  }
+  const values=collectStageItemConfidences(out);
+  if(values.length) return +(values.reduce((sum,value)=>sum+value,0)/values.length).toFixed(3);
+  // У кодовых стадий и Judge confidence результата определяется фактически
+  // рассчитанной оценкой этого же контракта. Это не фиктивная константа:
+  // источником служит validation score, scores.overall, store_score,
+  // summary_quality_score либо детерминированное решение стадии.
+  const normalizedScore=normalizeConfidence(score);
+  return normalizedScore==null?null:+normalizedScore.toFixed(3);
 }
 
 function metaStatusFromScore(score, rep){
@@ -1746,7 +1778,7 @@ function buildStageMeta(stage, rep){
   ];
   const issues=[...toList(rep.error), ...toList(rep.parseErr), ...toList(rep.output&&rep.output.issues)].filter(Boolean).map(formatIssue);
   const recommendations=toList(rep.output&&rep.output.recommendations).map(formatIssue).filter(Boolean);
-  const confidence=stageConfidenceFromOutput(stage,rep);
+  const confidence=stageConfidenceFromOutput(stage,rep,score);
   return {
     status,
     score:score==null?null:+score.toFixed(1),
@@ -1762,16 +1794,18 @@ function buildStageMeta(stage, rep){
 }
 
 function attachReviewerScores(stageReports){
-  const reviewerKeys={facts:['fact_check','fact_judge'],needs:['need_check','need_judge'],outcome:['outcome_check','outcome_judge']};
+  const reviewerKeys={facts:['fact_check','fact_judge'],needs:['need_check','need_judge'],outcome:['outcome_check','outcome_judge'],summary:['quality_gate']};
   Object.entries(reviewerKeys).forEach(([sourceKey,candidates])=>{
     const source=stageReports.find(item=>item.stage.outKey===sourceKey);
     const reviewer=stageReports.find(item=>candidates.includes(item.stage.outKey));
     if(!source||!reviewer) return;
     const reviewerMeta=reviewer.report.meta||buildStageMeta(reviewer.stage,reviewer.report);
     if(reviewerMeta.score==null) return;
+    const sourceMeta=source.report.meta||buildStageMeta(source.stage,source.report);
     source.report.meta={
-      ...(source.report.meta||buildStageMeta(source.stage,source.report)),
+      ...sourceMeta,
       score:reviewerMeta.score,
+      confidence:sourceMeta.confidence??reviewerMeta.confidence,
       status:reviewerMeta.status,
       explanation:'Оценка независимого проверщика: '+reviewer.stage.name+'.',
       criteria:[{name:'Оценка независимого Judge',checker:'llm',status:reviewerMeta.status,score:reviewerMeta.score,explanation:reviewerMeta.explanation}]

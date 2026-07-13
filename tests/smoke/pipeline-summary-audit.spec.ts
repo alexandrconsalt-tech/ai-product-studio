@@ -331,6 +331,30 @@ test("контракты Judge не используют generic score и нор
   expect(result.meta).toMatchObject({ score: null, confidence: 0.97 });
 });
 
+test("каждый шаг Pipeline Lab получает Оценку и Confidence в итоговом отчёте", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const reports=[
+      {stage:{type:'code',outKey:'validation',codeFn:'validate',name:'Валидация'},report:{status:'ok',output:{score:.99,decision:'PASS'}}},
+      {stage:{type:'llm',outKey:'facts',name:'Факты'},report:{status:'ok',output:{facts:[{confidence:.97}]}}},
+      {stage:{type:'hybrid',outKey:'fact_judge',name:'Проверка фактов'},report:{status:'ok',output:{score:94,decision:'PASS',verified_facts:[{confidence:.96}]}}},
+      {stage:{type:'code',outKey:'conversation',codeFn:'conversationStore',name:'Store'},report:{status:'ok',output:{quality:{store_score:.925},facts:[{confidence:.95}]}}},
+      {stage:{type:'llm',outKey:'summary',name:'Summary'},report:{status:'ok',output:{summary:'Готово',semantic_coverage_preserved:true}}},
+      {stage:{type:'check',outKey:'truth_check',name:'Truth'},report:{status:'ok',output:{score:91,decision:'PASS'}}},
+      {stage:{type:'code',outKey:'quality_gate',name:'Gate'},report:{status:'warn',output:{summary_quality_score:84,decision:'REVIEW_REQUIRED'}}},
+      {stage:{type:'code',outKey:'publish_result',name:'Publish'},report:{status:'warn',output:{saved:false,draft:true}}},
+      {stage:{type:'llm',outKey:'failed_step',name:'Ошибка модели'},report:{status:'bad',error:'model unavailable',output:{status:'technical_error',decision:'ERROR'}}}
+    ];
+    reports.forEach(item=>{ item.report.meta=buildStageMeta(item.stage,item.report); });
+    attachReviewerScores(reports);
+    return reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence}));
+  })()`));
+  expect(result.every((item: any) => item.score != null && item.confidence != null)).toBe(true);
+  expect(result.find((item: any) => item.outKey === "facts")).toMatchObject({ score: 94, confidence: 0.97 });
+  expect(result.find((item: any) => item.outKey === "summary")).toMatchObject({ score: 84, confidence: 0.84 });
+  expect(result.find((item: any) => item.outKey === "failed_step")).toMatchObject({ score: 0, confidence: 0 });
+});
+
 test("production regression 38 сохраняет наличные, предварительный outcome и семантику Store", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
