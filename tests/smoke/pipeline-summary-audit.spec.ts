@@ -421,6 +421,33 @@ test("production regression 38 сохраняет наличные, предва
   expect(result.critical).toMatchObject({ score: 90, status: "pass", decision: "PASS", missed_critical_facts: [] });
 });
 
+test("production regression 44 сохраняет подтверждённый срок покупки и данные Need Judge", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript='Клиент: У меня сейчас на вкладах всё лежит, проценты терять не хочу. Сделка через два месяца, ориентировочно хочу выйти на сделку в середине сентября. Буду брать ипотеку в банке.';
+    const rawNeeds={crm_needs:{interested_in:['Новостройки','Ипотека'],source_of_funds:'не определено',purchase_timeline:'2–3 месяца'},needs:[
+      {category:'финансы',type:'источник средств',value:'деньги на вкладах',confidence:.96,speaker:'Клиент',evidence:'на вкладах всё лежит',verification_status:'pending'},
+      {category:'срок',type:'покупка',value:'середина сентября, через два месяца',confidence:.96,speaker:'Клиент',evidence:'сделка через два месяца',verification_status:'pending'}
+    ]};
+    const code=moduleGenericCheck('needs',rawNeeds);
+    const judged=mergeNeedCheck(code,{verified_needs:[],failed_needs:[],missed_needs:[],crm_validation:{interested_in:'PASS',source_of_funds:'PASS',purchase_timeline:'PASS'},scores:{overall:90},decision:'WARNING'},null,rawNeeds,transcript);
+    const store=CODE_FUNCS.conversationStore({}, {__transcript:transcript,validation:{score:.99},fact_judge:{verified_facts:[{category:'Срок',type:'сделка',value:'через два месяца',confidence:.96,evidence:'сделка через два месяца'}],scores:{overall:90},decision:'PASS'},need_judge:judged,needs:rawNeeds,outcome_judge:{verified_outcome:{next_step:{value:'выйти на сделку',confidence:.95,evidence:'выйти на сделку в середине сентября'}},scores:{overall:90},decision:'PASS'},outcome:{next_step:{value:'выйти на сделку',confidence:.95,evidence:'выйти на сделку в середине сентября'}}}).output;
+    const longSummary=('Клиент планирует покупку новостройки с привлечением ипотеки и хочет безопасно оформить сделку. '.repeat(8))+'Ключевые факты и цитаты: • Деньги находятся на вкладах — «на вкладах всё лежит». • Срок сделки — через два месяца — «в середине сентября». • Требуется проверка договора. • Клиент опасается мошенников. Договорённости / следующий шаг: клиент планирует выйти на сделку в середине сентября.';
+    const shortened=semanticShortenSummary(longSummary,{__transcript:transcript,needs:rawNeeds,conversation:store,outcome:{next_step:{value:'выйти на сделку'}}},800,800);
+    return {judged,store,shortened,cash:hasExplicitCashEvidence(transcript),timeline:purchaseTimelineFromText(transcript),runStageSource:runStage.toString()};
+  })()`));
+
+  expect(result.judged.verified_needs).toHaveLength(2);
+  expect(result.store.needs).toEqual(expect.arrayContaining([expect.objectContaining({ type: "покупка", verification_status: "verified" })]));
+  expect(result.store.crm_needs).toMatchObject({ source_of_funds: "наличные / депозит", purchase_timeline: "2–3 месяца" });
+  expect(result.cash).toBe(true);
+  expect(result.timeline).toBe("2–3 месяца");
+  expect(result.shortened.final_length).toBeLessThanOrEqual(800);
+  expect(result.shortened.summary).toContain("Договорённости / следующий шаг:");
+  expect(result.runStageSource).toContain("hybridRetryCount=1");
+  expect(result.runStageSource).toContain("Math.max(Number(stage.maxTokens)||0,14000)");
+});
+
 test("production regression 42 фильтрует object facts и согласует Judge/Publish", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {

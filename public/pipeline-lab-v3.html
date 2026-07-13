@@ -2224,6 +2224,30 @@ function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summa
     const missingCandidate=required.filter(item=>!summaryCoversRequired(candidate,item));
     finalText=missingCandidate.length===0 && candidate.length<=limit ? candidate : original;
   }
+  if(finalText.length>limit){
+    const sections=summaryDisplaySections(finalText);
+    const compose=()=>canonicalSummaryFormat([
+      sections.main,
+      sections.facts.length?'Ключевые факты и цитаты:\n'+sections.facts.map(item=>'• '+item).join('\n'):'',
+      sections.action?'Договорённости / следующий шаг: '+sections.action:''
+    ].filter(Boolean).join('\n'));
+    while(sections.facts.length>1 && compose().length>limit) sections.facts.pop();
+    if(compose().length>limit){
+      const sentences=(sections.main.match(/[^.!?]+[.!?]?/g)||[sections.main]).map(item=>item.trim()).filter(Boolean);
+      while(sentences.length>1 && compose().length>limit){
+        sentences.pop();
+        sections.main=sentences.join(' ');
+      }
+    }
+    if(compose().length>limit && sections.facts[0]?.length>220) sections.facts[0]=sections.facts[0].slice(0,217).replace(/\s+\S*$/,'')+'…';
+    if(compose().length>limit && sections.action.length>220) sections.action=sections.action.slice(0,217).replace(/\s+\S*$/,'')+'…';
+    if(compose().length>limit){
+      const fixedLength=compose().length-sections.main.length;
+      const room=Math.max(80,limit-fixedLength-1);
+      sections.main=sections.main.slice(0,room).replace(/\s+\S*$/,'')+'…';
+    }
+    finalText=compose().slice(0,limit).replace(/\s+\S*$/,'').trim();
+  }
   const requiredAfter=required.filter(item=>summaryCoversRequired(finalText,item)).map(item=>item.label);
   const missing=required.filter(item=>!summaryCoversRequired(finalText,item)).map(item=>item.label);
   return {
@@ -2732,7 +2756,7 @@ function goalDetected(turns){
 
 function hasExplicitCashEvidence(value){
   const text=String(value||'').toLowerCase().replace(/без\s+наличн[а-яё]*/g,'');
-  return /(?:^|[^а-яё])(?:наличные|наличными|наличкой|наличку|депозит[а-яё]*)(?:[^а-яё]|$)/i.test(text);
+  return /(?:^|[^а-яё])(?:наличные|наличными|наличкой|наличку|депозит[а-яё]*|вклад[а-яё]*)(?:[^а-яё]|$)/i.test(text);
 }
 
 function mortgageFundingFromText(value){
@@ -2740,6 +2764,26 @@ function mortgageFundingFromText(value){
   if(!/ипотек/.test(text)) return null;
   if(/ипотек[а-яё]*\s+(?:уже\s+)?одобрен|одобрен[а-яё]*\s+ипотек|банк\s+одобрил|получил[а-яё]*\s+одобрение/.test(text)) return 'ипотека одобрена';
   if(/ипотек[а-яё]*\s+в\s+процессе|в\s+ипотек[а-яё]*\s+предполага|планир[а-яё]*[^.!?\n]{0,80}ипотек|ипотек[а-яё]*[^.!?\n]{0,40}(?:оформля|пода[лн]|будет)|с\s+привлечением\s+ипотек/.test(text)) return 'ипотека в процессе';
+  return null;
+}
+
+function normalizePurchaseTimelineValue(value){
+  const raw=value&&typeof value==='object'&&'value' in value?value.value:value;
+  const source=Array.isArray(raw)?raw[0]:raw;
+  const text=normalizedSemanticText(source).replace(/-/g,'–');
+  if(/^до 1 месяца$/.test(text)) return 'до 1 месяца';
+  if(/^2\s*–\s*3 месяца$/.test(text)) return '2–3 месяца';
+  if(/^3\s*–\s*6 месяцев?$/.test(text)) return '3–6 месяцев';
+  if(/^более 6 месяцев$/.test(text)) return 'более 6 месяцев';
+  return null;
+}
+
+function purchaseTimelineFromText(value){
+  const text=normalizedSemanticText(value).replace(/-/g,'–');
+  if(/через\s+(?:один|1)\s+месяц|в\s+течение\s+(?:одного|1)\s+месяца|до\s+месяца/.test(text)) return 'до 1 месяца';
+  if(/через\s+(?:два|2|три|3)\s+месяц|2\s*–\s*3 месяца/.test(text)) return '2–3 месяца';
+  if(/через\s+(?:четыре|4|пять|5|шесть|6)\s+месяц|3\s*–\s*6 месяцев?/.test(text)) return '3–6 месяцев';
+  if(/более\s+(?:шести|6)\s+месяц|позже чем через\s+(?:шесть|6)\s+месяц/.test(text)) return 'более 6 месяцев';
   return null;
 }
 
@@ -2997,6 +3041,12 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
 // rejected_needs цикла выше.
 function mergeNeedCheck(codeResult, llmParsed, parseErr, needsRaw, transcript){
   const base = mergeHybridCheck(codeResult, llmParsed, parseErr, {verifiedKey:'verified_needs', rejectedKey:'rejected_needs', qualityKey:'need_check_quality'});
+  const rawNeeds=Array.isArray(needsRaw?.needs)?needsRaw.needs:[];
+  const noRejectedNeeds=Array.isArray(base.rejected_needs)&&base.rejected_needs.length===0;
+  if(Array.isArray(base.verified_needs)&&base.verified_needs.length===0&&rawNeeds.length&&noRejectedNeeds&&/PASS|WARNING/i.test(String(llmParsed?.decision||base.decision||''))){
+    base.verified_needs=rawNeeds.map(item=>({...item,verified:true,verification_status:'verified',source:'need_judge'}));
+    if(base.normalized_response) base.normalized_response.verified_needs=base.verified_needs;
+  }
   if(Array.isArray(base.verified_needs)){
     base.verified_needs=base.verified_needs.filter(item=>{
       const label=normalizedSemanticText([item?.category,item?.type].join(' '));
@@ -3447,7 +3497,9 @@ const CODE_FUNCS = {
       const mortgageFunding=mortgageFundingFromText(JSON.stringify({transcript:transcriptText(ctx),needs:ctx.needs,verified_needs:needs}));
       if(mortgageFunding) crm_needs.source_of_funds=mortgageFunding;
     }
-    crm_needs.purchase_timeline='не определено';
+    const purchaseTimeline=normalizePurchaseTimelineValue(crm_needs.purchase_timeline)
+      ||purchaseTimelineFromText(JSON.stringify({transcript:transcriptText(ctx),needs:ctx.needs,verified_needs:needs}));
+    crm_needs.purchase_timeline=purchaseTimeline||'не определено';
     if(!Array.isArray(crm_needs.interested_in)) crm_needs.interested_in=[];
     const rejected_crm_needs={};
     Object.entries(rawCrmNeeds).forEach(([key,raw])=>{
@@ -4236,7 +4288,7 @@ async function runStage(stage, ctx){
     const codeResult=codeFn(stage,ctx);
     const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
     const prompt=promptAudit.prompt;
-    const {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason}=await callModel(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens);
+    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason}=await callModel(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens);
     const promptHash=await hashPrompt(prompt);
     let parsed=null, parseErr=null;
     try{
@@ -4244,6 +4296,16 @@ async function runStage(stage, ctx){
       parsed=parseJSON(raw);
       if(stage.type==='llm') validateExtractionRoot(moduleStageKind(stage),parsed);
     }catch(e){ parseErr=e.message; }
+    let hybridRetryCount=0;
+    if(parseErr){
+      hybridRetryCount=1;
+      const retryResult=await callModel(prompt,stage.model,stage.provider,stage.temperature,Math.max(Number(stage.maxTokens)||0,14000));
+      raw=retryResult.text; tokens+=retryResult.tokens||0; actualModel=retryResult.actualModel; actualProvider=retryResult.actualProvider; fallbackNote=retryResult.fallbackNote; finishReason=retryResult.finishReason;
+      try{
+        if(finishReason==='length') throw new Error('TRUNCATED_JSON');
+        parsed=parseJSON(raw); parseErr=null;
+      }catch(e){ parsed=null; parseErr=e.message; }
+    }
     const ms=Math.round(performance.now()-t0);
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=actualModel+(fallbackNote?' ('+fallbackNote+')':'');
@@ -4264,6 +4326,8 @@ async function runStage(stage, ctx){
     else if(/^outcome_(?:check|judge)$/.test(stage.outKey)) merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified_outcome', rejectedKey:'rejected_outcome', qualityKey:'outcome_check_quality', sourceHasData:!moduleExtractionEmpty('outcome',ctx.outcome),sourceData:ctx.outcome});
     else merged=mergeHybridCheck(codeResult, parsed, parseErr, {verifiedKey:'verified', rejectedKey:'rejected', qualityKey:'quality'});
     merged=guardEmptyExtraction(stage, merged, ctx);
+    merged.retry_count=Math.max(Number(merged.retry_count)||0,hybridRetryCount);
+    merged.repair_attempted=Boolean(merged.repair_attempted||hybridRetryCount);
 
     const rep={ output:merged, raw, parseErr, ms, tokens, cost,
       provider:actualProvider, requested_provider:stage.provider||null, actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
