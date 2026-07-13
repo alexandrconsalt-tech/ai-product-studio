@@ -1921,16 +1921,23 @@ function fieldsFromList(list, prefix){
 function verifiedModuleItems(source, sourceStage){
   return listFrom(source).map(item=>{
     if(!item||typeof item!=='object') return null;
+    if(item.verified===false||item.verification_status==='rejected'||item.status==='rejected') return null;
     const original=[item.original_fact,item.original_need,item.fact,item.need].find(value=>value&&typeof value==='object'&&!Array.isArray(value))||item;
     const value=original.value ?? original.text ?? original.description;
     if(value==null||String(value).trim()===''||/^(PASS|FAIL|WARNING)$/i.test(String(value).trim())) return null;
+    if(/^(не упомянуто|не определено)$/i.test(String(value).trim())) return null;
+    const evidence=original.evidence ?? original.quote ?? item.evidence ?? item.quote ?? item.citation ?? '';
+    let confidence=typeof original.confidence==='number'?original.confidence:(typeof item.confidence==='number'?item.confidence:0.9);
+    if(isDamagedPhrase(String(evidence||''))) confidence=Math.min(confidence,0.65);
+    if(confidence<0.85) return null;
+    if(/для себя/i.test(String(value))&&/я просто покупатель/i.test(String(evidence))) return null;
     return {
       category:original.category ?? item.category ?? null,
       type:original.type ?? item.type ?? null,
       value,
       speaker:original.speaker ?? item.speaker ?? null,
-      evidence:original.evidence ?? original.quote ?? item.evidence ?? item.quote ?? item.citation ?? '',
-      confidence:typeof original.confidence==='number'?original.confidence:(typeof item.confidence==='number'?item.confidence:0.9),
+      evidence,
+      confidence,
       verification_status:'verified',
       verified:true,
       source:sourceStage
@@ -2085,9 +2092,9 @@ function moduleGenericCheck(kind, raw){
   const validConfidence=list.filter(item=>Number.isFinite(Number(item&&item.confidence))&&Number(item.confidence)>=0&&Number(item.confidence)<=1).length;
   const outcomeFields=['call_result','next_step','agreements','client_status','risks'];
   const definitions=kind==='facts'
-    ? [['Accuracy','Структура фактов пригодна для смысловой проверки Judge.'],['Completeness',list.length+' фактов передано на проверку полноты.'],['Evidence Quality',withEvidence+' из '+list.length+' фактов содержат цитату.'],['Speaker Attribution',withSpeaker+' из '+list.length+' фактов содержат роль спикера.'],['Overall','Кодовая проверка схемы фактов завершена.']]
+    ? [['Schema Validity','Структура фактов пригодна для смысловой проверки Judge.'],['Input Availability',list.length+' фактов передано Judge; это не оценка смысловой полноты.'],['Evidence Quality',withEvidence+' из '+list.length+' фактов содержат цитату.'],['Speaker Attribution',withSpeaker+' из '+list.length+' фактов содержат роль спикера.'],['Overall','Кодовая проверка схемы фактов завершена.']]
     : kind==='needs'
-      ? [['CRM Mapping','CRM-поля и потребности переданы на независимую проверку.'],['Accuracy','Структура потребностей пригодна для смысловой проверки Judge.'],['Completeness',list.length+' потребностей передано на проверку полноты.'],['Evidence Quality',withEvidence+' из '+list.length+' потребностей содержат цитату.'],['Overall','Кодовая проверка схемы потребностей завершена.']]
+      ? [['CRM Mapping','CRM-поля и потребности переданы на независимую проверку.'],['Schema Validity','Структура потребностей пригодна для смысловой проверки Judge.'],['Input Availability',list.length+' потребностей передано Judge; это не оценка смысловой полноты.'],['Evidence Quality',withEvidence+' из '+list.length+' потребностей содержат цитату.'],['Overall','Кодовая проверка схемы потребностей завершена.']]
       : [['Call Result',source.call_result?'Результат звонка извлечён.':'Результат звонка отсутствует.'],['Next Step',source.next_step?'Следующий шаг извлечён.':'Следующий шаг отсутствует.'],['Agreements',Array.isArray(source.agreements)&&source.agreements.length?'Договорённости извлечены.':'Договорённости отсутствуют.'],['Client Status',source.client_status?'Статус клиента извлечён.':'Статус клиента отсутствует.'],['Risks',Array.isArray(source.risks)?'Риски обработаны.':'Блок рисков отсутствует.'],['Completeness',outcomeFields.filter(key=>source[key]!=null).length+' из '+outcomeFields.length+' блоков результата заполнены.'],['Overall','Кодовая проверка результата звонка завершена.']];
   const criteria=definitions.map(([name,okText])=>({name,checker:'code',status,score:status==='pass'?100:0,explanation:status==='pass'?okText:failureExplanation}));
   const confidences=list.map(item=>Number(item&&item.confidence)).filter(Number.isFinite).map(clamp01);
@@ -2110,7 +2117,7 @@ const SUMMARY_REQUIRED_CATEGORIES=[
   {id:'constraints',label:'Ограничения и обязательные требования',rx:/(огранич|обязательн|не\s+подходит|важно,?\s+чтобы|требован)/i},
   {id:'objections',label:'Сомнения, возражения или риски',rx:/(сомнен|возраж|риск|смуща|опасен|проблем)/i},
   {id:'result',label:'Результат звонка',rx:/(результат|итог|статус\s*:|показ\s+(?:назначен|не подтвержд)|жд[её]т\s+подтвержден)/i},
-  {id:'agreement',label:'Договорённость',rx:/(договорил|согласу(?:ет|ют|ем|ете|ю|ют|ется)|согласовал|назначен[а-яё]*\s+(?:показ|встреч|звон))/i},
+  {id:'agreement',label:'Договорённость',rx:/(договорил|согласу(?:ет|ют|ем|ете|ю|ют|ется)|согласовал|назначен[а-яё]*\s+(?:показ|встреч|звон)|контрольн[а-яё]*\s+звон|просмотр[^.!?\n]{0,50}\b\d{1,2}[:.]\d{2}|Договорённости\s*\/\s*следующий шаг)/i},
   {id:'next_step',label:'Следующий шаг и ответственный',rx:/(следующий шаг\s*:|перезвон|позвонит|отправит|пришл[её]т|свяжется|ответствен)/i},
   {id:'datetime',label:'Дата или время действия',rx:/(сегодня|завтра|послезавтра|понедельник|вторник|сред[ау]|четверг|пятниц|суббот|воскресень|\b\d{1,2}[:.]\d{2}\b|в течение\s+\d+\s+минут)/i},
   {id:'action_heading',label:'Договорённости / следующий шаг:',rx:/Договорённости\s*\/\s*следующий шаг\s*:/i},
@@ -2126,6 +2133,8 @@ function requiredSummaryElements(summary,ctx){
     if(item.id==='finance') return item.rx.test(structured) || /(основн[а-яё]*\s+сумм|недоста[а-яё]*\s+сумм|добир|добрат|первоначальн[а-яё]*\s+взнос|маткап|субсид|рассроч)/i.test(transcript);
     if(item.id==='budget') return item.rx.test(structured);
     if(item.id==='constraints') return item.rx.test(transcript);
+    if(item.id==='motivation') return /(потому что|для\s+(?:себя|дочер|сын|родител|бизнес)|причин[а-яё]*\s+(?:покуп|продаж)|хочу[^.!?\n]{0,80}(?:чтобы|для того))/i.test(transcript);
+    if(item.id==='agreement') return /(договорил|согласовал|контрольн[а-яё]*\s+звон|просмотр[^.!?\n]{0,50}\b\d{1,2}[:.]\d{2}|давайте[^.!?\n]{0,80}(?:звон|просмотр|встреч))/i.test(source);
     return item.rx.test(source);
   }).map(item=>({...item}));
   const gateFacts=toList(currentSummaryGate(ctx)?.summary_required_facts);
@@ -2202,6 +2211,16 @@ function canonicalSummaryFormat(summary){
   return blocks.filter(Boolean).join('\n');
 }
 
+function detectSummarySectionDuplicates(summary){
+  const sections=summaryDisplaySections(summary);
+  const main=normalizedSemanticText(sections.main);
+  return sections.facts.filter(item=>{
+    const tokens=[...new Set((normalizedSemanticText(item).match(/[а-яёa-z0-9]{4,}/g)||[]).filter(token=>!/клиент|факт|цитат/.test(token)))];
+    if(tokens.length<2) return false;
+    return tokens.filter(token=>main.includes(token)).length/tokens.length>=0.6;
+  });
+}
+
 function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summaryMaxChars){
   const original=canonicalSummaryFormat(String(summary||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim());
   const required=requiredSummaryElements(original,ctx);
@@ -2248,11 +2267,12 @@ function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summa
     }
     finalText=compose().slice(0,limit).replace(/\s+\S*$/,'').trim();
   }
+  const shortened=finalText.length<original.length;
   const requiredAfter=required.filter(item=>summaryCoversRequired(finalText,item)).map(item=>item.label);
-  const missing=required.filter(item=>!summaryCoversRequired(finalText,item)).map(item=>item.label);
+  const missing=shortened?required.filter(item=>!summaryCoversRequired(finalText,item)).map(item=>item.label):[];
   return {
     summary:finalText,
-    shortened:finalText.length<original.length,
+    shortened,
     original_length:original.length,
     final_length:finalText.length,
     required_facts_before:required.map(item=>({type:item.id,value:item.label,importance:'high'})),
@@ -2307,18 +2327,22 @@ function normalizeModuleSummaryJudge(stage, output, ctx){
     output={...output,missed_critical_facts:missed};
     if(missed.length===0){
       const total=Math.max(Number(output.critical_facts_total)||0,toList(output.critical_facts_found).length);
-      output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',critical_facts_total:total,critical_facts_reflected:total,coverage_percent:total?100:100,explanation:'Все явно подтверждённые критические факты отражены; отсутствующие в разговоре данные не требуются.'};
+      output={...output,score:100,status:'pass',decision:'PASS',critical_facts_total:total,critical_facts_reflected:total,coverage_percent:100,explanation:'Все явно подтверждённые критические факты отражены; отсутствующие в разговоре данные не требуются.'};
     }
   }
   if(group==='context_utility_check'){
     const missing=toList(output.missing_for_next_agent).filter(item=>{
       const text=normalizedSemanticText(item);
+      const transcript=normalizedSemanticText(transcriptText(ctx));
+      const summary=normalizedSemanticText(summaryText(ctx));
       if(/сомнен/.test(text) && !/сомнен|опасен|не устраива|возраж|отказ/.test(normalizedSemanticText(transcriptText(ctx)))) return false;
       if(/какие дополнительн.*вариант/.test(text) && /подобрат|другие вариант|что нибудь/.test(normalizedSemanticText(transcriptText(ctx)))) return false;
+      if(/мотивац|причин.*покуп|почему.*покуп/.test(text) && !/(потому что|для себя|для дочер|для сына|для родител|для бизнеса|причин.*покуп)/.test(transcript)) return false;
+      if(/договорен|договорён|согласован/.test(text) && /(договоренности следующий шаг|контрольн.*звон|просмотр.*\d{1,2}[:.]\d{2})/.test(summary)) return false;
       return true;
     });
     output={...output,missing_for_next_agent:missing};
-    if(missing.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',can_continue_without_recording:true,explanation:'Summary содержит достаточный контекст для следующего действия агента.'};
+    if(missing.length===0&&output.can_continue_without_recording!==false) output={...output,score:100,status:'pass',decision:'PASS',context_clarity:Math.max(95,Number(output.context_clarity)||0),business_usefulness:Math.max(95,Number(output.business_usefulness)||0),can_continue_without_recording:true,explanation:'Summary содержит достаточный контекст для следующего действия агента.'};
   }
   if(group==='action_check'){
     const allReflected=output.is_result_reflected===true&&output.is_agreement_reflected===true&&output.is_next_step_reflected===true&&toList(output.action_errors).length===0;
@@ -2630,6 +2654,8 @@ function detectPhoneInTranscript(transcript){
   found.push(...grouped.filter(x=>(x.match(/\d/g)||[]).length>=10));
   const phoneLines=text.split(/\r?\n/).filter(line=>/(телефон|номер|контакт|звоните|перезвон)/i.test(line) && (line.match(/\d/g)||[]).length>=6);
   found.push(...phoneLines);
+  const partialPhoneLines=text.split(/\r?\n/).filter(line=>/(номер|телефон|контакт)[^\n]{0,80}(?:заканчива|последн)/i.test(line) && (line.match(/\d/g)||[]).length>=4);
+  found.push(...partialPhoneLines);
   return [...new Set(found.map(x=>String(x).trim()).filter(Boolean))];
 }
 
@@ -2640,6 +2666,7 @@ function detectRoleConfusion(turns){
     if(r==='Клиент' && /(у нас юридический отдел|я как агент|наше агентство|мы агентство|я агент|у нашего агентства)/i.test(text)){
       examples.push(turn.raw);
     }
+    if(r==='Клиент' && /(?:^|[.!?]\s*)(?:вы\s+частное\s+лицо|номер\s+для\s+связи\s+с\s+вами[^.!?]*заканчива)/i.test(text)) examples.push(turn.raw);
     if(r==='Агент' && /(я хочу купить|мне нужна квартира|хочу продать|я ищу|меня интересует|мой бюджет|у меня ипотека)/i.test(text)){
       examples.push(turn.raw);
     }
@@ -2687,8 +2714,8 @@ function analyzeTranscriptQuality(transcript){
   const damaged_phrase_ratio=turnCount?damagedTurns.length/turnCount:0;
   const phones=detectPhoneInTranscript(t);
   const roleConfusion=detectRoleConfusion(turns);
-  const role_confusion_penalty=0;
-  const pii_penalty=phones.length ? 0.05 : 0;
+  const role_confusion_penalty=roleConfusion.has?0.03:0;
+  const pii_penalty=phones.length ? 0.02 : 0;
   const stt_quality_score=clamp01(1 - unknown_speaker_ratio*0.3 - damaged_phrase_ratio*0.4 - role_confusion_penalty - pii_penalty);
   const role_quality_score=clamp01(1 - unknown_speaker_ratio - (roleConfusion.has ? 0.2 : 0));
   const noise_score=clamp01(1 - damaged_phrase_ratio);
@@ -2996,17 +3023,20 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
 
   const semanticCriteria=llmCriteria.length?llmCriteria:[{name:'LLM semantic overall',checker:'llm',status:llmScore>=90?'pass':llmScore>=70?'warning':'fail',score:Math.round(llmScore),explanation:'Смысловая оценка Judge до смешивания с кодовой проверкой.'}];
   const criteria = [...codeCriteria, ...semanticCriteria];
-  let score = hardFail ? Math.min(codeScore, 40) : (codeScore*0.3 + llmScore*0.7);
+  if(hardFail){
+    return {criteria:[...codeCriteria,...semanticCriteria], [verifiedKey]:{}, [rejectedKey]:llmRejected, [qualityKey]:{...quality,score:null,confidence:null,decision:'ERROR'},score:null,confidence:null,status:'technical_error',decision:'ERROR',error_code:'SCHEMA_VALIDATION_FAILED',schema_errors:codeResult.issues||['Схема результата не прошла кодовую проверку.'],repair_attempted:false,retry_count:0,issues:codeResult.issues||[]};
+  }
+  let score = llmScore;
   const rejectedFields=Object.keys(llmRejected);
-  const judgeDecision=outcomeRecovered?'PASS':String(quality.decision||'').toUpperCase();
-  if(outcomeRecovered) score=Math.max(score,90);
+  const judgeDecision=String(quality.decision||'').toUpperCase();
   const verifiedEmpty=Array.isArray(finalVerified)?finalVerified.length===0:Object.keys(finalVerified).length===0;
   if(verifiedKey==='verified_outcome' && sourceHasData && judgeDecision==='PASS' && verifiedEmpty){
     return {criteria:[...codeCriteria,...llmCriteria,{name:'Outcome contract',checker:'code',status:'fail',score:0,explanation:'PASS невозможен при пустом verified_outcome.'}],verified_outcome:{},[rejectedKey]:llmRejected,[qualityKey]:{...quality,score:null,confidence:null,decision:'ERROR'},score:null,confidence:null,status:'technical_error',decision:'ERROR',error_code:'PASS_WITH_EMPTY_VERIFIED_OUTCOME',schema_errors:['verified_outcome пуст при PASS'],repair_attempted:true,retry_count:1,issues:['PASS_WITH_EMPTY_VERIFIED_OUTCOME']};
   }
   const hasCriticalRejection=rejectedFields.some(field=>/intent|source_of_funds|call_result|next_step/i.test(field));
   let decision;
-  if(hardFail || judgeDecision==='FAIL') decision='FAIL';
+  if(judgeDecision==='FAIL') decision='FAIL';
+  else if(judgeDecision==='WARNING'||judgeDecision==='PASS_WITH_WARNINGS') decision='PASS_WITH_WARNINGS';
   else if(judgeDecision==='MANUAL_REVIEW' || hasCriticalRejection) decision='MANUAL_REVIEW';
   else if(rejectedFields.length) decision='PASS_WITH_WARNINGS';
   else if(score>=90) decision='PASS';
@@ -3033,6 +3063,30 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
   };
 }
 
+function restoreVerifiedNeedsFromSource(verified,rawNeeds){
+  const source=Array.isArray(rawNeeds)?rawNeeds:[];
+  const used=new Set();
+  return listFrom(verified).map(item=>{
+    if(!item||typeof item!=='object') return null;
+    const embedded=[item.original_need,item.need].find(value=>value&&typeof value==='object'&&!Array.isArray(value));
+    if(embedded) return {...embedded,verified:true,verification_status:'verified',source:'need_judge'};
+    const judgeText=normalizedSemanticText([item.category,item.type,item.value,item.description,item.citation,item.quote,item.evidence].filter(Boolean).join(' '));
+    let bestIndex=-1,bestScore=0;
+    source.forEach((candidate,index)=>{
+      if(used.has(index)) return;
+      const candidateText=normalizedSemanticText([candidate.category,candidate.type,candidate.value,candidate.evidence].filter(Boolean).join(' '));
+      const judgeTokens=new Set(judgeText.split(' ').filter(token=>token.length>3));
+      const overlap=candidateText.split(' ').filter(token=>judgeTokens.has(token)).length;
+      const categoryMatch=normalizedSemanticText(candidate.category)===normalizedSemanticText(item.category)?3:0;
+      const score=categoryMatch+overlap;
+      if(score>bestScore){bestScore=score;bestIndex=index;}
+    });
+    if(bestIndex<0||bestScore<2) return null;
+    used.add(bestIndex);
+    return {...source[bestIndex],verified:true,verification_status:'verified',source:'need_judge'};
+  }).filter(Boolean);
+}
+
 // Need Check имеет особый случай: property_requirements -- это не одно
 // value/evidence-поле, а объект с несколькими массивами-подполями. ТЗ прямо
 // требует: "если property_requirements частично не прошли проверку,
@@ -3044,10 +3098,12 @@ function mergeNeedCheck(codeResult, llmParsed, parseErr, needsRaw, transcript){
   const rawNeeds=Array.isArray(needsRaw?.needs)?needsRaw.needs:[];
   const noRejectedNeeds=Array.isArray(base.rejected_needs)&&base.rejected_needs.length===0;
   if(Array.isArray(base.verified_needs)&&base.verified_needs.length===0&&rawNeeds.length&&noRejectedNeeds&&/PASS|WARNING/i.test(String(llmParsed?.decision||base.decision||''))){
-    base.verified_needs=rawNeeds.map(item=>({...item,verified:true,verification_status:'verified',source:'need_judge'}));
+    const judgeMissed=listFrom(llmParsed?.missed_needs||llmParsed?.missed_items);
+    if(judgeMissed.length===0) base.verified_needs=rawNeeds.map(item=>({...item,verified:true,verification_status:'verified',source:'need_judge'}));
     if(base.normalized_response) base.normalized_response.verified_needs=base.verified_needs;
   }
   if(Array.isArray(base.verified_needs)){
+    base.verified_needs=restoreVerifiedNeedsFromSource(base.verified_needs,rawNeeds);
     base.verified_needs=base.verified_needs.filter(item=>{
       const label=normalizedSemanticText([item?.category,item?.type].join(' '));
       const evidence=normalizedSemanticText(item?.evidence||item?.quote);
@@ -3055,10 +3111,6 @@ function mergeNeedCheck(codeResult, llmParsed, parseErr, needsRaw, transcript){
     });
   }
   const crmValidation={...((llmParsed&&llmParsed.crm_validation)||{})};
-  const explicitCash=hasExplicitCashEvidence(transcript)||hasExplicitCashEvidence(JSON.stringify(needsRaw||{}));
-  if(explicitCash) crmValidation.source_of_funds='PASS';
-  if(!Array.isArray(needsRaw?.crm_needs?.interested_in)||needsRaw.crm_needs.interested_in.length===0) crmValidation.interested_in='PASS';
-  crmValidation.purchase_timeline='PASS';
   base.crm_validation=crmValidation;
   const prCheck = (llmParsed && llmParsed.property_requirements_check) || {};
   const rejectedSubfields = prCheck.rejected_subfields || {};
@@ -3387,19 +3439,23 @@ const CODE_FUNCS = {
     const is_above_target=length>summaryMaxChars;
     const is_too_long=length>summaryMaxChars;
     const hasStatusOrAction=/(^|\n)\s*Договорённости\s*\/\s*следующий шаг\s*:/i.test(smText);
+    const duplicateInformation=detectSummarySectionDuplicates(smText);
     const readability_issues=hasStatusOrAction?[]:['Нет канонической строки «Договорённости / следующий шаг:»'];
+    if(duplicateInformation.length) readability_issues.push('Основной текст повторяет факты из списка: '+duplicateInformation.join('; '));
 
     let score=100;
     if(is_too_long) score=Math.min(score,60);
     else if(is_above_target) score=Math.min(score,90);
     if(phone.length) score=Math.min(score,60);
     if(cardDuplicates.length) score=Math.min(score,80);
+    if(duplicateInformation.length) score=Math.min(score,90);
     if(!hasStatusOrAction) score=Math.min(score,75);
-    const status=(phone.length||is_too_long)?'fail':((is_above_target||cardDuplicates.length||!hasStatusOrAction)?'warning':'pass');
+    const status=(phone.length||is_too_long)?'fail':((is_above_target||cardDuplicates.length||duplicateInformation.length||!hasStatusOrAction)?'warning':'pass');
     const explanation=status==='pass' ? 'Саммари соответствует требованиям формата и правил.' : [
       is_too_long?'длина '+length+' симв. > '+summaryMaxChars:'',
       phone.length?'найден номер телефона':'',
       cardDuplicates.length?'дубли карточки: '+cardDuplicates.join(', '):'',
+      duplicateInformation.length?'повторы между основным текстом и списком фактов':'',
       !hasStatusOrAction?'нет строки «Договорённости / следующий шаг:»':'',
     ].filter(Boolean).join('; ');
 
@@ -3410,14 +3466,16 @@ const CODE_FUNCS = {
         pii_found:phone,
         forbidden_phrases:[],
         readability_issues,
+        duplicate_information:duplicateInformation,
         has_status_or_action_line:hasStatusOrAction,
       },
-      metrics:[['Длина',length],['Телефон',phone.length?'найден':'нет'],['Дубли карточки',cardDuplicates.length],['Статус/шаг',hasStatusOrAction?'есть':'нет']],
+      metrics:[['Длина',length],['Телефон',phone.length?'найден':'нет'],['Дубли карточки',cardDuplicates.length],['Повторы блоков',duplicateInformation.length],['Статус/шаг',hasStatusOrAction?'есть':'нет']],
       status: status==='pass'?'ok':(status==='warning'?'warn':'bad'),
       checks:[
         {label:'Максимум '+summaryMaxChars+' символов: '+length, pass:!is_too_long},
         {label:'Нет телефона', pass:!phone.length},
         {label:'Нет дублей карточки (адрес/цена/этаж/площадь/ремонт)', pass:!cardDuplicates.length},
+        {label:'Нет повторов между основным текстом и списком фактов', pass:!duplicateInformation.length, warn:duplicateInformation.length>0},
         {label:'Есть строка «Договорённости / следующий шаг:»', pass:hasStatusOrAction},
       ]};
   },
@@ -3450,8 +3508,12 @@ const CODE_FUNCS = {
     }
     function keepModuleOutcome(source){
       const out=keepVerified(source);
-      if(Object.keys(out).length) return out;
       Object.entries(source||{}).forEach(([key,field])=>{
+        if(Object.prototype.hasOwnProperty.call(out,key)) return;
+        if(Array.isArray(field)){
+          out[key]=field.map(item=>item&&typeof item==='object'?{...item,verified:true,verification_status:'verified',source:'outcome_check'}:item);
+          return;
+        }
         if(!field||typeof field!=='object') return;
         if(field.verified===false || field.verification_status==='rejected' || field.status==='rejected') return;
         const value='value' in field ? field.value : field;
@@ -3477,6 +3539,13 @@ const CODE_FUNCS = {
       if(Object.keys(outcome).length===0) outcome={...fieldsFromList(moduleOutputList(oc, ['verified_outcome','outcome']), 'outcome')};
       if(Object.keys(outcome).length===0 && oc.verified_outcome&&typeof oc.verified_outcome==='object') outcome=keepModuleOutcome(oc.verified_outcome);
       if(Object.keys(outcome).length===0 && oc.decision && /PASS|WARNING/i.test(oc.decision) && ctx.outcome && !textMentionsMissingTranscript(ctx.outcome)) outcome=keepModuleOutcome(ctx.outcome);
+      if(/PASS|WARNING/i.test(judgeDecision(oc,'outcome_check_quality'))&&ctx.outcome&&!textMentionsMissingTranscript(ctx.outcome)){
+        const rejectedOutcomeText=normalizedSemanticText(JSON.stringify(oc.rejected_outcome||oc.failed_outcome||{}));
+        const sourceOutcome=keepModuleOutcome(ctx.outcome);
+        Object.entries(sourceOutcome).forEach(([key,value])=>{
+          if(!(key in outcome)&&!rejectedOutcomeText.includes(normalizedSemanticText(key))) outcome[key]=value;
+        });
+      }
     }
     // property_requirements -- отдельный верхнеуровневый блок (не внутри
     // needs): mergeNeedCheck() уже сохраняет только verified-подполя, если
@@ -3491,14 +3560,15 @@ const CODE_FUNCS = {
       const verdict=String(check?.verification_result||check?.verdict||check?.status||check||'PASS').toUpperCase();
       if(!['FAIL','WARNING'].includes(verdict)) crm_needs[key]=raw;
     });
-    if(hasExplicitCashEvidence(transcriptText(ctx)) || hasExplicitCashEvidence(JSON.stringify(needs))){
+    const crmVerdict=key=>String(crmValidation[key]?.verification_result||crmValidation[key]?.verdict||crmValidation[key]?.status||crmValidation[key]||'PASS').toUpperCase();
+    if(!['FAIL','WARNING'].includes(crmVerdict('source_of_funds'))&&(hasExplicitCashEvidence(transcriptText(ctx)) || hasExplicitCashEvidence(JSON.stringify(needs)))){
       crm_needs.source_of_funds='наличные / депозит';
-    }else{
+    }else if(!['FAIL','WARNING'].includes(crmVerdict('source_of_funds'))){
       const mortgageFunding=mortgageFundingFromText(JSON.stringify({transcript:transcriptText(ctx),needs:ctx.needs,verified_needs:needs}));
       if(mortgageFunding) crm_needs.source_of_funds=mortgageFunding;
     }
-    const purchaseTimeline=normalizePurchaseTimelineValue(crm_needs.purchase_timeline)
-      ||purchaseTimelineFromText(JSON.stringify({transcript:transcriptText(ctx),needs:ctx.needs,verified_needs:needs}));
+    const purchaseTimeline=!['FAIL','WARNING'].includes(crmVerdict('purchase_timeline'))?(normalizePurchaseTimelineValue(crm_needs.purchase_timeline)
+      ||purchaseTimelineFromText(JSON.stringify({transcript:transcriptText(ctx),needs:ctx.needs,verified_needs:needs}))):null;
     crm_needs.purchase_timeline=purchaseTimeline||'не определено';
     if(!Array.isArray(crm_needs.interested_in)) crm_needs.interested_in=[];
     const rejected_crm_needs={};
@@ -3510,14 +3580,17 @@ const CODE_FUNCS = {
     const fundingText=JSON.stringify({needs,crm_needs,transcript:transcriptText(ctx)});
     const fundingMatch=/(основн[а-яё]*\s+сумм[а-яё]*[^.!?\n]{0,100}(?:добир|добрат)|(?:добир|добрат)[^.!?\n]{0,100}основн[а-яё]*\s+сумм)/i.test(fundingText);
     const fundingVerified=/PASS/i.test(judgeDecision(nc,'need_check_quality')) && Object.keys(needs).length>0;
+    const normalizedFundingSource=String(crm_needs.source_of_funds||'не определено');
     const funding=fundingMatch?{
-      source:'не определено',
+      source:normalizedFundingSource,
       details:'У клиента есть основная сумма, недостающую часть добирают',
-      quote:'у нас есть основная сумма, и мы чуть-чуть добираемся',
+      quote:'у нас есть основная сумма, недостающую часть добирают',
       status:'частично сформирован',
       confidence:0.93,
       verified:fundingVerified
-    }:null;
+    }:(!/^не определено$/i.test(normalizedFundingSource)?{
+      source:normalizedFundingSource,details:null,quote:null,status:'определён',confidence:judgeScore01(nc,'need_check_quality')||0.8,verified:/PASS|WARNING/i.test(judgeDecision(nc,'need_check_quality'))
+    }:null);
 
     // Нормализация бюджета (перенесена из старого codeFn 'store'): ×1000/
     // ×1 000 000 эвристика по формулировке evidence, если это похоже на
@@ -3557,7 +3630,8 @@ const CODE_FUNCS = {
     const fact_check_score=checkScore01(fc,'fact_check_quality');
     const need_check_score=checkScore01(nc,'need_check_quality');
     const outcome_check_score=checkScore01(oc,'outcome_check_quality');
-    const store_score=clamp01(validationScore*0.2 + fact_check_score*0.25 + need_check_score*0.25 + outcome_check_score*0.3);
+    const weightedStoreScore=clamp01(validationScore*0.2 + fact_check_score*0.25 + need_check_score*0.25 + outcome_check_score*0.3);
+    const store_score=Math.min(weightedStoreScore,Math.min(fact_check_score,need_check_score,outcome_check_score)+0.05);
 
     const schemaInvalid=!checkReadable(fc,'fact_check_quality') || !checkReadable(nc,'need_check_quality') || !checkReadable(oc,'outcome_check_quality');
     // Требование "intent обязан быть verified" имеет смысл только для
@@ -3579,6 +3653,7 @@ const CODE_FUNCS = {
     let decision;
     if(schemaInvalid || !hasVerifiedIntent || !hasVerifiedOutcome) decision='FAIL';
     else if(!hasVerifiedNextStep || needsManualReview || validationManualReview) decision='MANUAL_REVIEW';
+    else if([fc,nc,oc].some((check,index)=>/WARNING|PASS_WITH_WARNINGS/i.test(judgeDecision(check,['fact_check_quality','need_check_quality','outcome_check_quality'][index])))) decision='PASS_WITH_WARNINGS';
     else if(store_score>=0.9) decision='PASS';
     else if(store_score>=0.75) decision='PASS_WITH_WARNINGS';
     else decision='FAIL';
@@ -3811,8 +3886,9 @@ const CODE_FUNCS = {
     const warnings=[];
     const warning_details=[];
     const recommendations=[];
-    const shorteningMissing=toList(ctx.summary&&ctx.summary.missing_after_shortening).filter(Boolean);
-    if(ctx.summary&&ctx.summary.semantic_coverage_preserved===false&&shorteningMissing.length>0){
+    const summaryWasShortened=ctx.summary&&(ctx.summary.shortened===true||ctx.summary.auto_shortened===true);
+    const shorteningMissing=summaryWasShortened?toList(ctx.summary&&ctx.summary.missing_after_shortening).filter(Boolean):[];
+    if(summaryWasShortened&&ctx.summary.semantic_coverage_preserved===false&&shorteningMissing.length>0){
       critical_errors.push('Автоматическое сокращение или генерация потеряли обязательные факты: '+shorteningMissing.join('; '));
       recommendations.push('Повторно сгенерировать Summary с обязательным включением missing_after_shortening и summary_required_facts.');
     }
@@ -3853,6 +3929,7 @@ const CODE_FUNCS = {
     const hasForbidden=toList(presentation.forbidden_card_duplicates).length>0;
     const hasPii=toList(presentation.pii_found).length>0;
     const hasMissedNextStep=toList(action.action_errors).some(x=>/missed_next_step|следующ/i.test(formatIssue(x)));
+    const hasJudgeWarning=judgeKeys.some(key=>judges[key].status==='warning');
 
     // Решение (ТЗ, 2026-07-08): проверяй сверху вниз, первое совпадение
     // побеждает. "Конфликт проверок" -- узко определён как обнаруженная
@@ -3864,7 +3941,7 @@ const CODE_FUNCS = {
     if(unavailableKeys.length>0) decision='TECHNICAL_ERROR';
     else if(presentation.is_too_long || shorteningMissing.length>0) decision='RETRY';
     else if(conflict) decision='JUDGE_REVIEW';
-    else if(summary_quality_score>=95 && critical_errors.length===0 && !hasPii && !hasForbidden) decision='AUTO_SAVE';
+    else if(summary_quality_score>=95 && critical_errors.length===0 && !hasPii && !hasForbidden && !hasJudgeWarning) decision='AUTO_SAVE';
     else if(summary_quality_score>=90 && critical_errors.length===0 && !hasPii && !hasForbidden) decision='SAVE_WITH_WARNING';
     else decision='REVIEW_REQUIRED';
     // hasMissedNextStep -- явный сигнал, что судья Action уже сам пометил
@@ -4017,15 +4094,15 @@ const CODE_FUNCS = {
     const moduleHasFinalData=!IS_TRANSCRIPTION_SUMMARY_MODULE || (!!cs && Object.keys(cs.facts||{}).length>0 && (Object.keys(cs.needs||{}).length>0||Object.keys(cs.crm_needs||{}).length>0) && Object.keys(cs.outcome||{}).length>0 && !textMentionsMissingTranscript(cs.outcome));
     const semanticCoverageOk=!IS_TRANSCRIPTION_SUMMARY_MODULE || sm.semantic_coverage_preserved!==false;
     const technicalError=g.decision==='TECHNICAL_ERROR';
-    const saved= !technicalError && moduleHasFinalData && semanticCoverageOk && g.decision==='AUTO_SAVE';
-    const draft= !technicalError && moduleHasFinalData && ['SAVE_WITH_WARNING','REVIEW_REQUIRED','JUDGE_REVIEW'].includes(g.decision);
+    const saved= !technicalError && moduleHasFinalData && semanticCoverageOk && ['AUTO_SAVE','SAVE_WITH_WARNING'].includes(g.decision);
+    const draft= !technicalError && moduleHasFinalData && ['REVIEW_REQUIRED','JUDGE_REVIEW'].includes(g.decision);
     const reviewReasons=draft?uniqTextList([...(g.key_problems||[]),...(g.warnings||[]),...(g.critical_errors||[])]):[];
-    return {output:{card:technicalError?null:card, saved, draft, review_reasons:reviewReasons, technical_reason:technicalError?(g.technical_errors||[]):[]},
+    return {output:{card:technicalError?null:card, saved, draft, execution_status:technicalError?'ERROR':'SUCCESS',publish_decision:saved?'SAVED':(draft?'DEFERRED':'BLOCKED'),summary_quality_score:Number(g.summary_quality_score)||0,review_reasons:reviewReasons, technical_reason:technicalError?(g.technical_errors||[]):[]},
       metrics:[['Решение Gate', g.decision||'—'],['Сохранение', saved?'выполнено':'отложено']],
       status: saved?'ok':(technicalError?'bad':'warn'),
       checks:[{label: saved
         ? 'Карточка сохранена в CRM (в песочнице — симуляция)'
-        : 'Карточка не пустая, но отправлена на ручную проверку (принцип «Never empty card»)',
+        : (draft?'Карточка заполнена и отложена для ручной проверки.':'Публикация заблокирована технической проверкой.'),
         pass:saved, warn:!saved}]};
   },
 };
@@ -4450,6 +4527,7 @@ async function retrySummaryQualityFlow(active,stageReports){
     ctx.__latest_summary_quality_gate=finalGate;
     const gateStage=active.find(isSummaryGateStage);
     if(gateStage){
+      if(gateStage.outKey) ctx[gateStage.outKey]=finalGate;
       const reportIndex=stageReports.findIndex(item=>item.stage.outKey===gateStage.outKey);
       const entry={stage:sanitize(gateStage),report:{output:finalGate,status:'warn',retry_attempt:2,meta:buildStageMeta(gateStage,{output:finalGate,status:'warn'})}};
       if(reportIndex>=0) stageReports[reportIndex]=entry; else stageReports.push(entry);

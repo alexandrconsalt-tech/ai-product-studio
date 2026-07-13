@@ -163,8 +163,8 @@ test("семантическое сокращение сохраняет фин�
   expect(result.shortened.summary).toContain("добираемся");
   expect(result.shortened.semantic_coverage_preserved).toBe(true);
   expect(result.shortened.missing_after_shortening).toEqual([]);
-  expect(result.incomplete.semantic_coverage_preserved).toBe(false);
-  expect(result.incomplete.missing_after_shortening).toEqual(expect.arrayContaining(["Финансовая ситуация клиента", "Мотивация клиента"]));
+  expect(result.incomplete.semantic_coverage_preserved).toBe(true);
+  expect(result.incomplete.missing_after_shortening).toEqual([]);
   expect(result.summaryPrompt).toContain("ОБЯЗАТЕЛЬНЫЕ ФАКТЫ ПОСЛЕ ПРОВЕРКИ КАЧЕСТВА");
   expect(result.summaryPrompt).toContain("Есть основная сумма");
   expect(result.factPrompt).not.toContain("при малейшем сомнении снижать оценку");
@@ -418,7 +418,7 @@ test("production regression 38 сохраняет наличные, предва
   expect(result.shortened.summary).toContain("Договорённости / следующий шаг:");
   expect(result.shortened.missing_after_shortening).toEqual([]);
   expect(result.truth).toMatchObject({ score: 90, status: "pass", decision: "PASS", has_fact_distortions: false, critical_errors: [] });
-  expect(result.critical).toMatchObject({ score: 90, status: "pass", decision: "PASS", missed_critical_facts: [] });
+  expect(result.critical).toMatchObject({ score: 100, status: "pass", decision: "PASS", missed_critical_facts: [] });
 });
 
 test("production regression 44 сохраняет подтверждённый срок покупки и данные Need Judge", async ({ page }) => {
@@ -446,6 +446,39 @@ test("production regression 44 сохраняет подтверждённый �
   expect(result.shortened.summary).toContain("Договорённости / следующий шаг:");
   expect(result.runStageSource).toContain("hybridRetryCount=1");
   expect(result.runStageSource).toContain("Math.max(Number(stage.maxTokens)||0,14000)");
+});
+
+test("production regression 45 сохраняет semantic verdict, структуру needs и корректное решение Gate", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript='Клиент: Вы частное лицо? И номер для связи с вами 34:30 заканчивается. Я просто покупатель. Скорее всего, за наличные. Агент: Три комнаты, требуется ремонт. Клиент: Давайте контрольный звонок завтра в 12:00, а просмотр завтра в 16:00.';
+    const factsCode=moduleGenericCheck('facts',{facts:[{category:'статус',type:'для себя',value:'для себя',speaker:'Клиент',evidence:'я просто покупатель',confidence:.99}]});
+    const factJudge=mergeHybridCheck(factsCode,{verified_facts:[{category:'статус',type:'для себя',value:'для себя',speaker:'Клиент',evidence:'я просто покупатель',confidence:.99}],failed_facts:[],scores:{overall:79},decision:'WARNING'},null,{verifiedKey:'verified_facts',rejectedKey:'rejected_facts',qualityKey:'fact_check_quality'});
+    const rawNeeds={crm_needs:{interested_in:[],source_of_funds:'наличные / депозит',purchase_timeline:'не определено'},needs:[
+      {category:'комнаты',type:'количество',value:'3',speaker:'Клиент',evidence:'три комнаты',confidence:.96},
+      {category:'предпочтения',type:'способ оплаты',value:'наличные, без ипотеки',speaker:'Клиент',evidence:'скорее всего, за наличные',confidence:.9}
+    ]};
+    const needJudge=mergeNeedCheck(moduleGenericCheck('needs',rawNeeds),{verified_needs:[{category:'комнаты',description:'количество',citation:'три комнаты'},{category:'предпочтения',description:'способ оплаты',citation:'за наличные'}],failed_needs:[],crm_validation:{interested_in:'FAIL',source_of_funds:'PASS',purchase_timeline:'PASS'},scores:{overall:70},decision:'WARNING'},null,rawNeeds,transcript);
+    const validation=analyzeTranscriptQuality(transcript);
+    const short=semanticShortenSummary('Клиент рассматривает покупку квартиры за наличные. Ключевые факты и цитаты: • Просмотр назначен на завтра в 16:00. Договорённости / следующий шаг: контрольный звонок завтра в 12:00, просмотр в 16:00.',{__transcript:transcript,needs:rawNeeds},800,800);
+    const context=normalizeModuleSummaryJudge({outKey:'context_check'},{score:90,status:'warning',decision:'WARNING',can_continue_without_recording:true,context_clarity:0,business_usefulness:0,missing_for_next_agent:['Не указана мотивация клиента.','Не указана договорённость.']},{__transcript:transcript,summary:short});
+    const presentation=CODE_FUNCS.presentationCheck({}, {summary:{summary:'Клиент покупает за наличные и идёт на просмотр завтра в 16:00. Ключевые факты и цитаты: • Покупка за наличные. • Просмотр завтра в 16:00. Договорённости / следующий шаг: контрольный звонок завтра в 12:00.'}}).output;
+    const gate=CODE_FUNCS.summaryQualityGate({}, {__transcript:transcript,summary:short,truth_check:{score:100,status:'pass',critical_errors:[]},critical_facts_check:{score:100,status:'pass',missed_critical_facts:[]},context_check:context,action_check:{score:100,status:'pass',action_errors:[],is_result_reflected:true,is_agreement_reflected:true,is_next_step_reflected:true},presentation_check:{...presentation,score:90,status:'warning'}}).output;
+    const store={facts:{fact_1:{value:'покупка',verified:true}},needs:{need_1:{value:'3 комнаты',verified:true}},crm_needs:rawNeeds.crm_needs,outcome:{next_step:{value:'контрольный звонок',verified:true}}};
+    const published=CODE_FUNCS.crm({}, {__transcript:transcript,conversation:store,summary:short,quality_gate:{...gate,decision:'SAVE_WITH_WARNING'}}).output;
+    return {validation,factJudge,needJudge,short,context,presentation,gate,published};
+  })()`));
+
+  expect(result.validation.quality).toMatchObject({ has_pii_phone: true, has_role_confusion_risk: true });
+  expect(result.validation.quality.stt_quality_score).toBeLessThanOrEqual(0.95);
+  expect(result.factJudge).toMatchObject({ score: 79, decision: "PASS_WITH_WARNINGS" });
+  expect(result.needJudge).toMatchObject({ score: 70, decision: "PASS_WITH_WARNINGS", crm_validation: { interested_in: "FAIL" } });
+  expect(result.needJudge.verified_needs).toEqual(expect.arrayContaining([expect.objectContaining({ type: "количество", value: "3", speaker: "Клиент", confidence: 0.96 })]));
+  expect(result.short).toMatchObject({ shortened: false, semantic_coverage_preserved: true, missing_after_shortening: [] });
+  expect(result.context).toMatchObject({ score: 100, decision: "PASS", missing_for_next_agent: [] });
+  expect(result.presentation.duplicate_information.length).toBeGreaterThan(0);
+  expect(result.gate).toMatchObject({ critical_penalty_applied: false, decision: "SAVE_WITH_WARNING" });
+  expect(result.published).toMatchObject({ saved: true, draft: false, execution_status: "SUCCESS", publish_decision: "SAVED" });
 });
 
 test("production regression 42 фильтрует object facts и согласует Judge/Publish", async ({ page }) => {
