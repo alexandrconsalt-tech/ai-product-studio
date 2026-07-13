@@ -358,18 +358,27 @@ test("каждый шаг Pipeline Lab получает Оценку и Confiden
 test("итоговое Summary разделяет текст, факты с цитатами и следующий шаг, а потребности читает из справочника", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
-    const summary='Клиент планирует покупку квартиры. Ключевые факты: • Источник средств: ипотека — «В ипотеку предполагаем». • Готовность к показу: после 18:30 — «После половины седьмого». Договорённости / следующий шаг: агент перезвонит для подтверждения просмотра.';
+    const summary='Клиент планирует покупку квартиры. Ключевые факты: • Тип запроса: просмотр — «Посмотреть хотелось бы. • » • Источник средств: ипотека — «В ипотеку предполагаем, да». • Дата просмотра: 14 июля после 18:30 — «четырнадцатого. • после 18:30» • » • Подтверждение: агент перезвонит во вторник в 13:00 — «подтвержу во вторник» • Источник средств: ипотека — «В ипотеку предполагаем, да». Договорённости / следующий шаг: агент перезвонит во вторник в 13:00 для подтверждения просмотра.';
     const sections=summaryDisplaySections(summary);
     const canonical=canonicalSummaryFormat(summary);
     ctx={publish_result:{card:{interested_in:['Ипотека'],source_of_funds:'ипотека в процессе',purchase_timeline:'до 1 месяца',property_requirements:{rooms:['2 комнаты']}}}};
     const needs=displayNeeds();
-    return {sections,canonical,needs,html:renderFinalSummary(canonical)};
+    const mortgageProcess=mortgageFundingFromText('Клиент: В ипотеку предполагаем, да.');
+    const mortgageApproved=mortgageFundingFromText('Клиент: Ипотека уже одобрена банком.');
+    const published=CODE_FUNCS.crm({}, {__transcript:'Клиент: В ипотеку предполагаем, да.',conversation:{facts:{goal:{value:'покупка',verified:true}},needs:{need_1:{value:'просмотр',verified:true}},crm_needs:{interested_in:['Ипотека'],source_of_funds:'не определено'},outcome:{next_step:{value:'перезвонить',verified:true}}},summary:{summary:'Покупка с ипотекой.',semantic_coverage_preserved:true},quality_gate:{decision:'AUTO_SAVE',summary_quality_score:95}}).output;
+    return {sections,canonical,needs,mortgageProcess,mortgageApproved,published,html:renderFinalSummary(canonical)};
   })()`));
   expect(result.sections.main).toBe("Клиент планирует покупку квартиры.");
-  expect(result.sections.facts).toHaveLength(2);
+  expect(result.sections.facts).toHaveLength(3);
+  expect(result.sections.facts).not.toContain("»");
+  expect(result.sections.facts.filter((item: string) => item.includes("Источник средств"))).toHaveLength(1);
+  expect(result.sections.facts.some((item: string) => item.includes("Подтверждение"))).toBe(false);
   expect(result.canonical).toContain("\n• Источник средств: ипотека");
   expect(result.canonical).toContain("\nДоговорённости / следующий шаг:");
   expect(result.needs).toMatchObject({ interested_in: ["Ипотека"], source_of_funds: "ипотека в процессе", timeline: "до 1 месяца" });
+  expect(result.mortgageProcess).toBe("ипотека в процессе");
+  expect(result.mortgageApproved).toBe("ипотека одобрена");
+  expect(result.published.card.source_of_funds).toBe("ипотека в процессе");
   expect(result.html).toContain("Ключевые факты и цитаты");
   expect(result.html).toContain("Договорённости / следующий шаг:");
 });

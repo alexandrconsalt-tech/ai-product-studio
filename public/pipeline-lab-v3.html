@@ -2035,7 +2035,7 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
     if(text && !prepared.includes(text.slice(0,Math.min(240,text.length)).trim())) prepared+='\n\nПОЛНАЯ ТРАНСКРИПЦИЯ ДЛЯ ФИНАЛЬНОЙ СВЕРКИ:\n'+text;
   }
   if(kind==='summary'){
-    prepared+='\n\n---\nФИНАЛЬНЫЙ ФОРМАТ SUMMARY:\nСначала сформируй 2–3 компактных предложения с итогом разговора. Затем с новой строки напиши «Ключевые факты и цитаты:» и каждый подтверждённый ключевой факт выведи с новой строки через маркер «•», включая короткую подтверждающую цитату. После списка с новой строки обязательно напиши «Договорённости / следующий шаг:». Единый максимальный размер — '+summaryMaxChars+' символов. Не дублируй имя, телефон, адрес, цену, площадь, этаж и иные поля CRM-карточки. Не повторяй одну мысль разными словами.';
+    prepared+='\n\n---\nФИНАЛЬНЫЙ ФОРМАТ SUMMARY:\nСначала сформируй 2–3 компактных предложения с итогом разговора. Затем с новой строки напиши «Ключевые факты и цитаты:» и выведи не более 4 самых важных подтверждённых фактов. Каждый факт начинай с новой строки одним маркером «•» и завершай одной короткой цельной цитатой внутри кавычек «…». Не ставь маркер внутри цитаты, не создавай строки только из знаков кавычек, не повторяй факты из списка и не дублируй следующий шаг. После списка с новой строки обязательно напиши «Договорённости / следующий шаг:». Единый максимальный размер — '+summaryMaxChars+' символов. Не дублируй имя, телефон, адрес, цену, площадь, этаж и иные поля CRM-карточки. Не повторяй одну мысль разными словами.';
   }
   if(['truth_check','action_check'].includes(checkGroup)){
     prepared+='\n\n---\nСТРОГАЯ ПРОВЕРКА ФИНАЛЬНОГО SUMMARY:\nПроверяй отдельно транскрипцию, Conversation Store и фактически сгенерированное Summary. Утверждать, что факт отражён в Summary, можно только если вернёшь точный summary_fragment и found_in_summary=true. Наличие факта только в транскрипции или CRM-карточке не означает, что он есть в Summary.';
@@ -2142,10 +2142,45 @@ function summaryDisplaySections(summary){
   const factsMatch=/Ключевые факты(?:\s+и\s+цитаты)?\s*:/i.exec(beforeAction);
   const main=factsMatch?beforeAction.slice(0,factsMatch.index).trim():beforeAction;
   const factsText=factsMatch?beforeAction.slice(factsMatch.index+factsMatch[0].length).trim():'';
-  const facts=factsText
-    ? factsText.split(/\s*[•]\s*|\n+/).map(item=>item.trim().replace(/^[-–—]\s*/, '')).filter(Boolean)
-    : [];
-  return {main:main||'—',facts,action};
+  const rawFacts=factsText?factsText.split(/\s*[•]\s*|\n+/).map(item=>item.trim()).filter(Boolean):[];
+  const mergedFacts=[];
+  rawFacts.forEach(item=>{
+    const previous=mergedFacts[mergedFacts.length-1];
+    const openQuotes=previous?(previous.match(/«/g)||[]).length:0;
+    const closeQuotes=previous?(previous.match(/»/g)||[]).length:0;
+    if(previous && openQuotes>closeQuotes){
+      mergedFacts[mergedFacts.length-1]=(previous+' '+item).replace(/\s+/g,' ').trim();
+    }else mergedFacts.push(item);
+  });
+  const actionNormalized=normalizedSemanticText(action);
+  const facts=[];
+  mergedFacts.forEach(raw=>{
+    let item=raw.replace(/^[-–—]\s*/, '').replace(/^[•\s]+/,'').trim();
+    if(!item || /^[«»"'.,;:–—\s]+$/.test(item)) return;
+    const opens=(item.match(/«/g)||[]).length, closes=(item.match(/»/g)||[]).length;
+    if(opens>closes) item+='»';
+    while((item.match(/»/g)||[]).length>(item.match(/«/g)||[]).length) item=item.replace(/»\s*$/,'').trim();
+    const normalized=normalizedSemanticText(item);
+    if(!normalized) return;
+    const tokens=(normalized.match(/[а-яёa-z0-9]{4,}/g)||[]);
+    const actionOverlap=tokens.length>=3&&tokens.filter(token=>actionNormalized.includes(token)).length/tokens.length>=0.6;
+    if(actionOverlap) return;
+    if(facts.some(existing=>{
+      const known=normalizedSemanticText(existing);
+      return known===normalized || known.includes(normalized) || normalized.includes(known);
+    })) return;
+    facts.push(item);
+  });
+  const importance=item=>{
+    const text=normalizedSemanticText(item);
+    if(/источник средств|ипотек|наличн|продаж.*квартир/.test(text)) return 100;
+    if(/дата|время|срок|после\s+\d|\d{1,2}:\d{2}/.test(text)) return 90;
+    if(/тип запроса|цель|покуп|продаж|просмотр/.test(text)) return 80;
+    if(/бюджет|огранич|возраж|риск/.test(text)) return 70;
+    return 50;
+  };
+  facts.sort((a,b)=>importance(b)-importance(a));
+  return {main:main||'—',facts:facts.slice(0,4),action};
 }
 
 function canonicalSummaryFormat(summary){
@@ -2688,6 +2723,14 @@ function goalDetected(turns){
 function hasExplicitCashEvidence(value){
   const text=String(value||'').toLowerCase().replace(/без\s+наличн[а-яё]*/g,'');
   return /(?:^|[^а-яё])(?:наличные|наличными|наличкой|наличку|депозит[а-яё]*)(?:[^а-яё]|$)/i.test(text);
+}
+
+function mortgageFundingFromText(value){
+  const text=normalizedSemanticText(value);
+  if(!/ипотек/.test(text)) return null;
+  if(/ипотек[а-яё]*\s+(?:уже\s+)?одобрен|одобрен[а-яё]*\s+ипотек|банк\s+одобрил|получил[а-яё]*\s+одобрение/.test(text)) return 'ипотека одобрена';
+  if(/ипотек[а-яё]*\s+в\s+процессе|в\s+ипотек[а-яё]*\s+предполага|планир[а-яё]*[^.!?\n]{0,80}ипотек|ипотек[а-яё]*[^.!?\n]{0,40}(?:оформля|пода[лн]|будет)|с\s+привлечением\s+ипотек/.test(text)) return 'ипотека в процессе';
+  return null;
 }
 
 function normalizeUnprovenCashFunding(record, evidenceSource){
@@ -3390,6 +3433,9 @@ const CODE_FUNCS = {
     });
     if(hasExplicitCashEvidence(transcriptText(ctx)) || hasExplicitCashEvidence(JSON.stringify(needs))){
       crm_needs.source_of_funds='наличные / депозит';
+    }else{
+      const mortgageFunding=mortgageFundingFromText(JSON.stringify({transcript:transcriptText(ctx),needs:ctx.needs,verified_needs:needs}));
+      if(mortgageFunding) crm_needs.source_of_funds=mortgageFunding;
     }
     crm_needs.purchase_timeline='не определено';
     if(!Array.isArray(crm_needs.interested_in)) crm_needs.interested_in=[];
@@ -3888,11 +3934,14 @@ const CODE_FUNCS = {
     const callResult=unwrapValue(crmNeeds.call_result) ?? o.call_result ?? null;
     const nextStep=unwrapValue(crmNeeds.next_step) ?? o.next_step ?? null;
     const purchaseTimeline=unwrapValue(crmNeeds.purchase_timeline) ?? unwrapValue(crmNeeds.timeline) ?? n.timeline ?? 'не определено';
+    const storedFunding=unwrapValue(crmNeeds.source_of_funds) ?? funding?.source;
+    const normalizedStoredFunding=String(storedFunding||'не определено');
+    const inferredMortgageFunding=/^не определено$/i.test(normalizedStoredFunding)?mortgageFundingFromText(JSON.stringify({transcript:transcriptText(ctx),crmNeeds,needs:n})):null;
     const card={
       client_name: clientNames.length===1?String(clientNames[0]):null,
       client_name_conflict:clientNames.length>1,
       budget: budgets.length===1?String(budgets[0]):null,
-      source_of_funds:String(unwrapValue(crmNeeds.source_of_funds) ?? funding?.source ?? 'не определено'),
+      source_of_funds:inferredMortgageFunding||normalizedStoredFunding,
       funding_details:funding?.details ?? null,
       interested_in:interested,
       timeline:String(purchaseTimeline||'не определено'),
