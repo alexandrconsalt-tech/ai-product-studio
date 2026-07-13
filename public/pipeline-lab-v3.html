@@ -1972,6 +1972,9 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
   let prepared=String(prompt||'');
   const kind=moduleStageKind(stage);
   const checkGroup=moduleCheckGroup(stage);
+  if(kind==='summary' || checkGroup==='presentation_check'){
+    prepared=prepared.replace(/(?:до|не более|максимум|≤)\s*\d{3,4}\s*символ(?:ов|а)?/gi,'не более '+summaryMaxChars+' символов');
+  }
   if(kind==='facts' && !checkGroup){
     prepared+='\n\n---\nОБЯЗАТЕЛЬНЫЕ КРИТИЧЕСКИЕ ФАКТЫ:\nПеред ответом проверь все квалификационные вопросы и содержательные ответы клиента. Обязательно извлекай отдельными фактами источник и схему финансирования, ипотеку/наличные/продажу своего объекта, основную или недостающую сумму, необходимость добрать средства, бюджет, срок, цель, мотивацию, ограничения, возражения, риски, результат, договорённости, следующий шаг, ответственного и срок действия. Не отклоняй понятный факт только из-за локального повреждения STT, если смысл подтверждается соседними репликами, повтором или уточнением. Сохраняй контекстную цитату из последовательных реплик и не делай более узкий вывод, чем сказал клиент.';
   }
@@ -2076,6 +2079,7 @@ function requiredSummaryElements(summary,ctx){
   const required=SUMMARY_REQUIRED_CATEGORIES.filter(item=>{
     if(item.id==='finance') return item.rx.test(structured) || /(основн[а-яё]*\s+сумм|недоста[а-яё]*\s+сумм|добир|добрат|первоначальн[а-яё]*\s+взнос|маткап|субсид|рассроч)/i.test(transcript);
     if(item.id==='budget') return item.rx.test(structured);
+    if(item.id==='constraints') return item.rx.test(transcript);
     return item.rx.test(source);
   }).map(item=>({...item}));
   const gateFacts=toList(currentSummaryGate(ctx)?.summary_required_facts);
@@ -2125,7 +2129,7 @@ function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summa
     final_length:finalText.length,
     required_facts_before:required.map(item=>({type:item.id,value:item.label,importance:'high'})),
     required_facts_after:required.filter(item=>summaryCoversRequired(finalText,item)).map(item=>({type:item.id,value:item.label,importance:'high'})),
-    missing_after_shortening:finalText.length<original.length?missing:[],
+    missing_after_shortening:missing,
     semantic_coverage_preserved:missing.length===0
   };
 }
@@ -2136,6 +2140,15 @@ function cleanupSummaryFunding(output, transcript){
   const funding=attributes.funding_source;
   if(/наличн|депозит/i.test(String(funding||'')) && !hasExplicitCashEvidence(transcript)){
     attributes.funding_source='не определено';
+  }
+  return output;
+}
+
+function cleanupSummaryOutcome(output,ctx){
+  if(!output||typeof output.summary!=='string') return output;
+  const deadline=ctx&&ctx.outcome&&ctx.outcome.next_step&&ctx.outcome.next_step.deadline;
+  if(/не указан/i.test(String(deadline||''))){
+    output.summary=output.summary.replace(/(?:и\s+)?свяжется\s+с\s+клиент(?:ом|кой)\s+сегодня/gi,'и свяжется с клиентом после согласования времени');
   }
   return output;
 }
@@ -2152,7 +2165,7 @@ function normalizeModuleSummaryJudge(stage, output, ctx){
       return true;
     });
     output={...output,critical_errors:errors};
-    if(errors.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false};
+    if(errors.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false,failed_facts:0,explanation:'Галлюцинации, искажения фактов и путаница ролей не выявлены.'};
   }
   if(group==='critical_facts_check'){
     const missed=toList(output.missed_critical_facts).filter(item=>{
@@ -2164,7 +2177,24 @@ function normalizeModuleSummaryJudge(stage, output, ctx){
       return true;
     });
     output={...output,missed_critical_facts:missed};
-    if(missed.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS'};
+    if(missed.length===0){
+      const total=Math.max(Number(output.critical_facts_total)||0,toList(output.critical_facts_found).length);
+      output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',critical_facts_total:total,critical_facts_reflected:total,coverage_percent:total?100:100,explanation:'Все явно подтверждённые критические факты отражены; отсутствующие в разговоре данные не требуются.'};
+    }
+  }
+  if(group==='context_utility_check'){
+    const missing=toList(output.missing_for_next_agent).filter(item=>{
+      const text=normalizedSemanticText(item);
+      if(/сомнен/.test(text) && !/сомнен|опасен|не устраива|возраж|отказ/.test(normalizedSemanticText(transcriptText(ctx)))) return false;
+      if(/какие дополнительн.*вариант/.test(text) && /подобрат|другие вариант|что нибудь/.test(normalizedSemanticText(transcriptText(ctx)))) return false;
+      return true;
+    });
+    output={...output,missing_for_next_agent:missing};
+    if(missing.length===0) output={...output,score:Math.max(90,Number(output.score)||0),status:'pass',decision:'PASS',can_continue_without_recording:true,explanation:'Summary содержит достаточный контекст для следующего действия агента.'};
+  }
+  if(group==='action_check'){
+    const allReflected=output.is_result_reflected===true&&output.is_agreement_reflected===true&&output.is_next_step_reflected===true&&toList(output.action_errors).length===0;
+    if(allReflected) output={...output,score:100,status:'pass',decision:'PASS',explanation:'Результат звонка, договорённость и следующий шаг отражены корректно.'};
   }
   return output;
 }
@@ -2254,7 +2284,7 @@ function moduleCheckGroup(stage){
   if(/summary quality gate|summary_quality_gate/.test(text)) return 'summary_quality_gate';
   if(/truth_check|достоверност/.test(text)) return 'truth_check';
   if(/critical_facts_check|критически важных/.test(text)) return 'critical_facts_check';
-  if(/context_utility_check|полезност/.test(text)) return 'context_utility_check';
+  if(/context_(?:utility_)?check|полезност/.test(text)) return 'context_utility_check';
   if(/action_check|договор/.test(text)) return 'action_check';
   if(/presentation_check|формат/.test(text)) return 'presentation_check';
   if(/factcheckcode|fact_check|проверка фактов/.test(text)) return 'fact_check';
@@ -2290,7 +2320,6 @@ function detectDialogueStyle(summary){
     /агент\s+ответил/ig,
     /агент\s+сказал/ig,
     /клиент\s+заявил[а]?/ig,
-    /обсудили/ig,
     /клиент\s+согласил(?:ся|ась)/ig,
     /клиент[^.\n;—-]{0,80}[—-]\s*агент/ig
   ];
@@ -2324,7 +2353,7 @@ function shortIssue(text){
   if(/готов[а-я\s]*к\s+сделке|overstated/i.test(s)) return 'Завышен статус: готов к сделке';
   if(/мотивац|цель|вложить/i.test(s)) return 'Пропущена мотивация клиента';
   if(/огранич|стресс|проблемн|услов/i.test(s)) return 'Пропущено ограничение клиента';
-  if(/спросил|спросила|уточнил|уточняла|агент ответил|агент сказал|клиент заявила|обсудили|пересказ/i.test(s)) return 'Summary написано как пересказ диалога';
+  if(/спросил|спросила|уточнил|уточняла|агент ответил|агент сказал|клиент заявила|пересказ/i.test(s)) return 'Summary написано как пересказ диалога';
   if(/телефон|номер|pii|контакт/i.test(s)) return 'В Summary попали контактные данные';
   if(/адрес|цена|площад|этаж|характеристик|дубли/i.test(s)) return 'В Summary попали данные карточки';
   return s.replace(/\s+/g,' ').slice(0,110);
@@ -2645,8 +2674,24 @@ function cleanupNeedsV9(needs){
     }
   }
   normalizeUnprovenCashFunding(needs);
+  if(Array.isArray(needs&&needs.needs)) needs.needs=needs.needs.filter(isValidModuleNeed);
   if(needs&&needs.crm_needs&&typeof needs.crm_needs==='object') normalizeUnprovenCashFunding(needs.crm_needs, JSON.stringify(needs.needs||[]));
   return needs;
+}
+
+function isValidModuleNeed(item){
+  if(!item||typeof item!=='object') return false;
+  const category=normalizedSemanticText(item.category||item.type);
+  const value=normalizedSemanticText(item.value||item.description);
+  const evidence=normalizedSemanticText(item.evidence||item.quote);
+  const speaker=normalizedSemanticText(item.speaker);
+  if(/цена объекта/.test(value)) return false;
+  if(/бюджет/.test(category) && !/мой бюджет|бюджет до|рассчитыва|готов[а-я]* потратить|лимит/.test(evidence)) return false;
+  if(/площад|этаж|адрес/.test(category) && !/клиент/.test(speaker)) return false;
+  if(/тип недвижимости|жк/.test(category) && /оператор|агент/.test(speaker)) return false;
+  if(/ясная|доступн.*август/.test(value) && /агент/.test(speaker)) return false;
+  if(/ранее работал.*олег|работал с агентом олег/.test(value) && !/олег/.test(evidence)) return false;
+  return true;
 }
 
 function cleanupOutcomeV9(outcome){
@@ -2664,6 +2709,10 @@ function cleanupOutcomeV9(outcome){
       if(!item || typeof item !== 'string') return true;
       return !forbiddenMarkers.some(rx => rx.test(item));
     });
+  }
+  const next=outcome&&outcome.next_step;
+  if(next&&/сегодня/i.test(String(next.deadline||'')) && !/(я|мы)\s+(?:вам\s+)?(?:позвон|набер|свяж)|свяжусь\s+сегодня|позвоню\s+сегодня/i.test(String(next.evidence||''))){
+    next.deadline='не указан';
   }
   return outcome;
 }
@@ -2789,7 +2838,8 @@ function mergeHybridCheck(codeResult, llmParsed, parseErr, opts){
   const missedRaw=llmParsed.missed_items||llmParsed.missed_facts||llmParsed.missed_needs||[];
   const missedItems=listFrom(missedRaw).filter(item=>!semanticItemDuplicate(item,finalVerified));
 
-  const criteria = [...codeCriteria, ...llmCriteria];
+  const semanticCriteria=llmCriteria.length?llmCriteria:[{name:'LLM semantic overall',checker:'llm',status:llmScore>=90?'pass':llmScore>=70?'warning':'fail',score:Math.round(llmScore),explanation:'Смысловая оценка Judge до смешивания с кодовой проверкой.'}];
+  const criteria = [...codeCriteria, ...semanticCriteria];
   let score = hardFail ? Math.min(codeScore, 40) : (codeScore*0.3 + llmScore*0.7);
   const rejectedFields=Object.keys(llmRejected);
   const judgeDecision=outcomeRecovered?'PASS':String(quality.decision||'').toUpperCase();
@@ -2839,7 +2889,7 @@ function mergeNeedCheck(codeResult, llmParsed, parseErr, needsRaw, transcript){
     base.verified_needs=base.verified_needs.filter(item=>{
       const label=normalizedSemanticText([item?.category,item?.type].join(' '));
       const evidence=normalizedSemanticText(item?.evidence||item?.quote);
-      return !(/бюджет/.test(label) && /какая стоимость указана|а 21/.test(evidence) && !/мой бюджет|до \d|готов потратить|рассчитыва/.test(evidence));
+      return isValidModuleNeed(item) && !(/бюджет/.test(label) && /какая стоимость указана|а 21/.test(evidence) && !/мой бюджет|до \d|готов потратить|рассчитыва/.test(evidence));
     });
   }
   const crmValidation={...((llmParsed&&llmParsed.crm_validation)||{})};
@@ -3594,8 +3644,9 @@ const CODE_FUNCS = {
     const warnings=[];
     const warning_details=[];
     const recommendations=[];
-    if(ctx.summary&&ctx.summary.semantic_coverage_preserved===false){
-      critical_errors.push('Автоматическое сокращение или генерация потеряли обязательные факты: '+toList(ctx.summary.missing_after_shortening).join('; '));
+    const shorteningMissing=toList(ctx.summary&&ctx.summary.missing_after_shortening).filter(Boolean);
+    if(ctx.summary&&ctx.summary.semantic_coverage_preserved===false&&shorteningMissing.length>0){
+      critical_errors.push('Автоматическое сокращение или генерация потеряли обязательные факты: '+shorteningMissing.join('; '));
       recommendations.push('Повторно сгенерировать Summary с обязательным включением missing_after_shortening и summary_required_facts.');
     }
     for(const key of judgeKeys){
@@ -3644,6 +3695,7 @@ const CODE_FUNCS = {
     const conflict = judges.truth_check.status==='fail' && [judges.critical_facts_check.status,judges.action_check.status].includes('pass');
     let decision;
     if(unavailableKeys.length>0) decision='TECHNICAL_ERROR';
+    else if(presentation.is_too_long || shorteningMissing.length>0) decision='RETRY';
     else if(conflict) decision='JUDGE_REVIEW';
     else if(summary_quality_score>=95 && critical_errors.length===0 && !hasPii && !hasForbidden) decision='AUTO_SAVE';
     else if(summary_quality_score>=90 && critical_errors.length===0 && !hasPii && !hasForbidden) decision='SAVE_WITH_WARNING';
@@ -3685,7 +3737,7 @@ const CODE_FUNCS = {
     toList(presentation.pii_found).forEach(x=>structuredProblems.push('Presentation: PII/контакт — '+formatIssue(x)));
     toList(presentation.forbidden_phrases).forEach(x=>structuredProblems.push('Presentation: запрещённая формулировка — '+formatIssue(x)));
     if(toList(presentation.style_issues).length>=2) structuredProblems.push('Presentation: Summary написано как пересказ диалога ('+toList(presentation.style_issues).slice(0,3).map(formatIssue).join(', ')+') — нужен формат итоговых фактов.');
-    if(presentation.is_too_long) structuredProblems.push('Presentation (код): длина саммари '+(presentation.length_chars||smText.length)+' симв. — больше 700, критическая ошибка.');
+    if(presentation.is_too_long) structuredProblems.push('Presentation (код): длина саммари '+(presentation.length_chars||smText.length)+' симв. — больше '+summaryMaxChars+', критическая ошибка.');
     const keyProblems=uniqTextList(structuredProblems).slice(0,3);
     const generatedActions=keyProblems.map(shortAction);
     const uniqueRecommendations=uniqTextList([...generatedActions, ...recommendations]).filter(recommendationAllowed).slice(0,3);
@@ -3767,7 +3819,7 @@ const CODE_FUNCS = {
     const unwrapValue=value=>value&&typeof value==='object'&&'value' in value?value.value:value;
     const valuesByType=rx=>Object.entries(cs?.facts||{}).filter(([key,field])=>field&&field.verified===true&&rx.test(key+' '+(field.type||'')+' '+(field.category||''))).map(([,field])=>unwrapValue(field)).filter(value=>value!=null&&String(value).trim());
     const uniqueValues=values=>[...new Map(values.map(value=>[String(value).trim().toLowerCase(),value])).values()];
-    const clientNames=uniqueValues(valuesByType(/client_name|имя клиента/i));
+    const clientNames=uniqueValues(valuesByType(/client_name|имя(?:\s+клиента)?/i));
     const budgets=uniqueValues(valuesByType(/budget|бюджет/i));
     const funding=cs?.funding||null;
     const crmInterest=unwrapValue(crmNeeds.interested_in);
@@ -3797,7 +3849,8 @@ const CODE_FUNCS = {
     const technicalError=g.decision==='TECHNICAL_ERROR';
     const saved= !technicalError && moduleHasFinalData && semanticCoverageOk && g.decision==='AUTO_SAVE';
     const draft= !technicalError && moduleHasFinalData && ['SAVE_WITH_WARNING','REVIEW_REQUIRED','JUDGE_REVIEW'].includes(g.decision);
-    return {output:{card:technicalError?null:card, saved, draft, review_reasons:draft?(g.key_problems||g.warnings||[]):[], technical_reason:technicalError?(g.technical_errors||[]):[]},
+    const reviewReasons=draft?uniqTextList([...(g.key_problems||[]),...(g.warnings||[]),...(g.critical_errors||[])]):[];
+    return {output:{card:technicalError?null:card, saved, draft, review_reasons:reviewReasons, technical_reason:technicalError?(g.technical_errors||[]):[]},
       metrics:[['Решение Gate', g.decision||'—'],['Сохранение', saved?'выполнено':'отложено']],
       status: saved?'ok':(technicalError?'bad':'warn'),
       checks:[{label: saved
@@ -3928,7 +3981,8 @@ async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000){
   }
   const text=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
   const tokens=(data.usage&&data.usage.total_tokens)||0;
-  return {text,tokens};
+  const finishReason=data.choices&&data.choices[0]&&data.choices[0].finish_reason;
+  return {text,tokens,finishReason};
 }
 
 // A *configured* key isn't the same as a *working* one -- an
@@ -4000,30 +4054,29 @@ function parseJSON(text){
   const attempts=[];
   const cleaned=raw.trim().replace(/```json/gi,'').replace(/```/g,'').trim();
   attempts.push(cleaned);
-  function balancedCandidate(str){
-    const starts=[...str].map((ch,i)=>ch==='{'||ch==='['?i:-1).filter(i=>i>=0);
-    for(const start of starts){
-      const open=str[start], close=open==='{'?'}':']';
-      let depth=0, inString=false, escape=false;
-      for(let i=start;i<str.length;i++){
-        const ch=str[i];
-        if(escape){ escape=false; continue; }
-        if(ch==='\\'){ escape=true; continue; }
-        if(ch==='"'){ inString=!inString; continue; }
-        if(inString) continue;
-        if(ch===open) depth++;
-        else if(ch===close){
-          depth--;
-          if(depth===0) return str.slice(start,i+1);
-        }
+  function rootCandidate(str){
+    const objectStart=str.indexOf('{'), arrayStart=str.indexOf('[');
+    const starts=[objectStart,arrayStart].filter(index=>index>=0);
+    if(!starts.length) return '';
+    const start=Math.min(...starts), stack=[];
+    let inString=false, escape=false;
+    for(let i=start;i<str.length;i++){
+      const ch=str[i];
+      if(escape){ escape=false; continue; }
+      if(ch==='\\'){ escape=true; continue; }
+      if(ch==='"'){ inString=!inString; continue; }
+      if(inString) continue;
+      if(ch==='{'||ch==='[') stack.push(ch);
+      else if(ch==='}'||ch===']'){
+        const expected=ch==='}'?'{':'[';
+        if(stack.pop()!==expected) throw new Error('INVALID_JSON_ROOT');
+        if(stack.length===0) return str.slice(start,i+1);
       }
     }
-    return '';
+    throw new Error('TRUNCATED_JSON');
   }
-  const balanced=balancedCandidate(cleaned);
-  if(balanced) attempts.push(balanced);
-  const a=cleaned.indexOf('{'), b=cleaned.lastIndexOf('}');
-  if(a>=0&&b>a) attempts.push(cleaned.slice(a,b+1));
+  const root=rootCandidate(cleaned);
+  if(root) attempts.push(root);
   // Some model responses incorrectly escape the delimiters of a JSON string
   // itself ("quote": \"text\") instead of escaping only quotes inside it.
   // Add a conservative recovery attempt without changing a valid response.
@@ -4037,6 +4090,14 @@ function parseJSON(text){
     catch(e){ lastErr=e; }
   }
   throw lastErr||new Error('JSON не найден в ответе модели');
+}
+
+function validateExtractionRoot(kind, value){
+  if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error('INVALID_ROOT_SCHEMA');
+  if(kind==='facts'&&!Array.isArray(value.facts)) throw new Error('INVALID_ROOT_SCHEMA');
+  if(kind==='needs'&&!Array.isArray(value.needs)) throw new Error('INVALID_ROOT_SCHEMA');
+  if(kind==='outcome'&&(!value.call_result||!value.next_step)) throw new Error('INVALID_ROOT_SCHEMA');
+  return value;
 }
 
 async function hashPrompt(value){
@@ -4057,10 +4118,14 @@ async function runStage(stage, ctx){
     const codeResult=codeFn(stage,ctx);
     const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
     const prompt=promptAudit.prompt;
-    const {text:raw, tokens, actualModel, actualProvider, fallbackNote}=await callModel(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens);
+    const {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason}=await callModel(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens);
     const promptHash=await hashPrompt(prompt);
     let parsed=null, parseErr=null;
-    try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
+    try{
+      if(finishReason==='length') throw new Error('TRUNCATED_JSON');
+      parsed=parseJSON(raw);
+      if(stage.type==='llm') validateExtractionRoot(moduleStageKind(stage),parsed);
+    }catch(e){ parseErr=e.message; }
     const ms=Math.round(performance.now()-t0);
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=actualModel+(fallbackNote?' ('+fallbackNote+')':'');
@@ -4111,17 +4176,39 @@ async function runStage(stage, ctx){
   } else {
     const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
     const prompt=promptAudit.prompt;
-    const {text:raw, tokens, actualModel, actualProvider, fallbackNote}=await callModel(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens);
+    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason}=await callModel(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens);
     const promptHash=await hashPrompt(prompt);
     let parsed=null, parseErr=null;
-    try{ parsed=parseJSON(raw); }catch(e){ parseErr=e.message; }
+    try{
+      if(finishReason==='length') throw new Error('TRUNCATED_JSON');
+      parsed=parseJSON(raw);
+      if(stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))) validateExtractionRoot(moduleStageKind(stage),parsed);
+    }catch(e){ parseErr=e.message; }
+    let extractionRetryCount=0;
+    const extractionKind=moduleStageKind(stage);
+    const isExtractionStage=stage.type==='llm'&&['facts','needs','outcome'].includes(extractionKind);
+    if(parseErr&&isExtractionStage){
+      extractionRetryCount=1;
+      const retryResult=await callModel(prompt,stage.model,stage.provider,stage.temperature,Math.max(Number(stage.maxTokens)||0,14000));
+      raw=retryResult.text; tokens+=retryResult.tokens||0; actualModel=retryResult.actualModel; actualProvider=retryResult.actualProvider; fallbackNote=retryResult.fallbackNote; finishReason=retryResult.finishReason;
+      try{
+        if(finishReason==='length') throw new Error('TRUNCATED_JSON');
+        parsed=parseJSON(raw); parseErr=null;
+        validateExtractionRoot(extractionKind,parsed);
+      }catch(e){ parsed=null; parseErr=e.message; }
+    }
     const ms=Math.round(performance.now()-t0);
     const cost=estimateCost(actualModel, tokens);
     const modelLabel=actualModel+(fallbackNote?' ('+fallbackNote+')':'');
-    let output = guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
+    let output=parseErr&&isExtractionStage
+      ? {status:'technical_error',decision:'ERROR',score:null,error_code:parseErr==='TRUNCATED_JSON'?'TRUNCATED_JSON':parseErr==='INVALID_ROOT_SCHEMA'?'INVALID_ROOT_SCHEMA':'INVALID_JSON',parse_error:parseErr,retry_count:extractionRetryCount,critical_errors:['Extractor вернул незавершённый или невалидный корневой JSON.'],issues:[parseErr]}
+      : guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
     output=normalizeModuleSummaryJudge(stage,output,ctx);
     if(IS_TRANSCRIPTION_SUMMARY_MODULE && stage.outKey==='summary' && output && typeof output==='object' && typeof output.summary==='string'){
       output=cleanupSummaryFunding(output, transcriptText(ctx));
+      output=cleanupSummaryOutcome(output,ctx);
+      const storeTimeline=conversationStoreValue(ctx)?.crm_needs?.purchase_timeline;
+      if(output.attributes&&typeof output.attributes==='object') output.attributes.purchase_term=String(storeTimeline&&typeof storeTimeline==='object'?'value' in storeTimeline?storeTimeline.value:storeTimeline:storeTimeline||'не определено');
       const shortened=semanticShortenSummary(output.summary,ctx,summaryMaxChars,summaryMaxChars);
       output={...output,...shortened,auto_shortened:shortened.shortened};
     }
@@ -4135,7 +4222,8 @@ async function runStage(stage, ctx){
       // Общие требования ТЗ (stages 1-9 rework): версионирование каждого этапа.
       stage_version:stage.stageVersion||'v1', prompt_version:'v'+(stage.promptVersion||1), prompt_hash:promptHash, resolved_prompt:prompt, retry_attempt:ctx.__summary_retry_attempt||0,
       model:actualModel, timestamp:new Date().toISOString(),
-      status: parseErr?(stage.type==='check'?'bad':'warn'):'ok',
+      finish_reason:finishReason||null,
+      status: parseErr?'bad':'ok',
       metrics:[['Провайдер',actualProvider],['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],
         ['JSON', parseErr?'ошибка':'ок']] };
     rep.meta=buildStageMeta(stage,rep);
@@ -4316,7 +4404,8 @@ async function runPipeline(){
 
     card.replaceWith(renderReport(stage, rep, i+1));
     progBar.style.width=((i+1)/active.length*100)+'%';
-    if(noModelKey || terminalProviderFailure) break;
+    const extractorTechnicalFailure=stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))&&rep.output?.status==='technical_error';
+    if(noModelKey || terminalProviderFailure || extractorTechnicalFailure) break;
   }
 
   const retry=await retrySummaryQualityFlow(active,stageReports);

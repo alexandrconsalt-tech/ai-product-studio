@@ -84,7 +84,9 @@ test("pipeline восстанавливает JSON Judge и не принима�
       null,
       { verifiedKey: "verified_outcome", rejectedKey: "rejected_outcome", qualityKey: "outcome_check_quality" },
     );
-    return { parsed, needs, merged };
+    let truncatedError="";
+    try{ api.parseJSON?.('{"facts":[{"category":"Клиент","value":"Анна"},{"category":"Объект","evidence":"Покровская, 6. Сек'); }catch(error){ truncatedError=(error as Error).message; }
+    return { parsed, needs, merged, truncatedError };
   });
 
   expect(result.parsed?.missed_facts[0]?.quote).toBe("Да, и подскажите");
@@ -92,6 +94,7 @@ test("pipeline восстанавливает JSON Judge и не принима�
     value: ["не определено"], confidence: 1, evidence: null, verification_status: "not_applicable",
   });
   expect(result.merged?.decision).toBe("PASS_WITH_WARNINGS");
+  expect(result.truncatedError).toBe("TRUNCATED_JSON");
 });
 
 test("legacy-оценки корректно пересчитывают Store и Summary Quality Gate", async ({ page }) => {
@@ -161,7 +164,7 @@ test("семантическое сокращение сохраняет фин�
   expect(result.shortened.semantic_coverage_preserved).toBe(true);
   expect(result.shortened.missing_after_shortening).toEqual([]);
   expect(result.incomplete.semantic_coverage_preserved).toBe(false);
-  expect(result.incomplete.missing_after_shortening).toEqual([]);
+  expect(result.incomplete.missing_after_shortening).toEqual(expect.arrayContaining(["Финансовая ситуация клиента", "Мотивация клиента"]));
   expect(result.summaryPrompt).toContain("ОБЯЗАТЕЛЬНЫЕ ФАКТЫ ПОСЛЕ ПРОВЕРКИ КАЧЕСТВА");
   expect(result.summaryPrompt).toContain("Есть основная сумма");
   expect(result.factPrompt).not.toContain("при малейшем сомнении снижать оценку");
@@ -359,6 +362,31 @@ test("production regression 38 сохраняет наличные, предва
   expect(result.shortened.missing_after_shortening).toEqual([]);
   expect(result.truth).toMatchObject({ score: 90, status: "pass", decision: "PASS", has_fact_distortions: false, critical_errors: [] });
   expect(result.critical).toMatchObject({ score: 90, status: "pass", decision: "PASS", missed_critical_facts: [] });
+});
+
+test("production regression 42 фильтрует object facts и согласует Judge/Publish", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript='Клиент: Меня зовут Анна. Мне надо быстро, поэтому у меня наличка. Можете что-нибудь подобрать.\\nОператор: Покровская, 6, площадь 21 кв. м, первый этаж, цена 5 980 000.\\nАгент: В Нахабино Ясная будет доступна в августе.';
+    const needs={crm_needs:{interested_in:[],source_of_funds:'наличные / депозит',purchase_timeline:'не определено'},needs:[
+      {category:'адрес',value:'Покровская, 6',speaker:'Оператор',evidence:'Покровская, 6'},
+      {category:'площадь',value:'21 кв. м',speaker:'Оператор',evidence:'21 кв. м'},
+      {category:'бюджет',value:'5 980 000 руб. (цена объекта)',speaker:'Оператор',evidence:'5 980 000'},
+      {category:'дополнительные пожелания',value:'рассмотреть другие предложения',speaker:'Клиент',evidence:'можете что-нибудь подобрать'},
+      {category:'источник средств',value:'наличные',speaker:'Клиент',evidence:'у меня наличка'}
+    ]};
+    cleanupNeedsV9(needs);
+    const action=normalizeModuleSummaryJudge({outKey:'action_check'},{score:90,status:'warning',decision:'WARNING',is_result_reflected:true,is_agreement_reflected:true,is_next_step_reflected:true,action_errors:[],explanation:''},{__transcript:transcript});
+    const context=normalizeModuleSummaryJudge({outKey:'context_check'},{score:70,status:'warning',decision:'WARNING',missing_for_next_agent:['Не указаны конкретные сомнения клиента.','Не указано, какие дополнительные варианты клиент хочет рассмотреть.']},{__transcript:transcript});
+    const cs={facts:[{category:'Клиент',type:'имя',value:'Анна',confidence:.97,verified:true}],needs:[{category:'источник средств',value:'наличные',confidence:.97,verified:true}],crm_needs:needs.crm_needs,outcome:{call_result:{value:'просмотр предварительно согласован',verified:true},next_step:{value:'агент согласует время',verified:true}}};
+    const published=CODE_FUNCS.crm({}, {__transcript:transcript,conversation:cs,summary:{summary:'Клиент покупает за наличные.\\nДоговорённости / следующий шаг: агент согласует время.',semantic_coverage_preserved:true},quality_gate:{decision:'REVIEW_REQUIRED',summary_quality_score:80,key_problems:['Нужна проверка'],warnings:['Предупреждение']}}).output;
+    return {needs,action,context,published};
+  })()`));
+  expect(result.needs.needs.map((item: any) => item.category)).toEqual(["дополнительные пожелания", "источник средств"]);
+  expect(result.action).toMatchObject({ score: 100, status: "pass", decision: "PASS" });
+  expect(result.context).toMatchObject({ status: "pass", decision: "PASS", missing_for_next_agent: [] });
+  expect(result.published).toMatchObject({ draft: true, saved: false, card: { client_name: "Анна" } });
+  expect(result.published.review_reasons).toEqual(expect.arrayContaining(["Нужна проверка", "Предупреждение"]));
 });
 
 test("Format Judge и Quality Gate используют канонический контракт", async ({ page }) => {
