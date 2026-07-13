@@ -1685,8 +1685,8 @@ function buildSummaryJudgeCriteria(key, raw){
 // этап, вернувший валидный JSON без верхнеуровневого поля score, получал
 // заглушку 90% "за то, что JSON распарсился". Кастомные проверщики кладут
 // реальную оценку в scores.overall (0-100) и decision -- теперь читаем их.
-// Агенты извлечения (facts/needs/outcome), у которых своей оценки нет по
-// смыслу, честно возвращают null -> UI показывает "—" вместо фиктивных 90%.
+// До независимого Judge извлекатели получают только структурную оценку;
+// после Judge она заменяется его смысловой оценкой в attachReviewerScores().
 function decisionToScore(decision){
   const d=String(decision||'').toUpperCase();
   if(d==='PASS'||d==='AUTO_SAVE') return 92;
@@ -1706,12 +1706,22 @@ function stageScoreFromOutput(stage, rep){
   if(stage.codeFn==='validate' && out.score!=null) return Number(out.score)*100;
   if(stage.codeFn==='store' && out.score!=null) return Number(out.score)*100;
   if(stage.codeFn==='stt') return rep.status==='ok'?90:(rep.status==='warn'?80:60);
+  const extractionKind=moduleStageKind(stage);
+  if(stage.type==='llm'&&['facts','needs','outcome'].includes(extractionKind)){
+    const structural=moduleGenericCheck(extractionKind,out);
+    const scores=toList(structural.criteria).map(item=>Number(item&&item.score)).filter(Number.isFinite);
+    return scores.length?scores.reduce((sum,value)=>sum+value,0)/scores.length:0;
+  }
+  if(stage.outKey==='summary'&&typeof out.summary==='string'){
+    const sections=summaryDisplaySections(out.summary);
+    return (sections.main&&sections.main!=='—'?35:0)+(sections.facts.length?35:0)+(sections.action?30:0);
+  }
   if(stage.type==='llm' || stage.type==='check' || stage.type==='hybrid'){
     if(rep.parseErr) return 0;
     const fromDecision=decisionToScore(out.decision);
     if(fromDecision!=null) return fromDecision;
-    // Валидный JSON без какой-либо самооценки (агенты извлечения):
-    // оценки нет -- это не 90% и не 0%, это "оценивает следующий проверщик".
+    // Неизвестный пользовательский LLM-шаг без результата, решения или
+    // проверяемого контракта не получает выдуманную оценку.
     return null;
   }
   if(rep.status==='bad') return 0;
@@ -1807,7 +1817,7 @@ function attachReviewerScores(stageReports){
     source.report.meta={
       ...sourceMeta,
       score:reviewerMeta.score,
-      confidence:sourceMeta.confidence??reviewerMeta.confidence,
+      confidence:sourceKey==='summary'?reviewerMeta.confidence:(sourceMeta.confidence??reviewerMeta.confidence),
       status:reviewerMeta.status,
       explanation:'Оценка независимого проверщика: '+reviewer.stage.name+'.',
       criteria:[{name:'Оценка независимого Judge',checker:'llm',status:reviewerMeta.status,score:reviewerMeta.score,explanation:reviewerMeta.explanation}]
@@ -4662,8 +4672,8 @@ function renderReport(stage, rep, num){
   const el=document.createElement('div'); el.className='report';
   let body='';
   const meta=rep.meta || buildStageMeta(stage,rep);
-  // meta.score === null -- у этапа нет собственной оценки (агент извлечения,
-  // его оценивает следующий проверщик): показываем "—", а не фиктивный процент.
+  // Для известных стадий score вычисляется сразу; после независимого
+  // проверщика первичная структурная оценка заменяется итоговой смысловой.
   const hasScore=meta.score!=null;
   const scoreTone=!hasScore?'':(meta.score>=90?'ok':(meta.score>=70?'warn':'bad'));
 
@@ -4846,7 +4856,6 @@ function renderFinal(totalTokens, totalCost, stageReports){
     +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
     +'<div class="fm">Источник средств: <b>'+escapeHtml(fmtNeed(n.source_of_funds))+'</b></div>'
     +'<div class="fm">Срок покупки: <b>'+escapeHtml(fmtNeed(n.timeline))+'</b></div>'
-    +'<div class="fm">Требования: <b>'+escapeHtml(flattenPropertyRequirements(n.property_requirements))+'</b></div>'
     +'</div>';
   reportsEl.appendChild(el);
 

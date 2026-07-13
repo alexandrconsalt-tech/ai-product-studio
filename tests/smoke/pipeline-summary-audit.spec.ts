@@ -328,7 +328,7 @@ test("контракты Judge не используют generic score и нор
   expect(result.fact.score).toBeGreaterThanOrEqual(95);
   expect(result.broken).toMatchObject({ status: "technical_error", score: null, decision: "ERROR", error_code: "JUDGE_RESULT_UNAVAILABLE" });
   expect(result.emptyOutcome).toMatchObject({ status: "technical_error", decision: "ERROR", error_code: "PASS_WITH_EMPTY_VERIFIED_OUTCOME" });
-  expect(result.meta).toMatchObject({ score: null, confidence: 0.97 });
+  expect(result.meta).toMatchObject({ score: 100, confidence: 0.97 });
 });
 
 test("каждый шаг Pipeline Lab получает Оценку и Confidence в итоговом отчёте", async ({ page }) => {
@@ -346,13 +346,17 @@ test("каждый шаг Pipeline Lab получает Оценку и Confiden
       {stage:{type:'llm',outKey:'failed_step',name:'Ошибка модели'},report:{status:'bad',error:'model unavailable',output:{status:'technical_error',decision:'ERROR'}}}
     ];
     reports.forEach(item=>{ item.report.meta=buildStageMeta(item.stage,item.report); });
+    const immediate=reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence}));
     attachReviewerScores(reports);
-    return reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence}));
+    return {immediate,final:reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence}))};
   })()`));
-  expect(result.every((item: any) => item.score != null && item.confidence != null)).toBe(true);
-  expect(result.find((item: any) => item.outKey === "facts")).toMatchObject({ score: 94, confidence: 0.97 });
-  expect(result.find((item: any) => item.outKey === "summary")).toMatchObject({ score: 84, confidence: 0.84 });
-  expect(result.find((item: any) => item.outKey === "failed_step")).toMatchObject({ score: 0, confidence: 0 });
+  expect(result.immediate.every((item: any) => item.score != null && item.confidence != null)).toBe(true);
+  expect(result.immediate.find((item: any) => item.outKey === "facts")).toMatchObject({ score: 100, confidence: 0.97 });
+  expect(result.immediate.find((item: any) => item.outKey === "summary")).toMatchObject({ score: 35, confidence: 0.35 });
+  expect(result.final.every((item: any) => item.score != null && item.confidence != null)).toBe(true);
+  expect(result.final.find((item: any) => item.outKey === "facts")).toMatchObject({ score: 94, confidence: 0.97 });
+  expect(result.final.find((item: any) => item.outKey === "summary")).toMatchObject({ score: 84, confidence: 0.84 });
+  expect(result.final.find((item: any) => item.outKey === "failed_step")).toMatchObject({ score: 0, confidence: 0 });
 });
 
 test("итоговое Summary разделяет текст, факты с цитатами и следующий шаг, а потребности читает из справочника", async ({ page }) => {
@@ -366,7 +370,7 @@ test("итоговое Summary разделяет текст, факты с ци
     const mortgageProcess=mortgageFundingFromText('Клиент: В ипотеку предполагаем, да.');
     const mortgageApproved=mortgageFundingFromText('Клиент: Ипотека уже одобрена банком.');
     const published=CODE_FUNCS.crm({}, {__transcript:'Клиент: В ипотеку предполагаем, да.',conversation:{facts:{goal:{value:'покупка',verified:true}},needs:{need_1:{value:'просмотр',verified:true}},crm_needs:{interested_in:['Ипотека'],source_of_funds:'не определено'},outcome:{next_step:{value:'перезвонить',verified:true}}},summary:{summary:'Покупка с ипотекой.',semantic_coverage_preserved:true},quality_gate:{decision:'AUTO_SAVE',summary_quality_score:95}}).output;
-    return {sections,canonical,needs,mortgageProcess,mortgageApproved,published,html:renderFinalSummary(canonical)};
+    return {sections,canonical,needs,mortgageProcess,mortgageApproved,published,html:renderFinalSummary(canonical),finalRenderer:renderFinal.toString()};
   })()`));
   expect(result.sections.main).toBe("Клиент планирует покупку квартиры.");
   expect(result.sections.facts).toHaveLength(3);
@@ -381,6 +385,7 @@ test("итоговое Summary разделяет текст, факты с ци
   expect(result.published.card.source_of_funds).toBe("ипотека в процессе");
   expect(result.html).toContain("Ключевые факты и цитаты");
   expect(result.html).toContain("Договорённости / следующий шаг:");
+  expect(result.finalRenderer).not.toContain("Требования:");
 });
 
 test("production regression 38 сохраняет наличные, предварительный outcome и семантику Store", async ({ page }) => {
