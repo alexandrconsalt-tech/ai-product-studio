@@ -355,6 +355,25 @@ test("каждый шаг Pipeline Lab получает Оценку и Confiden
   expect(result.find((item: any) => item.outKey === "failed_step")).toMatchObject({ score: 0, confidence: 0 });
 });
 
+test("итоговое Summary разделяет текст, факты с цитатами и следующий шаг, а потребности читает из справочника", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const summary='Клиент планирует покупку квартиры. Ключевые факты: • Источник средств: ипотека — «В ипотеку предполагаем». • Готовность к показу: после 18:30 — «После половины седьмого». Договорённости / следующий шаг: агент перезвонит для подтверждения просмотра.';
+    const sections=summaryDisplaySections(summary);
+    const canonical=canonicalSummaryFormat(summary);
+    ctx={publish_result:{card:{interested_in:['Ипотека'],source_of_funds:'ипотека в процессе',purchase_timeline:'до 1 месяца',property_requirements:{rooms:['2 комнаты']}}}};
+    const needs=displayNeeds();
+    return {sections,canonical,needs,html:renderFinalSummary(canonical)};
+  })()`));
+  expect(result.sections.main).toBe("Клиент планирует покупку квартиры.");
+  expect(result.sections.facts).toHaveLength(2);
+  expect(result.canonical).toContain("\n• Источник средств: ипотека");
+  expect(result.canonical).toContain("\nДоговорённости / следующий шаг:");
+  expect(result.needs).toMatchObject({ interested_in: ["Ипотека"], source_of_funds: "ипотека в процессе", timeline: "до 1 месяца" });
+  expect(result.html).toContain("Ключевые факты и цитаты");
+  expect(result.html).toContain("Договорённости / следующий шаг:");
+});
+
 test("production regression 38 сохраняет наличные, предварительный outcome и семантику Store", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {

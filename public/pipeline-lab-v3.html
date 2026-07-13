@@ -144,6 +144,8 @@
     border-radius:14px;padding:20px 22px;margin-bottom:14px}
   .final .fl{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--gpt);font-weight:800;margin:0 0 10px}
   .final .fs{font-size:16px;line-height:1.6;margin:0 0 14px}
+  .final .summary-facts{display:grid;gap:6px;margin:0 0 14px;font-size:14px;line-height:1.55}
+  .final .summary-action{font-size:15px;line-height:1.55;margin:0 0 18px}
   .final .fmeta{display:flex;gap:10px;flex-wrap:wrap}
   .final .fmeta .fm{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12px}
   .final .fmeta .fm b{color:var(--ink)}
@@ -2033,7 +2035,7 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
     if(text && !prepared.includes(text.slice(0,Math.min(240,text.length)).trim())) prepared+='\n\nПОЛНАЯ ТРАНСКРИПЦИЯ ДЛЯ ФИНАЛЬНОЙ СВЕРКИ:\n'+text;
   }
   if(kind==='summary'){
-    prepared+='\n\n---\nФИНАЛЬНЫЙ ФОРМАТ SUMMARY:\nСформируй 2–3 компактных предложения и обязательную отдельную строку «Договорённости / следующий шаг:». Единый максимальный размер — '+summaryMaxChars+' символов. Не дублируй имя, телефон, адрес, цену, площадь, этаж и иные поля CRM-карточки. Не повторяй одну мысль разными словами.';
+    prepared+='\n\n---\nФИНАЛЬНЫЙ ФОРМАТ SUMMARY:\nСначала сформируй 2–3 компактных предложения с итогом разговора. Затем с новой строки напиши «Ключевые факты и цитаты:» и каждый подтверждённый ключевой факт выведи с новой строки через маркер «•», включая короткую подтверждающую цитату. После списка с новой строки обязательно напиши «Договорённости / следующий шаг:». Единый максимальный размер — '+summaryMaxChars+' символов. Не дублируй имя, телефон, адрес, цену, площадь, этаж и иные поля CRM-карточки. Не повторяй одну мысль разными словами.';
   }
   if(['truth_check','action_check'].includes(checkGroup)){
     prepared+='\n\n---\nСТРОГАЯ ПРОВЕРКА ФИНАЛЬНОГО SUMMARY:\nПроверяй отдельно транскрипцию, Conversation Store и фактически сгенерированное Summary. Утверждать, что факт отражён в Summary, можно только если вернёшь точный summary_fragment и found_in_summary=true. Наличие факта только в транскрипции или CRM-карточке не означает, что он есть в Summary.';
@@ -2132,8 +2134,31 @@ function summaryCoversRequired(summary,item){
   return tokens.length===0 || tokens.some(token=>text.includes(token));
 }
 
+function summaryDisplaySections(summary){
+  const source=String(summary||'').replace(/\r/g,'').trim();
+  const actionMatch=/Договорённости\s*\/\s*следующий шаг\s*:/i.exec(source);
+  const beforeAction=actionMatch?source.slice(0,actionMatch.index).trim():source;
+  const action=actionMatch?source.slice(actionMatch.index+actionMatch[0].length).trim():'';
+  const factsMatch=/Ключевые факты(?:\s+и\s+цитаты)?\s*:/i.exec(beforeAction);
+  const main=factsMatch?beforeAction.slice(0,factsMatch.index).trim():beforeAction;
+  const factsText=factsMatch?beforeAction.slice(factsMatch.index+factsMatch[0].length).trim():'';
+  const facts=factsText
+    ? factsText.split(/\s*[•]\s*|\n+/).map(item=>item.trim().replace(/^[-–—]\s*/, '')).filter(Boolean)
+    : [];
+  return {main:main||'—',facts,action};
+}
+
+function canonicalSummaryFormat(summary){
+  const sections=summaryDisplaySections(summary);
+  if(!sections.facts.length && !sections.action) return sections.main;
+  const blocks=[sections.main];
+  if(sections.facts.length) blocks.push('Ключевые факты и цитаты:\n'+sections.facts.map(item=>'• '+item).join('\n'));
+  if(sections.action) blocks.push('Договорённости / следующий шаг: '+sections.action);
+  return blocks.filter(Boolean).join('\n');
+}
+
 function semanticShortenSummary(summary,ctx,limit=summaryMaxChars,maxLimit=summaryMaxChars){
-  const original=String(summary||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+  const original=canonicalSummaryFormat(String(summary||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim());
   const required=requiredSummaryElements(original,ctx);
   const requiredBefore=required.map(item=>item.label);
   let finalText=original;
@@ -4661,6 +4686,7 @@ function renderReport(stage, rep, num){
 // "Итоговое саммари" -- значения приходят из справочников (ENUMS),
 // заполняются агентом "Определение потребностей" (ctx.needs).
 function fmtNeed(v){
+  if(v&&typeof v==='object'&&'value' in v) return fmtNeed(v.value);
   if(v==null || v==='не определено') return 'не определено';
   return Array.isArray(v) ? (v.length? v.join(', ') : 'не определено') : String(v);
 }
@@ -4680,18 +4706,37 @@ function flattenPropertyRequirements(pr){
 
 // Баг "[object Object]": needs-поля с 2026-07-08 -- объекты
 // {value,confidence,evidence,...}, а не голые строки/массивы. crm().card
-// уже разворачивает их в плоские значения -- используем его как основной
-// источник для отображения; при отсутствии (Conversation Store/CRM ещё не
-// выполнялись в этом прогоне) разворачиваем ctx.conversation_store напрямую;
+// уже разворачивает их в плоские значения -- используем карточку фактически
+// выполненного Publish как основной источник; при отсутствии (Conversation
+// Store/Publish ещё не выполнялись) читаем ctx.conversation_store.crm_needs;
 // иначе -- падение на сырой ctx.needs (очень старый прогон/конфиг).
 function displayNeeds(){
-  if(ctx.crm && ctx.crm.card) return ctx.crm.card;
+  const publishedCard=ctx.crm?.card||ctx.publish_result?.card;
+  if(publishedCard) return {...publishedCard,timeline:publishedCard.purchase_timeline||publishedCard.timeline};
   const cs=conversationStoreValue(ctx);
   if(cs){
     const unwrap=(obj)=>Object.fromEntries(Object.entries(obj||{}).map(([k,v])=>[k, v&&typeof v==='object'&&'value' in v ? v.value : v]));
-    return {...unwrap(cs.needs), property_requirements: cs.property_requirements||{}};
+    const crmNeeds=unwrap(cs.crm_needs||{});
+    return {
+      interested_in:crmNeeds.interested_in,
+      source_of_funds:crmNeeds.source_of_funds,
+      timeline:crmNeeds.purchase_timeline||crmNeeds.timeline,
+      property_requirements:cs.property_requirements||{}
+    };
   }
-  return ctx.needs||{};
+  const legacy=ctx.needs||{};
+  return {...(legacy.crm_needs||legacy),timeline:legacy.crm_needs?.purchase_timeline||legacy.crm_needs?.timeline||legacy.timeline,property_requirements:legacy.property_requirements||{}};
+}
+
+function renderFinalSummary(summary){
+  const sections=summaryDisplaySections(summary);
+  let html='<p class="fs">'+escapeHtml(sections.main)+'</p>';
+  if(sections.facts.length){
+    html+='<p class="fl" style="margin-top:4px">Ключевые факты и цитаты</p>';
+    html+='<div class="summary-facts">'+sections.facts.map(item=>'<div>• '+escapeHtml(item)+'</div>').join('')+'</div>';
+  }
+  if(sections.action) html+='<p class="summary-action"><b>Договорённости / следующий шаг:</b> '+escapeHtml(sections.action)+'</p>';
+  return html;
 }
 
 function decisionTone(decision){
@@ -4746,8 +4791,8 @@ function renderFinal(totalTokens, totalCost, stageReports){
   // {value,confidence,evidence,...}, а не голые строки/массивы.
   el.innerHTML=
     '<p class="fl">🎯 Итоговое саммари</p>'
-    +'<p class="fs">'+escapeHtml(summary)+'</p>'
-    +'<p class="fl" style="margin-top:4px">П Потребности клиента</p>'
+    +renderFinalSummary(summary)
+    +'<p class="fl" style="margin-top:4px">Потребности клиента</p>'
     +'<div class="fmeta">'
     +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
     +'<div class="fm">Источник средств: <b>'+escapeHtml(fmtNeed(n.source_of_funds))+'</b></div>'
