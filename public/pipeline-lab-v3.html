@@ -3461,6 +3461,21 @@ function cleanupOutcomeV9(outcome){
 function normalizedSemanticText(value){
   return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^а-яa-z0-9]+/gi,' ').trim();
 }
+// 2026-07-22 real-run fix: клиент называет мессенджер по-русски ("в Макс",
+// "вотсап"), а Outcome Agent сохраняет канонический channel латиницей
+// ("MAX", "WhatsApp") -- строковое includes() между "max" и "макс" никогда
+// не совпадёт (разные Unicode-алфавиты), из-за чего полностью грамотная,
+// подтверждённая договорённость детерминированно помечалась invented_channel
+// на каждом прогоне с этим клиентом. Границы слов заданы через lookahead/
+// lookbehind, а не \b: \b в JS распознаёт только ASCII \w и молча не
+// срабатывает после кириллицы (тот же класс бага уже фиксировался в этом
+// файле для hasCompleteEnding, см. аддендум 2026-07-10) -- живьём
+// перепроверено here (в исходной версии на \b минимальный воспроизводящий
+// пример "макс" внутри "давайте в макс лучше" НЕ заменялся вовсе).
+const CHANNEL_TEXT_ALIASES=[[/(?<![а-яa-z0-9])(?:ватсап|вотсап|вацап)[а-яa-z]*/g,'whatsapp'],[/(?<![а-яa-z0-9])(?:телеграм[а-яa-z]*|телегу|телега)(?![а-яa-z0-9])/g,'telegram'],[/(?<![а-яa-z0-9])макс(?![а-яa-z0-9])/g,'max']];
+function normalizeChannelAliases(normalizedText){
+  return CHANNEL_TEXT_ALIASES.reduce((text,[pattern,replacement])=>text.replace(pattern,replacement),String(normalizedText||''));
+}
 
 function semanticItemDuplicate(candidate, verified){
   const core=item=>normalizedSemanticText(item?.value??item?.description??item?.fact??'');
@@ -7460,7 +7475,7 @@ function outcomeSemanticGuards(input,ctx){
     if((/хочет|интерес|готов посмотр|рассматрива/.test(text)&&!/договор|соглас|изучу|посмотрю|ознакомлюсь/.test(text))||!outcomeFutureActionSupported(item)) rejectAgreement(item,/хочет|интерес|готов посмотр|рассматрива/.test(text)?'interest_not_agreement':'fact_not_agreement','Факт объекта или интерес не является договорённостью.');
     if(/отправил|прислал|подготовил|уточнил|перезвонил|позвонил|показал/.test(action)&&/отправлю|пришлю|подготовлю|уточню|перезвоню|позвоню|покажу|буду|будет/.test(evidence)) rejectAgreement(item,'future_action_as_completed','Будущее действие нельзя преобразовывать в completed tense.','critical');
     if(item.deadline&&!evidence.includes(normalized(item.deadline))) rejectAgreement(item,'invented_deadline','Deadline не встречается в evidence.',/\d|сегодня|завтра|день|недел/.test(normalized(item.deadline))?'critical':'warning',true);
-    if(item.channel&&!evidence.includes(normalized(item.channel))) rejectAgreement(item,'invented_channel','Channel не встречается в evidence.','critical');
+    if(item.channel&&!normalizeChannelAliases(evidence).includes(normalizeChannelAliases(normalized(item.channel)))) rejectAgreement(item,'invented_channel','Channel не встречается в evidence.','critical');
     const evidenceAgent=/^(?:агент|оператор)|агент |оператор /.test(evidence)&&/отправ|пришл|подготов|уточн|перезвон|позвон|покаж/.test(evidence);
     const evidenceClient=/^клиент|клиент /.test(evidence)&&/изуч|посмотр|перезвон|пришл|отправ|подготов/.test(evidence);
     if((evidenceAgent&&item.owner!=='агент'&&item.owner!=='оператор')||(evidenceClient&&item.owner!=='клиент')) rejectAgreement(item,'wrong_owner','Owner противоречит спикеру критического действия.','critical');
@@ -7473,7 +7488,7 @@ function outcomeSemanticGuards(input,ctx){
     if(badReference) primaryIssue={error_type:'rejected_primary_agreement',reason:'Primary next step ссылается на отклонённую договорённость.',evidence:badReference.evidence};
     else if(/отправил|прислал|подготовил|уточнил|перезвонил|позвонил|показал/.test(normalized(primary.action))&&referenced.some(item=>/отправлю|пришлю|подготовлю|уточню|перезвоню|позвоню|покажу/.test(normalized(item.evidence)))) primaryIssue={error_type:'future_action_as_completed',reason:'Primary next step изменяет будущее действие на completed.',evidence:referenced[0]?.evidence||''};
     else if(primary.deadline&&!referenced.some(item=>normalized(item.evidence).includes(normalized(primary.deadline)))) primaryIssue={error_type:'invented_deadline',reason:'Deadline primary next step не встречается в evidence.',evidence:referenced[0]?.evidence||''};
-    else if(primary.channel&&!referenced.some(item=>normalized(item.evidence).includes(normalized(primary.channel)))) primaryIssue={error_type:'invented_channel',reason:'Channel primary next step не встречается в evidence.',evidence:referenced[0]?.evidence||''};
+    else if(primary.channel&&!referenced.some(item=>normalizeChannelAliases(normalized(item.evidence)).includes(normalizeChannelAliases(normalized(primary.channel))))) primaryIssue={error_type:'invented_channel',reason:'Channel primary next step не встречается в evidence.',evidence:referenced[0]?.evidence||''};
   }
   return {resultIssues,agreementIssues,primaryIssue};
 }
@@ -7493,10 +7508,24 @@ function normalizeOutcomeJudgeOutput(value,input){
   if(!value||typeof value!=='object'||Array.isArray(value)) return value;
   const results=input?.call_results||[],agreements=input?.agreements||[];
   const usedResultIds=new Set();
+  // 2026-07-22 real-run fix: a real gpt-5-mini response verified the only
+  // call_result correctly (same "value") but omitted "id" and rewrote
+  // "evidence" with added speaker labels/quotes -- neither the id-match nor
+  // the old exact value+evidence fallback could find it, hard-failing the
+  // whole stage (and everything downstream) over a citation formatting
+  // detail, not an actual fabricated verdict. Matching now falls back to
+  // the single remaining unclaimed candidate (unambiguous when there's only
+  // one), then to a value-only match; "evidence" is no longer required to
+  // be byte-identical below (see the trimmed compare-key list) since it is
+  // supporting citation text, not the verified claim itself -- "value" (the
+  // actual claim) still cannot be changed by the judge.
   const resultFor=(item,path)=>{
-    const original=results.find(candidate=>!usedResultIds.has(candidate.id)&&(item?.id?candidate.id===item.id:(candidate.value===item?.value&&candidate.evidence===item?.evidence)));
+    const unused=results.filter(candidate=>!usedResultIds.has(candidate.id));
+    let original=item?.id?unused.find(candidate=>candidate.id===item.id):null;
+    if(!original&&unused.length===1) original=unused[0];
+    if(!original&&item?.value!=null) original=unused.find(candidate=>candidate.value===item.value);
     if(!original) throw new OutcomeJudgeSchemaError(path+': matching input result not found');
-    ['id','value','evidence','confidence','verification_status'].forEach(key=>{
+    ['id','value','confidence','verification_status'].forEach(key=>{
       if(Object.prototype.hasOwnProperty.call(item,key)&&JSON.stringify(item[key])!==JSON.stringify(original[key])) throw new OutcomeJudgeSchemaError(path+'.'+key+': Judge changed input value');
     });
     usedResultIds.add(original.id);return original;
@@ -7511,17 +7540,31 @@ function normalizeOutcomeJudgeOutput(value,input){
     return {id:original.id,verified:false,error_type:String(item?.error_type||'outcome_not_confirmed'),reason:String(item?.reason||'Результат звонка не подтверждён.'),evidence:String(item?.evidence||original.evidence),severity:['warning','critical'].includes(item?.severity)?item.severity:(criticalErrors.has(item?.error_type)?'critical':'warning'),disputed:typeof item?.disputed==='boolean'?item.disputed:false};
   });
   const agreementsById=new Map(agreements.map(item=>[item.id,item]));
+  // Same 2026-07-22 resilience fix as resultFor above: fall back to the
+  // single remaining unclaimed agreement when id is missing/unrecognized,
+  // and stop requiring byte-identical "evidence" (citation text the judge
+  // may legitimately reformat) -- the substantive fields (action/owner/
+  // recipient/deadline/channel/status) still cannot be changed.
+  const usedAgreementIds=new Set();
+  const agreementFor=(item,path)=>{
+    let original=item?.id?agreementsById.get(item.id):null;
+    if(!original){
+      const unused=agreements.filter(candidate=>!usedAgreementIds.has(candidate.id));
+      if(unused.length===1) original=unused[0];
+    }
+    if(!original) throw new OutcomeJudgeSchemaError(path+'.id: unknown input agreement id "'+item?.id+'"');
+    usedAgreementIds.add(original.id);
+    return original;
+  };
   const verified_agreements=(Array.isArray(value.verified_agreements)?value.verified_agreements:[]).map((item,index)=>{
-    const original=agreementsById.get(item?.id);
-    if(!original) throw new OutcomeJudgeSchemaError('verified_agreements['+index+'].id: unknown input agreement id "'+item?.id+'"');
-    ['id','action','owner','recipient','deadline','channel','status','evidence','confidence','verification_status'].forEach(key=>{
+    const original=agreementFor(item,'verified_agreements['+index+']');
+    ['id','action','owner','recipient','deadline','channel','status','confidence','verification_status'].forEach(key=>{
       if(Object.prototype.hasOwnProperty.call(item,key)&&JSON.stringify(item[key])!==JSON.stringify(original[key])) throw new OutcomeJudgeSchemaError('verified_agreements['+index+'].'+key+': Judge changed input value');
     });
     return {...original,verified:true,reason:typeof item?.reason==='string'&&item.reason.trim()?item.reason:'Договорённость подтверждена.'};
   });
   const rejected_agreements=(Array.isArray(value.rejected_agreements)?value.rejected_agreements:[]).map((item,index)=>{
-    const original=agreementsById.get(item?.id);
-    if(!original) throw new OutcomeJudgeSchemaError('rejected_agreements['+index+'].id: unknown input agreement id "'+item?.id+'"');
+    const original=agreementFor(item,'rejected_agreements['+index+']');
     return {id:original.id,verified:false,error_type:String(item?.error_type||'agreement_not_confirmed'),reason:String(item?.reason||'Договорённость не подтверждена.'),evidence:String(item?.evidence||original.evidence),severity:['warning','critical'].includes(item?.severity)?item.severity:(criticalErrors.has(item?.error_type)?'critical':'warning'),disputed:typeof item?.disputed==='boolean'?item.disputed:/status|deadline|channel/.test(String(item?.error_type||''))};
   });
   const primaryAccepted=value.verified_primary_next_step&&typeof value.verified_primary_next_step==='object'&&value.verified_primary_next_step.verified!==false;
@@ -7728,10 +7771,22 @@ async function runStage(stage, ctx){
       parseErr='INCOMPLETE_NEED_JUDGE_CONTRACT';
     }
     let hybridRetryCount=0;
-    if(parseErr&&(!(isFactCheckStage||isNeedCheckStage||isOutcomeCheckStage)||parseErrKind!=='schema')){
+    // 2026-07-22 real-run fix: schema-class errors on fact_check/need_check/
+    // outcome_check (dropped id, reworded field) used to skip retry entirely
+    // and hard-fail the stage -- which, since these three feed
+    // conversation_store, silently NOT_RUN'd every remaining stage of the
+    // pipeline (summary + all 5 post-summary judges + gate) on what was
+    // often just a recoverable formatting slip from the judge model (see
+    // CLAUDE.md's 2026-07-22 addendum for the real production trace that
+    // surfaced this). A retry with the concrete validation error quoted back
+    // to the model is strictly an improvement: same hard failure as before
+    // if the retry doesn't fix it, a saved run if it does.
+    if(parseErr){
       hybridRetryCount=1;
       const retryPrompt=parseErr==='INCOMPLETE_NEED_JUDGE_CONTRACT'
         ? prompt+'\n\nПРЕДЫДУЩИЙ ОТВЕТ НАРУШИЛ КОНТРАКТ: verified_needs и failed_needs одновременно пусты при непустом входе. Повтори проверку и классифицируй каждый исходный элемент ровно в один из этих массивов со всеми пятью булевыми флагами.'
+        : parseErrKind==='schema'
+        ? prompt+'\n\nПРЕДЫДУЩИЙ ОТВЕТ НАРУШИЛ КОНТРАКТ: '+parseErr+'. Каждый элемент verified_*/rejected_* обязан включать поле "id" со значением ИЗ ВХОДНЫХ ДАННЫХ (facts/needs/requirements/call_results/agreements выше) -- скопируй id дословно, не придумывай новый и не пропускай поле.'
         : prompt;
       const retryResult=await callModelWithTransientRetry(retryPrompt,stage.model,stage.provider,stage.temperature,Math.max(Number(stage.maxTokens)||0,14000),null,stageAllowsVendorFallback(stage));
       raw=retryResult.text; tokens+=retryResult.tokens||0; actualModel=retryResult.actualModel; actualProvider=retryResult.actualProvider; fallbackNote=retryResult.fallbackNote; finishReason=retryResult.finishReason;

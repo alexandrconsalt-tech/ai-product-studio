@@ -2209,7 +2209,12 @@ test("Проверка фактов валидирует вход, Judge и са
   expect(result.scoreSpoof.fact_check_quality).toMatchObject({ precision_score: 1, critical_recall_score: 1, quote_score: 1, overall_score: 1, decision: "PASS" });
   expect(result.wrongChannel.rejected_facts).toEqual([expect.objectContaining({ id: "fact_channel", error_type: "evidence_mismatch" })]);
   expect(result.correctChannel.verified_facts).toEqual([expect.objectContaining({ id: "fact_channel", value: "MAX", normalized_value: "MAX" })]);
-  expect(result.unknownCalls).toBe(1);
+  // 2026-07-22: schema-class errors on fact_check/need_check/outcome_check now get
+  // one retry attempt (a real production run showed this recovers a dropped-id
+  // formatting slip) -- this mock always returns the same broken "fact_missing"
+  // id regardless of call count, so the retry can't help here and the final
+  // outcome below is unchanged; only the call count grows from 1 to 2.
+  expect(result.unknownCalls).toBe(2);
   expect(result.unknownJudge.output).toMatchObject({ status: "technical_error", error_code: "INVALID_JUDGE_OUTPUT" });
   expect(result.unknownJudge.output.schema_error).toContain('verified_facts[1].id: unknown input id "fact_missing"');
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, fact_check: { status: "technical_error", error_code: "SCHEMA_VALIDATION_FAILED" } });
@@ -2488,6 +2493,47 @@ test("Проверка результата валидирует Judge, semantic
   expect(result.dependencyCalls).toBe(0);
   expect(result.dependency.output).toMatchObject({ status: "dependency_error", error_code: "DEPENDENCY_ERROR" });
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined });
+});
+
+test("Проверка результата звонка восстанавливается после пропущенного id и переформулированного evidence в ответе Judge (реальный прогон 2026-07-21)", async ({ page }) => {
+  // Реальный прод-прогон: Outcome Agent дал один call_result с id "result_1";
+  // Judge подтвердил его правильно по смыслу (то же value), но в ответе
+  // пропустил "id" и переписал "evidence" со вставленными репликами спикеров
+  // -- раньше это была невосстановимая ошибка схемы (matching input result
+  // not found), которая полностью останавливала Conversation Store, Summary
+  // и все 5 судей ниже по пайплайну. Одиночный неопознанный кандидат теперь
+  // сопоставляется однозначно, а evidence больше не обязан быть побайтово
+  // идентичным (это цитата, не сама проверяемая величина).
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(async () => {
+    const input={
+      call_results:[{id:'result_1',value:'агент отправит материалы',evidence:'Скину видео. — Ну, давайте, я жду от вас видео. — Да, давайте в Макс лучше.',confidence:.99,verification_status:'pending'}],
+      agreements:[{id:'agreement_001',action:'отправить видеообзор объекта',owner:'агент',recipient:'клиент',deadline:'',channel:'MAX',status:'confirmed',evidence:'Скину видео. Давайте в Макс лучше.',confidence:.99,verification_status:'pending'}],
+      primary_next_step:{action:'отправить видеообзор объекта',owner:'агент',deadline:'',channel:'MAX',status:'confirmed',agreement_ids:['agreement_001'],confidence:.99,verification_status:'pending'},
+      outcome_meta:{result_count:1,agreement_count:1,decision:'EXTRACTED'}
+    };
+    const realWorldVerdict={
+      verified_call_results:[{value:'агент отправит материалы',evidence:'Агент: «Скину видео и сейчас посмотрю, че у нас есть, скину ссылку на подбор.» Клиент: «Ну, давайте, я жду от вас видео.»',confidence:.99,reason:'подтверждено'}],
+      rejected_call_results:[],
+      verified_agreements:[{action:'отправить видеообзор объекта',owner:'агент',recipient:'клиент',deadline:'',channel:'MAX',status:'confirmed',confidence:.99,reason:'подтверждено'}],
+      rejected_agreements:[],
+      verified_primary_next_step:{...input.primary_next_step,reason:'подтверждено'},
+      rejected_primary_next_step:{rejected:false,action:'',error_type:'',reason:'',evidence:''},
+      missing_critical_outcomes:[],
+      outcome_check_quality:{results_checked:1,results_verified:1,results_rejected:0,agreements_checked:1,agreements_verified:1,agreements_rejected:0,primary_next_step_verified:1,critical_outcomes_missing:0,result_accuracy_score:1,agreement_precision_score:1,next_step_accuracy_score:1,critical_recall_score:1,overall_score:1,decision:'PASS'},
+      criteria:[{name:'Outcome semantics',status:'pass',score:100,explanation:'Проверено'}]
+    };
+    const ctx={__transcript:'Клиент: Хорошо',outcome:input,fact_check:{status:'ok',decision:'PASS',verified_facts:[]},need_check:{status:'ok',decision:'PASS',verified_attributes:{},verified_requirements:[]}};
+    const code=CODE_FUNCS.outcomeCheckCode({},ctx);
+    const validated=validateOutcomeJudgeOutput(realWorldVerdict,code.input);
+    const merged=mergeOutcomeCheck(code,validated,null,code.input,ctx);
+    return {validated,merged};
+  })()`));
+
+  expect(result.merged.decision).toBe("PASS");
+  expect(result.merged.verified_call_results).toEqual([expect.objectContaining({ id: "result_1", value: "агент отправит материалы", verified: true })]);
+  expect(result.merged.verified_agreements).toEqual([expect.objectContaining({ id: "agreement_001", action: "отправить видеообзор объекта", verified: true })]);
+  expect(result.merged.verified_primary_next_step).toMatchObject({ action: "отправить видеообзор объекта", verified: true });
 });
 
 test("Conversation Store v1 собирает только verified данные и проверяет provenance, ссылки и PII", async ({ page }) => {
