@@ -11,6 +11,9 @@ import type { RepositorySnapshot } from "./types";
 
 const STORAGE_KEY = "ai-product-studio.repository.v1";
 const BACKUP_STORAGE_KEY = "ai-product-studio.repository.invalid-backup.v1";
+const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
+const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
+const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
 
 function emptySnapshot(): RepositorySnapshot {
   return {
@@ -124,8 +127,8 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
     const retiredRuns = retiredPipelines.map((pipeline) => createRun({ pipelineId: pipeline.id, input: "x" }));
     const retiredReviews = retiredProjects.map((project) => createReview({ targetType: "project", targetId: project.id, status: "approved", score: 90 }));
 
-    const keptProject = createProject({ name: "Pipeline Lab v3 — Анализ звонков (Недвижимость)", id: "project_demo_pipeline_lab_v3" });
-    const keptProduct = createProduct({ projectId: keptProject.id });
+    const keptProject = createProject({ name: TRANSCRIPTION_SUMMARY_NAME, id: TRANSCRIPTION_SUMMARY_PROJECT_ID });
+    const keptProduct = createProduct({ id: TRANSCRIPTION_SUMMARY_PRODUCT_ID, projectId: keptProject.id });
 
     const legacySnapshot: RepositorySnapshot = {
       ...emptySnapshot(),
@@ -150,7 +153,7 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
     expect(loaded.reviews).toHaveLength(0);
   });
 
-  it("leaves a user-created project with an unrelated id untouched", () => {
+  it("replaces a persisted unrelated product with the single supported module", () => {
     const repo = new LocalStorageProjectRepository();
     const userProject = createProject({ name: "My Own Product" });
     const legacySnapshot: RepositorySnapshot = { ...emptySnapshot(), projects: [userProject] };
@@ -159,15 +162,56 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
 
     const loaded = repo.load();
 
-    expect(loaded.projects.some((project) => project.id === userProject.id)).toBe(true);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID]);
+  });
+});
+
+describe("LocalStorageProjectRepository transcription products seed", () => {
+  it("keeps only the transcription and AI-summary module and preserves its saved settings", () => {
+    const repo = new LocalStorageProjectRepository();
+    const originalProjectRenamedByMistake = createProject({
+      id: "project_transcription_summary_module",
+      name: "Summary NEW",
+      description: "Сохранённое описание исходного продукта",
+      playgroundRunIds: ["playground_run_existing"],
+    });
+    const originalProduct = createProduct({
+      id: "product_transcription_summary_module",
+      projectId: originalProjectRenamedByMistake.id,
+      notes: "Сохранённые настройки исходного продукта",
+      aiModels: "gpt-5-mini",
+    });
+    const summaryNewProject = createProject({ id: "project_summary_new", name: "Summary NEW" });
+    const summaryNewProduct = createProduct({ id: "product_summary_new", projectId: summaryNewProject.id });
+    const otherProject = createProject({ name: "Другой продукт" });
+    const otherProduct = createProduct({ projectId: otherProject.id });
+    const snapshot: RepositorySnapshot = {
+      ...emptySnapshot(),
+      projects: [{ ...originalProjectRenamedByMistake, productId: originalProduct.id }, summaryNewProject, otherProject],
+      products: [originalProduct, summaryNewProduct, otherProduct],
+    };
+
+    stubLocalStorage({ [STORAGE_KEY]: JSON.stringify(snapshot) });
+
+    const loaded = repo.load();
+
+    expect(loaded.projects.find((project) => project.id === originalProjectRenamedByMistake.id)).toEqual({
+      ...originalProjectRenamedByMistake,
+      productId: originalProduct.id,
+      name: "Модуль транскрибации и AI-саммари звонков",
+    });
+    expect(loaded.products.find((product) => product.id === originalProduct.id)).toEqual(originalProduct);
+    expect(loaded.projects).toHaveLength(1);
+    expect(loaded.products).toHaveLength(1);
   });
 });
 
 describe("LocalStorageProjectRepository.load", () => {
   it("migrates legacy React Flow edge fields from localStorage before schema validation", () => {
     const repo = new LocalStorageProjectRepository();
-    const project = createProject({ name: "Legacy" });
-    const product = createProduct({ projectId: project.id });
+    const project = createProject({ id: TRANSCRIPTION_SUMMARY_PROJECT_ID, name: TRANSCRIPTION_SUMMARY_NAME });
+    const product = createProduct({ id: TRANSCRIPTION_SUMMARY_PRODUCT_ID, projectId: project.id });
     const architecture = createArchitecture({ projectId: project.id, productId: product.id });
     const edge = createEdge({ sourceNodeId: "node_a", targetNodeId: "node_b" });
     const pipeline = createPipeline({ projectId: project.id, architectureId: architecture.id, edges: [edge] });
@@ -199,8 +243,8 @@ describe("LocalStorageProjectRepository.load", () => {
 
   it("drops malformed legacy edges that cannot be migrated", () => {
     const repo = new LocalStorageProjectRepository();
-    const project = createProject({ name: "Legacy malformed" });
-    const product = createProduct({ projectId: project.id });
+    const project = createProject({ id: TRANSCRIPTION_SUMMARY_PROJECT_ID, name: TRANSCRIPTION_SUMMARY_NAME });
+    const product = createProduct({ id: TRANSCRIPTION_SUMMARY_PRODUCT_ID, projectId: project.id });
     const architecture = createArchitecture({ projectId: project.id, productId: product.id });
     const edge = createEdge({ sourceNodeId: "node_a", targetNodeId: "node_b" });
     const pipeline = createPipeline({ projectId: project.id, architectureId: architecture.id, edges: [edge] });
@@ -236,8 +280,8 @@ describe("LocalStorageProjectRepository.load", () => {
 
   it("synthesizes a valid edge id when a legacy edge id is not a string", () => {
     const repo = new LocalStorageProjectRepository();
-    const project = createProject({ name: "Legacy edge id" });
-    const product = createProduct({ projectId: project.id });
+    const project = createProject({ id: TRANSCRIPTION_SUMMARY_PROJECT_ID, name: TRANSCRIPTION_SUMMARY_NAME });
+    const product = createProduct({ id: TRANSCRIPTION_SUMMARY_PRODUCT_ID, projectId: project.id });
     const architecture = createArchitecture({ projectId: project.id, productId: product.id });
     const edge = createEdge({ sourceNodeId: "node_a", targetNodeId: "node_b" });
     const pipeline = createPipeline({ projectId: project.id, architectureId: architecture.id, edges: [edge] });
@@ -268,8 +312,8 @@ describe("LocalStorageProjectRepository.load", () => {
 
   it("normalizes legacy Run array fields before schema validation", () => {
     const repo = new LocalStorageProjectRepository();
-    const project = createProject({ name: "Legacy run" });
-    const product = createProduct({ projectId: project.id });
+    const project = createProject({ id: TRANSCRIPTION_SUMMARY_PROJECT_ID, name: TRANSCRIPTION_SUMMARY_NAME });
+    const product = createProduct({ id: TRANSCRIPTION_SUMMARY_PRODUCT_ID, projectId: project.id });
     const architecture = createArchitecture({ projectId: project.id, productId: product.id });
     const pipeline = createPipeline({ projectId: project.id, architectureId: architecture.id });
     const run = createRun({ pipelineId: pipeline.id, input: "transcript", evidence: ["valid evidence"] });
@@ -303,8 +347,8 @@ describe("LocalStorageProjectRepository.load", () => {
 
   it("normalizes legacy status values before schema validation", () => {
     const repo = new LocalStorageProjectRepository();
-    const project = createProject({ name: "Legacy statuses", status: "draft" });
-    const product = createProduct({ projectId: project.id, status: "draft" });
+    const project = createProject({ id: TRANSCRIPTION_SUMMARY_PROJECT_ID, name: TRANSCRIPTION_SUMMARY_NAME, status: "draft" });
+    const product = createProduct({ id: TRANSCRIPTION_SUMMARY_PRODUCT_ID, projectId: project.id, status: "draft" });
     const architecture = createArchitecture({ projectId: project.id, productId: product.id, status: "draft" });
     const pipeline = createPipeline({ projectId: project.id, architectureId: architecture.id, status: "draft" });
     const run = createRun({ pipelineId: pipeline.id, input: "x", status: "queued" });
@@ -348,8 +392,8 @@ describe("LocalStorageProjectRepository.load", () => {
     const loaded = repo.load();
 
     expect(stored.get(BACKUP_STORAGE_KEY)).toBe(JSON.stringify(invalidSnapshot));
-    expect(loaded.projects.length).toBeGreaterThan(0);
-    expect(loaded.products.length).toBeGreaterThan(0);
-    expect(loaded.pipelines.length).toBeGreaterThan(0);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID]);
+    expect(loaded.pipelines).toHaveLength(0);
   });
 });

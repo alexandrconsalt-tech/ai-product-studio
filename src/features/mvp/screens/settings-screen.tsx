@@ -163,7 +163,7 @@ function ApiKeysSection() {
 
       <div className="grid gap-2">
         <label className="grid gap-1 text-sm">
-          Anthropic (для шагов с моделью «Claude Sonnet 4.6», sk-ant-…)
+          Anthropic (для шагов с моделями Claude, sk-ant-…)
           <div className="flex flex-wrap items-center gap-2">
             <Input type="password" className="min-w-56 flex-1" placeholder="sk-ant-api03-..." value={anthropicKey} onChange={(event) => setAnthropicKey(event.target.value)} autoComplete="off" />
             <Button variant="secondary" onClick={handleSaveAnthropic} disabled={!anthropicKey.trim()}>Сохранить</Button>

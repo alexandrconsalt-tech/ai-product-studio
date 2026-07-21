@@ -26,8 +26,16 @@ const SELECTED_LLM_PROVIDER_STORAGE = "selectedLlmProvider";
 export const DEFAULT_AI_TUNNEL_BASE_URL = "https://api.aitunnel.ru/v1";
 export type SelectedLlmProvider = "ai-tunnel" | "openai-direct" | "anthropic-direct" | "mock";
 
-const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
+const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5";
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
+// Каталог AI Tunnel и выпадающие списки используют алиас с точкой
+// ("claude-sonnet-4.5"), а Anthropic API принимает только id с дефисами;
+// "claude-sonnet-4-6" — исторический id из старых конфигов, которого у
+// Anthropic нет. Нормализуется в момент прямого вызова Anthropic.
+const ANTHROPIC_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  "claude-sonnet-4.5": "claude-sonnet-4-5",
+  "claude-sonnet-4-6": "claude-sonnet-4-5",
+};
 
 export function loadAnthropicApiKey(): string {
   if (typeof window === "undefined") return "";
@@ -128,7 +136,7 @@ async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_M
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
-    body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify({ model: ANTHROPIC_MODEL_ALIASES[model] ?? model, max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
@@ -247,6 +255,8 @@ export async function callConfiguredLlm(prompt: string): Promise<ConfiguredLlmRe
 export const MODEL_VENDOR: Readonly<Record<string, "openai" | "anthropic">> = {
   "gpt-5-mini": "openai",
   "claude-sonnet-4-6": "anthropic",
+  "claude-sonnet-4.5": "anthropic",
+  "claude-sonnet-4-5": "anthropic",
   "deepseek-v3.2-exp": "openai",
   "deepseek-v4-flash": "openai",
   "gpt-4o-mini": "openai",

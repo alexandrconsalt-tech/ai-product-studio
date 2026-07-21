@@ -135,7 +135,10 @@ function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; on
             <h2 className="text-lg font-semibold">Результат теста</h2>
             <p className="text-sm text-text-muted">{formatDateTime(run.finishedAt)}</p>
           </div>
-          <Status tone={run.status === "succeeded" ? "success" : "error"}>{run.status === "succeeded" ? "успешно" : "с ошибкой"}</Status>
+          <div className="flex items-center gap-2">
+            <Status tone={run.status === "succeeded" ? "success" : "error"}>{run.status === "succeeded" ? "успешно" : "с ошибкой"}</Status>
+            <Button variant="secondary" onClick={onClose}>Закрыть</Button>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
           <Card><p className="text-xs text-text-muted">Стоимость</p><p className="font-medium">{formatUsd(run.costUsd)}</p></Card>
@@ -170,7 +173,6 @@ function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; on
             <Download className="size-4" aria-hidden="true" />
             Скачать JSON
           </Button>
-          <Button variant="primary" onClick={onClose}>Закрыть</Button>
         </div>
       </Dialog>
     </div>
@@ -188,9 +190,26 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
       </div>
       <p className="text-sm text-text-muted">Нажмите на запуск, чтобы посмотреть его полный результат.</p>
       <div className="grid gap-2">
+        <div data-testid="run-history-columns" className="hidden grid-cols-[1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr] gap-2 px-3 text-xs font-medium text-text-muted md:grid">
+          <span>Дата и время</span>
+          <span>Продукт</span>
+          <span>Статус</span>
+          <span>Стоимость</span>
+          <span>Время</span>
+          <span>Оценка Summary</span>
+          <span>Решение</span>
+          <span>Достоверность</span>
+          <span>Ключевые факты</span>
+          <span>Контекст</span>
+          <span>Следующий шаг</span>
+          <span>Формат</span>
+          <span>Этап с ошибкой</span>
+          <span>Основная проблема</span>
+        </div>
         {runs.map((run) => (
           <button
             key={run.id}
+            data-testid="run-history-row"
             type="button"
             className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
             onClick={() => setSelectedRun(run)}

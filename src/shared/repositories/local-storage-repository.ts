@@ -18,6 +18,7 @@ const BACKUP_STORAGE_KEY = "ai-product-studio.repository.invalid-backup.v1";
 const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
+const TRANSCRIPTION_SUMMARY_NAME_PATTERN = /^Модуль транскрибации и AI-саммари звонков/i;
 const TRANSCRIPTION_SUMMARY_CREATED_AT = "2026-07-08T00:00:00.000Z";
 
 const RepositorySnapshotSchema = z.object({
@@ -197,12 +198,15 @@ function withoutRetiredDemoProjects(snapshot: RepositorySnapshot): RepositorySna
 }
 
 function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): RepositorySnapshot {
-  const existingProject = snapshot.projects.find((project) => project.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || /^Модуль транскрибации и AI-саммари звонков/i.test(project.name));
+  const existingProductById = snapshot.products.find((product) => product.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID);
+  const existingProject = snapshot.projects.find(
+    (project) => project.id === TRANSCRIPTION_SUMMARY_PROJECT_ID
+      || project.id === existingProductById?.projectId
+      || TRANSCRIPTION_SUMMARY_NAME_PATTERN.test(project.name),
+  );
   const targetProjectId = existingProject?.id ?? TRANSCRIPTION_SUMMARY_PROJECT_ID;
   const hasProject = Boolean(existingProject);
-  const hasProduct = snapshot.products.some((product) => product.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID || product.projectId === targetProjectId);
-
-  if (hasProject && hasProduct) return snapshot;
+  const hasProduct = snapshot.products.some((product) => product.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID);
 
   const project = {
     id: targetProjectId,
@@ -262,10 +266,24 @@ function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): Repositor
     version: "1.0.0",
   };
 
-  return {
+  const projectsWithModule = hasProject
+    ? snapshot.projects.map((item) => (item.id === targetProjectId ? { ...item, name: TRANSCRIPTION_SUMMARY_NAME, productId: TRANSCRIPTION_SUMMARY_PRODUCT_ID } : item))
+    : [project, ...snapshot.projects];
+  const productsWithModule = hasProduct ? snapshot.products : [product, ...snapshot.products];
+  const hydratedSnapshot: RepositorySnapshot = {
     ...snapshot,
-    projects: hasProject ? snapshot.projects : [project, ...snapshot.projects],
-    products: hasProduct ? snapshot.products : [product, ...snapshot.products],
+    projects: projectsWithModule,
+    products: productsWithModule,
+  };
+
+  const singleProjectSnapshot = hydratedSnapshot.projects.reduce<RepositorySnapshot>(
+    (current, item) => (item.id === targetProjectId ? current : cascadeDeleteProject(current, item.id)),
+    hydratedSnapshot,
+  );
+
+  return {
+    ...singleProjectSnapshot,
+    products: singleProjectSnapshot.products.filter((item) => item.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID),
   };
 }
 

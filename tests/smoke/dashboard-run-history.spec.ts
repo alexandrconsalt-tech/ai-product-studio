@@ -53,4 +53,15 @@ test("запуск Pipeline сохраняется в истории Дашбо�
   await expect(page.getByRole("heading", { level: 1, name: "Дашборд" })).toBeVisible();
   await expect(page.getByText("1 запуск(ов) в выборке · 1 всего", { exact: true })).toBeVisible();
   await expect(page.getByText("История запусков", { exact: true })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) >= 768) {
+    const columns = page.getByTestId("run-history-columns");
+    await expect(columns.getByText("Дата и время", { exact: true })).toBeVisible();
+    await expect(columns.getByText("Оценка Summary", { exact: true })).toBeVisible();
+    await expect(columns.getByText("Основная проблема", { exact: true })).toBeVisible();
+    await page.getByTestId("run-history-row").click();
+    await expect(page.getByRole("heading", { level: 2, name: "Результат теста" })).toBeVisible();
+    await page.getByRole("button", { name: "Закрыть" }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Результат теста" })).toBeHidden();
+    await expect(page.getByRole("heading", { level: 1, name: "Дашборд" })).toBeVisible();
+  }
 });
