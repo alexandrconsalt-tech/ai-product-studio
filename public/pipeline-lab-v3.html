@@ -1429,23 +1429,33 @@ function migratePipelineConfig(stages, deletedOutKeys){
     const canonicalKey=runtimeAliases[stage.outKey]||stage.outKey;
     const def = canonicalKey && defaultByKey[canonicalKey];
     if(!def) return;
-    if(contractKeys.has(canonicalKey)&&stage.contractVersion===TRANSCRIPTION_SUMMARY_CONTRACT_VERSION) return;
-    if(canonicalKey==='summary'&&IS_TRANSCRIPTION_SUMMARY_MODULE){
-      stage.provider=def.provider;
-      stage.model=def.model;
-      stage.temperature=def.temperature;
-      stage.maxTokens=def.maxTokens;
-    }
-    if(['fact_check','need_check','outcome_check','presentation_check'].includes(canonicalKey)){
-      stage.type=def.type;
-      if(def.codeFn) stage.codeFn=def.codeFn; else delete stage.codeFn;
-      if(def.vendor) stage.vendor=def.vendor; else delete stage.vendor;
+    // 2026-07-21: раньше здесь стоял безусловный return для контрактных
+    // этапов с актуальным contractVersion -- из-за него promptVersion-рефреш
+    // ниже был недостижим для любого уже сохранённого конфига (тот же класс
+    // бага, что и ранний return hasSummaryQualityArchitecture, см. аддендум
+    // 2026-07-07). Теперь актуальный контракт пропускает только структурные
+    // блоки, а content-refresh по promptVersion выполняется всегда.
+    const contractCurrent=contractKeys.has(canonicalKey)&&stage.contractVersion===TRANSCRIPTION_SUMMARY_CONTRACT_VERSION;
+    if(!contractCurrent){
+      if(canonicalKey==='summary'&&IS_TRANSCRIPTION_SUMMARY_MODULE){
+        stage.provider=def.provider;
+        stage.model=def.model;
+        stage.temperature=def.temperature;
+        stage.maxTokens=def.maxTokens;
+      }
+      if(['fact_check','need_check','outcome_check','presentation_check'].includes(canonicalKey)){
+        stage.type=def.type;
+        if(def.codeFn) stage.codeFn=def.codeFn; else delete stage.codeFn;
+        if(def.vendor) stage.vendor=def.vendor; else delete stage.vendor;
+      }
     }
     if(def.promptVersion==null || stage.userEdited) return;
     const savedVersion = stage.promptVersion||0;
     if(savedVersion < def.promptVersion){
       stage.prompt = def.prompt;
       stage.model = def.model;
+      if(def.temperature!=null) stage.temperature = def.temperature;
+      if(def.maxTokens!=null) stage.maxTokens = def.maxTokens;
       stage.promptVersion = def.promptVersion;
       // 2026-07-08 simplification pass: some stages changed TYPE, not just
       // prompt text -- Проверка фактов/потребностей/результата звонка
