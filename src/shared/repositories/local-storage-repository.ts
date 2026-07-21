@@ -13,7 +13,8 @@ import { z } from "zod";
 import { demoSnapshot } from "./demo-data";
 import type { ProjectRepository, RepositorySnapshot } from "./types";
 
-const STORAGE_KEY = "ai-product-studio.repository.v1";
+export const REPOSITORY_STORAGE_KEY = "ai-product-studio.repository.v1";
+const STORAGE_KEY = REPOSITORY_STORAGE_KEY;
 const BACKUP_STORAGE_KEY = "ai-product-studio.repository.invalid-backup.v1";
 const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
@@ -21,7 +22,7 @@ const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и A
 const TRANSCRIPTION_SUMMARY_NAME_PATTERN = /^Модуль транскрибации и AI-саммари звонков/i;
 const TRANSCRIPTION_SUMMARY_CREATED_AT = "2026-07-08T00:00:00.000Z";
 
-const RepositorySnapshotSchema = z.object({
+export const RepositorySnapshotSchema = z.object({
   projects: z.array(ProjectSchema).readonly(),
   products: z.array(ProductSchema).readonly(),
   architectures: z.array(ArchitectureSchema).readonly(),

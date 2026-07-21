@@ -7,17 +7,20 @@ import { useRepositoryStore } from "@/shared/stores/repository-store";
 import {
   clearAnthropicApiKey,
   clearAiTunnelApiKey,
+  clearNexaraApiKey,
   clearOpenAiApiKey,
   DEFAULT_AI_TUNNEL_BASE_URL,
   loadAiTunnelApiKey,
   loadAiTunnelBaseUrl,
   loadAnthropicApiKey,
+  loadNexaraApiKey,
   loadOpenAiApiKey,
   loadSelectedLlmProvider,
   maskApiKey,
   MODEL_OPTIONS,
   saveAiTunnelSettings,
   saveAnthropicApiKey,
+  saveNexaraApiKey,
   saveOpenAiApiKey,
   saveSelectedLlmProvider,
   testAiTunnelConnection,
@@ -40,6 +43,8 @@ function ApiKeysSection() {
   const [openAiKey, setOpenAiKey] = React.useState("");
   const [savedAnthropicKey, setSavedAnthropicKey] = React.useState("");
   const [savedOpenAiKey, setSavedOpenAiKey] = React.useState("");
+  const [nexaraKey, setNexaraKey] = React.useState("");
+  const [savedNexaraKey, setSavedNexaraKey] = React.useState("");
   const [aiTunnelKey, setAiTunnelKey] = React.useState("");
   const [aiTunnelBaseUrl, setAiTunnelBaseUrl] = React.useState(DEFAULT_AI_TUNNEL_BASE_URL);
   const [savedAiTunnelKey, setSavedAiTunnelKey] = React.useState("");
@@ -51,6 +56,7 @@ function ApiKeysSection() {
   React.useEffect(() => {
     setSavedAnthropicKey(loadAnthropicApiKey());
     setSavedOpenAiKey(loadOpenAiApiKey());
+    setSavedNexaraKey(loadNexaraApiKey());
     setSavedAiTunnelKey(loadAiTunnelApiKey());
     setAiTunnelBaseUrl(loadAiTunnelBaseUrl());
     setSelectedProvider(loadSelectedLlmProvider());
@@ -75,6 +81,16 @@ function ApiKeysSection() {
   const handleClearOpenAi = () => {
     clearOpenAiApiKey();
     setSavedOpenAiKey("");
+  };
+  const handleSaveNexara = () => {
+    if (!nexaraKey.trim()) return;
+    saveNexaraApiKey(nexaraKey.trim());
+    setSavedNexaraKey(nexaraKey.trim());
+    setNexaraKey("");
+  };
+  const handleClearNexara = () => {
+    clearNexaraApiKey();
+    setSavedNexaraKey("");
   };
   const handleSaveAiTunnel = () => {
     if (!aiTunnelKey.trim()) return;
@@ -189,9 +205,23 @@ function ApiKeysSection() {
         </Badge>
       </div>
 
+      <div className="grid gap-2">
+        <label className="grid gap-1 text-sm">
+          Nexara (реальная расшифровка аудио в Песочнице, вместо симуляции по тексту)
+          <div className="flex flex-wrap items-center gap-2">
+            <Input type="password" className="min-w-56 flex-1" placeholder="nx-..." value={nexaraKey} onChange={(event) => setNexaraKey(event.target.value)} autoComplete="off" />
+            <Button variant="secondary" onClick={handleSaveNexara} disabled={!nexaraKey.trim()}>Сохранить</Button>
+            <Button variant="ghost" onClick={handleClearNexara} disabled={!savedNexaraKey}>Удалить</Button>
+          </div>
+        </label>
+        <Badge tone={savedNexaraKey ? "success" : "neutral"} className="w-fit">
+          {savedNexaraKey ? `Сохранён: ${maskApiKey(savedNexaraKey)}` : "Ключ не задан — загрузка аудио в Песочнице останется недоступна, этап STT будет работать по вставленному тексту транскрипции"}
+        </Badge>
+      </div>
+
       <Alert tone="info">
-        Anthropic-ключ создаётся на console.anthropic.com/settings/keys, OpenAI-ключ — на platform.openai.com/api-keys. Никогда не публикуйте эту
-        страницу с сохранёнными ключами посторонним и удаляйте ключи после теста на чужом компьютере.
+        Anthropic-ключ создаётся на console.anthropic.com/settings/keys, OpenAI-ключ — на platform.openai.com/api-keys, Nexara-ключ — в личном кабинете
+        на app.nexara.ru. Никогда не публикуйте эту страницу с сохранёнными ключами посторонним и удаляйте ключи после теста на чужом компьютере.
       </Alert>
       <Alert tone="warning">Не используйте персональные production-ключи на чужом или общем компьютере. Для production-развёртывания ключи должны храниться на сервере.</Alert>
     </Card>

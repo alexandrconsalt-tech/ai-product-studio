@@ -19,6 +19,7 @@
 
 const ANTHROPIC_KEY_STORAGE = "pipelineLabV3.anthropicApiKey";
 const OPENAI_KEY_STORAGE = "pipelineLabV3.openaiApiKey";
+const NEXARA_KEY_STORAGE = "pipelineLabV3.nexaraApiKey";
 const AI_TUNNEL_KEY_STORAGE = "aiTunnelApiKey";
 const AI_TUNNEL_BASE_URL_STORAGE = "aiTunnelBaseUrl";
 const SELECTED_LLM_PROVIDER_STORAGE = "selectedLlmProvider";
@@ -45,6 +46,11 @@ export function loadAnthropicApiKey(): string {
 export function loadOpenAiApiKey(): string {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(OPENAI_KEY_STORAGE) ?? "";
+}
+
+export function loadNexaraApiKey(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(NEXARA_KEY_STORAGE) ?? "";
 }
 
 export function loadAiTunnelApiKey(): string {
@@ -108,6 +114,14 @@ export function saveOpenAiApiKey(key: string): void {
 export function clearOpenAiApiKey(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(OPENAI_KEY_STORAGE);
+}
+export function saveNexaraApiKey(key: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(NEXARA_KEY_STORAGE, key);
+}
+export function clearNexaraApiKey(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(NEXARA_KEY_STORAGE);
 }
 
 export function hasBrowserLlmKeyConfigured(): boolean {

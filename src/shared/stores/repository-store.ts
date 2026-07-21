@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import type { RepositorySnapshot } from "@/shared/repositories/types";
-import { projectRepository } from "@/shared/repositories/local-storage-repository";
+import { projectRepository, REPOSITORY_STORAGE_KEY } from "@/shared/repositories/local-storage-repository";
 
 type RepositoryState = Readonly<{
   snapshot: RepositorySnapshot | null;
@@ -26,21 +26,68 @@ const writeSelectedProjectId = (projectId: string): void => {
   }
 };
 
-export const useRepositoryStore = create<RepositoryState>((set) => ({
+/**
+ * Best-effort background sync with /api/repository (Postgres, see
+ * postgres-store.ts), layered additively on top of the synchronous
+ * localStorage repository -- never blocks or changes the synchronous
+ * load()/setSnapshot() contract every existing screen/store already
+ * depends on (CLAUDE.md §8.7, §63 debt item 5: a full async migration of
+ * this interface is a distinct, larger initiative, deliberately deferred).
+ *
+ * pushSnapshotToServer is fire-and-forget: a failed/offline push is logged,
+ * never thrown, since losing durability for one save must never break the
+ * UI that already has the correct data in memory and in localStorage.
+ */
+function pushSnapshotToServer(snapshot: RepositorySnapshot): void {
+  if (typeof fetch === "undefined") return;
+  fetch("/api/repository", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(snapshot) }).catch((error) => {
+    console.warn("Background sync to /api/repository failed (data is still saved locally):", error);
+  });
+}
+
+export const useRepositoryStore = create<RepositoryState>((set, get) => ({
   snapshot: null,
   selectedProjectId: null,
   load: () => {
+    // Captured before projectRepository.load(), which auto-seeds localStorage
+    // with demo data on a first run -- by the time load() returns, "was this
+    // browser empty" can no longer be told apart from "freshly seeded".
+    const hadLocalData = typeof window !== "undefined" && Boolean(window.localStorage.getItem(REPOSITORY_STORAGE_KEY));
     const snapshot = projectRepository.load();
     const storedProjectId = readSelectedProjectId();
     const selectedProjectId = storedProjectId && snapshot.projects.some((project) => project.id === storedProjectId) ? storedProjectId : snapshot.projects[0]?.id ?? null;
     if (selectedProjectId) writeSelectedProjectId(selectedProjectId);
     set({ snapshot, selectedProjectId });
+
+    if (typeof fetch === "undefined") return;
+    fetch("/api/repository")
+      .then((res) => res.json())
+      .then((body: { configured?: boolean; snapshot?: RepositorySnapshot | null }) => {
+        if (!body?.configured) return;
+        if (!hadLocalData && body.snapshot) {
+          // Fresh browser (cleared storage, new device, first deploy visit)
+          // recovers real data from the server instead of keeping the demo
+          // seed load() already wrote synchronously above.
+          projectRepository.save(body.snapshot);
+          const recoveredProjectId = body.snapshot.projects.some((project) => project.id === get().selectedProjectId) ? get().selectedProjectId : body.snapshot.projects[0]?.id ?? null;
+          if (recoveredProjectId) writeSelectedProjectId(recoveredProjectId);
+          set({ snapshot: body.snapshot, selectedProjectId: recoveredProjectId });
+        } else if (!body.snapshot) {
+          // Database provisioned but empty (first time it's been connected
+          // to a browser that already has real local data) -- seed it.
+          pushSnapshotToServer(snapshot);
+        }
+      })
+      .catch((error) => {
+        console.warn("Background fetch from /api/repository failed (using local data):", error);
+      });
   },
   reset: () => {
     const snapshot = projectRepository.reset();
     const selectedProjectId = snapshot.projects[0]?.id ?? null;
     if (selectedProjectId) writeSelectedProjectId(selectedProjectId);
     set({ snapshot, selectedProjectId });
+    pushSnapshotToServer(snapshot);
   },
   setSnapshot: (snapshot) => {
     projectRepository.save(snapshot);
@@ -48,6 +95,7 @@ export const useRepositoryStore = create<RepositoryState>((set) => ({
       snapshot,
       selectedProjectId: state.selectedProjectId && snapshot.projects.some((project) => project.id === state.selectedProjectId) ? state.selectedProjectId : snapshot.projects[0]?.id ?? null,
     }));
+    pushSnapshotToServer(snapshot);
   },
   selectProject: (projectId) => {
     writeSelectedProjectId(projectId);

@@ -201,6 +201,14 @@
       </div>
       <div class="hintbar" id="openaiKeyStatus"></div>
 
+      <label class="fld" style="margin-top:14px">Nexara (реальная расшифровка аудио вместо симуляции по тексту)</label>
+      <div class="row">
+        <input type="password" id="nexaraKey" placeholder="nx-..." style="flex:1;min-width:220px" autocomplete="off">
+        <button class="btn ghost sm" id="saveNexaraKeyBtn">Сохранить</button>
+        <button class="btn ghost sm" id="clearNexaraKeyBtn">Удалить</button>
+      </div>
+      <div class="hintbar" id="nexaraKeyStatus"></div>
+
       <details class="help">
         <summary>Где взять ключи и куда они уходят</summary>
         <div class="hc">
@@ -227,6 +235,26 @@
             <button class="btn ghost sm" id="sampleBtn">Вставить пример</button>
             <div class="spacer"></div>
             <span class="status" id="charCount">0 символов</span>
+          </div>
+
+          <!-- Реальная STT (Nexara, 2026-07-21): загружает аудио и вызывает
+               настоящий api.nexara.ru через /api/nexara-proxy (см. серверный
+               роут -- ключ никогда не хранится и не логируется там, только
+               проксируется в этот один запрос). Требует сохранённого ключа
+               Nexara в Настройках. Диаризация Nexara различает СПИКЕРОВ
+               (говорящий 1/2/3...), а не РОЛИ (Клиент/Агент/Оператор) --
+               семантическую роль пайплайн определяет дальше по шагам, так
+               что после расшифровки нужно проверить/подписать роли в тексте
+               перед запуском. Без загруженного аудио или ключа поведение
+               не меняется: этап STT работает по вставленному тексту, как раньше. -->
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+            <label class="fld">Реальная расшифровка аудио (Nexara)</label>
+            <div class="row">
+              <label class="btn ghost sm" style="margin:0">Загрузить аудио<input type="file" id="audioFile" accept=".mp3,.wav,.m4a,.flac,.ogg,.opus,.mp4,.mov,.avi,.mkv" style="display:none"></label>
+              <button class="btn ghost sm" id="transcribeBtn" disabled>Расшифровать</button>
+              <span class="status" id="audioFileStatus"></span>
+            </div>
+            <div class="hintbar" id="transcribeStatus"></div>
           </div>
 
           <!-- Хранилище входящих данных (AI Product Studio v2 follow-up):
@@ -4066,7 +4094,23 @@ const SUMMARY_QUALITY_GATE_CRITERIA={
   action_check:{key:'action_quality',label:'Договорённости и следующий шаг',weight:.15},
   presentation_check:{key:'presentation_quality',label:'Формат, структура и краткость',weight:.10}
 };
-const SUMMARY_QUALITY_GATE_THRESHOLDS={auto_save_min_total:95,auto_save_min_criterion:90,warning_min_total:90,review_min_criterion:80};
+// Калиброво 2026-07-21 по golden dataset (tests/smoke/quality-gate-golden-dataset.spec.ts,
+// 8 размеченных случаев). Раньше AUTO_SAVE требовал буквально нулевых warnings
+// от ВСЕХ 5 судей одновременно (auto_save_min_total:95, auto_save_min_criterion:90,
+// !warnings.length) -- на живых прогонах с реальными LLM-судьями это условие
+// почти никогда не выполнялось: независимые судьи (даже на хорошем summary)
+// почти всегда находят хотя бы одну мелкую придирку у кого-то одного из
+// пяти, из-за чего AUTO_SAVE был не столько строгим порогом, сколько
+// практически недостижимым состоянием -- каждый прогон падал в
+// SAVE_WITH_WARNING, обесценивая сам смысл трёх уровней решения.
+// Откалиброванное правило: Truth (самый весомый и единственный критерий с
+// прямым риском для бизнеса -- галлюцинации/PII/деньги) остаётся с нулевой
+// терпимостью к warnings; у остальных четырёх судей допускается СУММАРНО
+// не больше одного мелкого warning. Все остальные hard-требования (Store
+// READY, Summary GENERATED, next_step_verified, can_continue_without_recording,
+// character_limit_valid, отсутствие missing_items) не изменились -- ослаблен
+// только порог общего/по-критериального score и допуск по числу warnings.
+const SUMMARY_QUALITY_GATE_THRESHOLDS={auto_save_min_total:90,auto_save_min_criterion:85,auto_save_max_non_truth_warnings:1,review_max_total:90,review_min_criterion:80};
 
 function shouldUseSummaryQualityGateV1(ctx){
   if(!IS_TRANSCRIPTION_SUMMARY_MODULE||!ctx||!ctx.__run_id) return false;
@@ -4191,9 +4235,16 @@ function moduleSummaryQualityGateV1(ctx){
   if(technicalErrors.length) return summaryQualityGateTechnicalOutput(ctx,criteria,technicalErrors);
   const summaryQualityScore=+Object.values(criteria).reduce((sum,item)=>sum+item.weighted_score,0).toFixed(1),hardStops=summaryQualityGateHardStops(ctx),warnings=summaryQualityGateWarnings(ctx),criterionValues=Object.values(criteria),statuses=criterionValues.map(item=>item.status),scores=criterionValues.map(item=>item.score),manualSignal=Object.keys(SUMMARY_QUALITY_GATE_CRITERIA).some(key=>ctx[key]&&ctx[key].requires_manual_review===true);
   let decision;
-  if(hardStops.length||statuses.includes('fail')||summaryQualityScore<90||scores.some(score=>score<80)||storeStatus==='MANUAL_REVIEW'||summaryQualityGateSummaryStatus(ctx)==='MANUAL_REVIEW'||manualSignal||ctx.truth_check.has_hallucinations===true||ctx.truth_check.has_pii===true||ctx.agent_utility_check.can_continue_without_recording===false||ctx.action_check.next_step_verified===false) decision='REVIEW_REQUIRED';
-  else if(summaryQualityScore>=95&&scores.every(score=>score>=90)&&statuses.every(status=>status==='pass')&&!warnings.length&&storeStatus==='READY'&&summaryQualityGateSummaryStatus(ctx)==='GENERATED'&&!toList(ctx.truth_check.critical_errors).length&&ctx.action_check.next_step_verified===true&&ctx.agent_utility_check.can_continue_without_recording===true&&ctx.presentation_check.checks?.character_limit_valid!==false&&!toList(ctx.critical_completeness_check.missing_items).length) decision='AUTO_SAVE';
-  else decision='SAVE_WITH_WARNING';
+  if(hardStops.length||statuses.includes('fail')||summaryQualityScore<SUMMARY_QUALITY_GATE_THRESHOLDS.review_max_total||scores.some(score=>score<SUMMARY_QUALITY_GATE_THRESHOLDS.review_min_criterion)||storeStatus==='MANUAL_REVIEW'||summaryQualityGateSummaryStatus(ctx)==='MANUAL_REVIEW'||manualSignal||ctx.truth_check.has_hallucinations===true||ctx.truth_check.has_pii===true||ctx.agent_utility_check.can_continue_without_recording===false||ctx.action_check.next_step_verified===false) decision='REVIEW_REQUIRED';
+  else{
+    // Truth сохраняет нулевую терпимость к warnings (см. комментарий у
+    // SUMMARY_QUALITY_GATE_THRESHOLDS); у остальных четырёх судей допускается
+    // суммарно не более auto_save_max_non_truth_warnings мелких warning.
+    const truthWarningCount=warnings.filter(item=>item.source==='truth_check').length;
+    const nonTruthWarningCount=warnings.length-truthWarningCount;
+    if(summaryQualityScore>=SUMMARY_QUALITY_GATE_THRESHOLDS.auto_save_min_total&&scores.every(score=>score>=SUMMARY_QUALITY_GATE_THRESHOLDS.auto_save_min_criterion)&&criteria.truthfulness.status==='pass'&&truthWarningCount===0&&nonTruthWarningCount<=SUMMARY_QUALITY_GATE_THRESHOLDS.auto_save_max_non_truth_warnings&&storeStatus==='READY'&&summaryQualityGateSummaryStatus(ctx)==='GENERATED'&&!toList(ctx.truth_check.critical_errors).length&&ctx.action_check.next_step_verified===true&&ctx.agent_utility_check.can_continue_without_recording===true&&ctx.presentation_check.checks?.character_limit_valid!==false&&!toList(ctx.critical_completeness_check.missing_items).length) decision='AUTO_SAVE';
+    else decision='SAVE_WITH_WARNING';
+  }
   const canSave=decision==='AUTO_SAVE'||decision==='SAVE_WITH_WARNING',requiresReview=decision==='REVIEW_REQUIRED',hash=stableHash({criteria:criterionValues.map(item=>[item.score,item.status]),hardStops,summary:stableHash(ctx.summary),storeHash,version:SUMMARY_QUALITY_GATE_VERSION,thresholds:SUMMARY_QUALITY_GATE_THRESHOLDS});
   const explanation=decision==='AUTO_SAVE'?'Все пять критериев прошли пороги автоматического сохранения.':decision==='SAVE_WITH_WARNING'?'Summary можно сохранить с warning-флагом и зафиксированными причинами.':'Обнаружены hard stops, низкая оценка или сигнал обязательной ручной проверки.';
   return {status:decision,summary_quality_score:summaryQualityScore,decision,criteria,thresholds:{...SUMMARY_QUALITY_GATE_THRESHOLDS},hard_stops:hardStops,warnings,technical_errors:[],can_save_to_crm:canSave,requires_manual_review:requiresReview,summary_status:summaryQualityGateSummaryStatus(ctx),store_status:storeStatus,explanation,crm_write_policy:{summary:decision,attributes:summaryQualityGateAttributePolicy(ctx)},metadata:{run_id:runId,transcript_hash:transcriptHash,conversation_store_hash:storeHash,pipeline_configuration_hash:pipelineHash,quality_gate_version:SUMMARY_QUALITY_GATE_VERSION,quality_gate_hash:hash}};
@@ -5508,12 +5559,14 @@ function tmpl(str, ctx){
 // ── API-ключи: хранятся только в localStorage этого браузера ────────────────
 const API_KEY_STORAGE='pipelineLabV3.anthropicApiKey';
 const OPENAI_KEY_STORAGE='pipelineLabV3.openaiApiKey';
+const NEXARA_KEY_STORAGE='pipelineLabV3.nexaraApiKey';
 const AI_TUNNEL_KEY_STORAGE='aiTunnelApiKey';
 const AI_TUNNEL_BASE_URL_STORAGE='aiTunnelBaseUrl';
 const SELECTED_LLM_PROVIDER_STORAGE='selectedLlmProvider';
 const DEFAULT_AI_TUNNEL_BASE_URL='https://api.aitunnel.ru/v1';
 function loadApiKey(){ return localStorage.getItem(API_KEY_STORAGE)||''; }
 function loadOpenaiKey(){ return localStorage.getItem(OPENAI_KEY_STORAGE)||''; }
+function loadNexaraKey(){ return localStorage.getItem(NEXARA_KEY_STORAGE)||''; }
 function loadAiTunnelKey(){ return localStorage.getItem(AI_TUNNEL_KEY_STORAGE)||''; }
 function loadAiTunnelBaseUrl(){ return localStorage.getItem(AI_TUNNEL_BASE_URL_STORAGE)||DEFAULT_AI_TUNNEL_BASE_URL; }
 function loadSelectedLlmProvider(){
@@ -5539,6 +5592,16 @@ function updateOpenaiKeyStatus(){
   const el=document.getElementById('openaiKeyStatus');
   el.textContent = k? ('Ключ сохранён: '+maskKey(k)) : 'Ключ не задан — шаги с моделью «GPT-5 mini» не смогут вызвать модель.';
   el.style.color = k? 'var(--ok)' : 'var(--dim)';
+}
+function updateNexaraKeyStatus(){
+  const k=loadNexaraKey();
+  const el=document.getElementById('nexaraKeyStatus');
+  if(el){
+    el.textContent = k? ('Ключ сохранён: '+maskKey(k)) : 'Ключ не задан — расшифровка аудио недоступна, STT работает по вставленному тексту.';
+    el.style.color = k? 'var(--ok)' : 'var(--dim)';
+  }
+  const btn=document.getElementById('transcribeBtn');
+  if(btn) btn.disabled = !k || !window.__selectedAudioFile;
 }
 
 // Каталог AI Tunnel и выпадающий список этого файла используют алиасы с
@@ -7984,6 +8047,12 @@ async function runPipeline(){
   const transcriptHash=stableHash(transcript);
   ctx={ __transcript:transcript, stored_files: storedFilesForCtx(), __run_id:runId, __pipeline_configuration_hash:pipelineConfigurationHash, __transcript_hash:transcriptHash };
   if(IS_TRANSCRIPTION_SUMMARY_MODULE) ctx.transcript=transcript;
+  // Реальный STT-контекст подставляется, только если текст в поле "Вход"
+  // всё ещё совпадает с расшифровкой Nexara -- если пользователь вставил
+  // свой текст поверх (или отредактировал), этап STT честно вернётся к
+  // симулированному режиму transcript_quality_check, а не выдаст metadata
+  // от аудио за подтверждение для текста, которого Nexara не расшифровывала.
+  if(window.__nexaraSttMetadata && window.__nexaraSttMetadataTranscript===transcript) ctx.stt_metadata=window.__nexaraSttMetadata;
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
   let totalTokens=0, totalCost=0, errorCount=0, warningCount=0;
@@ -8898,10 +8967,116 @@ document.getElementById('clearOpenaiKeyBtn').addEventListener('click',()=>{
   toast('Ключ OpenAI удалён');
 });
 
+const nexaraKeyInput=document.getElementById('nexaraKey');
+if(nexaraKeyInput){
+  nexaraKeyInput.value=loadNexaraKey();
+  document.getElementById('saveNexaraKeyBtn').addEventListener('click',()=>{
+    const v=nexaraKeyInput.value.trim();
+    if(!v){ toast('Введите ключ перед сохранением'); return; }
+    localStorage.setItem(NEXARA_KEY_STORAGE,v);
+    updateNexaraKeyStatus();
+    toast('Ключ Nexara сохранён в этом браузере');
+  });
+  document.getElementById('clearNexaraKeyBtn').addEventListener('click',()=>{
+    localStorage.removeItem(NEXARA_KEY_STORAGE);
+    nexaraKeyInput.value='';
+    updateNexaraKeyStatus();
+    toast('Ключ Nexara удалён');
+  });
+}
+
+// ── Реальная STT (Nexara) ────────────────────────────────────────────────
+// Диаризация Nexara отдаёт номер СПИКЕРА (говорящий 1/2/3...), а не РОЛЬ
+// (Клиент/Агент/Оператор) -- ролевую семантику определяют дальше по
+// пайплайну (Валидация/Facts), поэтому текст с «Спикер N:» подставляется в
+// поле транскрипции для ручной проверки/подписи ролей, а не запускается
+// автоматически. Формат ответа Nexara (segments[].speaker/.speaker_id/
+// .speaker_label) не проверен вживую (нет доступа к реальному ключу в этой
+// среде) -- при отсутствии узнаваемых полей используется только .text без
+// разметки по спикерам, без домысливания структуры.
+function parseNexaraTranscript(data){
+  const flatText=typeof data?.text==='string'?data.text.trim():'';
+  const segments=Array.isArray(data?.segments)?data.segments:null;
+  if(!segments||!segments.length) return {text:flatText,diarized:false};
+  const speakerKey=(seg)=>{
+    if(seg.speaker!=null) return String(seg.speaker);
+    if(seg.speaker_id!=null) return String(seg.speaker_id);
+    if(seg.speaker_label!=null) return String(seg.speaker_label);
+    return null;
+  };
+  const hasSpeakers=segments.some(seg=>speakerKey(seg)!=null);
+  if(!hasSpeakers) return {text:flatText,diarized:false};
+  const seen=new Map();
+  const lines=segments.map(seg=>{
+    const key=speakerKey(seg);
+    const text=String(seg.text||'').trim();
+    if(!text) return null;
+    if(key==null) return text;
+    if(!seen.has(key)) seen.set(key,seen.size+1);
+    return 'Спикер '+seen.get(key)+': '+text;
+  }).filter(Boolean);
+  return {text:lines.join('\n')||flatText,diarized:true};
+}
+async function callNexaraTranscription(file,apiKey){
+  const body=new FormData();
+  body.append('apiKey',apiKey);
+  body.append('file',file,file.name);
+  body.append('response_format','verbose_json');
+  body.append('task','diarize');
+  body.append('language','ru');
+  const res=await fetch('/api/nexara-proxy',{method:'POST',body});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error('Nexara API '+res.status+(data&&data.error&&data.error.message?': '+data.error.message:''));
+  return data;
+}
+const audioFileInput=document.getElementById('audioFile');
+const audioFileStatusEl=document.getElementById('audioFileStatus');
+const transcribeStatusEl=document.getElementById('transcribeStatus');
+if(audioFileInput){
+  audioFileInput.addEventListener('change',()=>{
+    const file=audioFileInput.files&&audioFileInput.files[0];
+    window.__selectedAudioFile=file||null;
+    if(audioFileStatusEl) audioFileStatusEl.textContent=file?(file.name+' · '+(file.size/1024/1024).toFixed(1)+' МБ'):'';
+    updateNexaraKeyStatus();
+  });
+}
+const transcribeBtn=document.getElementById('transcribeBtn');
+if(transcribeBtn){
+  transcribeBtn.addEventListener('click',async()=>{
+    const file=window.__selectedAudioFile;
+    const apiKey=loadNexaraKey();
+    if(!file||!apiKey) return;
+    transcribeBtn.disabled=true;
+    if(transcribeStatusEl){ transcribeStatusEl.textContent='Расшифровка через Nexara…'; transcribeStatusEl.style.color='var(--dim)'; }
+    try{
+      const data=await callNexaraTranscription(file,apiKey);
+      const parsed=parseNexaraTranscript(data);
+      if(!parsed.text) throw new Error('Nexara вернула пустую транскрипцию');
+      document.getElementById('transcript').value=parsed.text;
+      updateCount();
+      window.__nexaraSttMetadata={provider:'Nexara',raw:data,diarized:parsed.diarized,transcribed_at:new Date().toISOString()};
+      window.__nexaraSttMetadataTranscript=parsed.text;
+      if(transcribeStatusEl){
+        transcribeStatusEl.textContent=parsed.diarized
+          ? 'Готово. Разметка по спикерам — проверьте и подпишите роли (Клиент/Агент/Оператор) перед запуском пайплайна.'
+          : 'Готово. Диаризация недоступна в ответе — роли (Клиент/Агент/Оператор) нужно расставить вручную перед запуском.';
+        transcribeStatusEl.style.color='var(--ok)';
+      }
+      toast('Транскрипция получена от Nexara');
+    }catch(err){
+      window.__nexaraSttMetadata=null;
+      if(transcribeStatusEl){ transcribeStatusEl.textContent='Ошибка: '+err.message; transcribeStatusEl.style.color='var(--bad)'; }
+      toast('Nexara: '+err.message);
+    }finally{
+      transcribeBtn.disabled=!loadNexaraKey()||!window.__selectedAudioFile;
+    }
+  });
+}
+
 // инициализация
 document.getElementById('preset').value = INITIAL_PRESET;
 pipeline=applySummaryNewStageConfig(pipeline);
-renderStages(); updateCount(); updateKeyStatus(); updateOpenaiKeyStatus();
+renderStages(); updateCount(); updateKeyStatus(); updateOpenaiKeyStatus(); updateNexaraKeyStatus();
 </script>
 </body>
 </html>

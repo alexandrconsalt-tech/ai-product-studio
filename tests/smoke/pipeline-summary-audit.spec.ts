@@ -1023,7 +1023,13 @@ test("Quality Gate применяет hard stops независимо от вы�
   expect(result.invalidStructure.hard_stops.map((item: any) => item.code)).toContain("INVALID_SUMMARY_STRUCTURE");
   expect(result.tooLong.hard_stops.map((item: any) => item.code)).toContain("SUMMARY_TOO_LONG");
   expect(result.duplicate.hard_stops.filter((item: any) => item.code === "INVENTED_DEADLINE")).toHaveLength(1);
-  expect(result.warning).toMatchObject({ decision: "SAVE_WITH_WARNING", hard_stops: [] });
+  // 2026-07-21 калибровка: один мелкий некритичный warning у судьи, отличного
+  // от Truth (здесь presentation_check), при score>=85 по каждому критерию и
+  // score>=90 суммарно теперь допускается AUTO_SAVE -- раньше любой единственный
+  // warning у любого судьи навсегда блокировал AUTO_SAVE, из-за чего порог был
+  // почти недостижим на живых прогонах (см. golden dataset в
+  // tests/smoke/quality-gate-golden-dataset.spec.ts).
+  expect(result.warning).toMatchObject({ decision: "AUTO_SAVE", hard_stops: [] });
   expect(result.warning.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ source: "presentation_check", type: "minor_warning" })]));
 });
 
@@ -1128,7 +1134,11 @@ test("CRM v1 сохраняет только разрешённые Summary и v
     return {auto,warning,review,technical,missing,skipped,empty,writes,queues,autoPayload,warningPayload,reviewItem,emptyPresentation:emptyPayload.presentation_text};
   })()`), crmFixture);
   expect(result.auto).toMatchObject({ status: "SAVED", decision: "AUTO_SAVE", summary_write: { attempted: true, saved: true, mode: "AUTO_SAVE", warning_flag: false }, attribute_writes: { interest: { saved: true, value: ["Строительство"] }, funding_source: { saved: true, value: "наличные / депозит" }, purchase_term: { saved: true, value: "не определено" } } });
-  expect(result.warning).toMatchObject({ status: "SAVED_WITH_WARNING", decision: "SAVE_WITH_WARNING", summary_write: { saved: true, warning_flag: true } });
+  // 2026-07-21 калибровка: единственный некритичный warning у presentation_check
+  // (score 92, всё остальное чисто) теперь укладывается в допуск AUTO_SAVE
+  // (см. комментарий у SUMMARY_QUALITY_GATE_THRESHOLDS) -- warnings в выдаче
+  // CRM при этом никуда не исчезают, только меняется decision/status/флаг.
+  expect(result.warning).toMatchObject({ status: "SAVED", decision: "AUTO_SAVE", summary_write: { saved: true, warning_flag: false } });
   expect(result.warning.warnings.length).toBeGreaterThan(0);
   expect(result.review).toMatchObject({ status: "QUEUED_FOR_REVIEW", summary_write: { attempted: false, saved: false } });
   expect(result.technical).toMatchObject({ status: "TECHNICAL_ERROR", summary_write: { attempted: false, saved: false } });
