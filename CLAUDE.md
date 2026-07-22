@@ -2103,4 +2103,14 @@ New `src/app/api/nexara-proxy/route.ts` (same stateless-relay pattern as `openai
 
 **What was NOT changed.** The Truth Check judge's own, structurally different channel-mention heuristic (`TRUTH_ISSUE_PENALTIES`'s `channels` array, checked via a different function) was not touched -- it wasn't implicated in this failure and has a different (under- rather than over-triggering) risk profile; fixing it is a separate, not-yet-observed-broken concern. The other two hybrid stages' (fact_check/need_check) own id-matching guards keep their existing strict, no-fallback matching (their per-item contract is `id`-only, without a `value`/`evidence` echo requirement, so they're structurally less prone to this specific failure mode) -- only their retry gating changed (fix 1b), not their matching logic.
 
+---
+
+## Addendum (2026-07-22, second same-day fix) — judge status enum too strict: 'warn'/'ok'/'error' synonyms crashed the pipeline
+
+**Symptom.** A real run's stage 3 (Проверка фактов) failed with `criteria[0].status: unknown enum value "warn"` -- gpt-5-mini used the abbreviation `"warn"` instead of the full `"warning"` in one `criteria[]` item, hard-failing the stage and NOT_RUNning everything downstream (stages 4-15), the same cascade pattern as the earlier same-day Outcome Check fix.
+
+**Fix.** New `normalizeCriteriaStatus()`/`normalizeCriteriaArray()` (`public/pipeline-lab-v3.html`, next to `normalizedSemanticText`) map common synonyms (`warn`/`warnings`→`warning`; `ok`/`passed`/`success`→`pass`; `failed`/`error`/`critical`→`fail`) to the three canonical values before the strict enum check, in all 8 places a judge's status is validated: the 3 hybrid judges' `criteria[]` arrays (fact_check/need_check/outcome_check) and the 5 post-summary judges' own top-level `status` field (truth/critical_completeness/agent_utility/action/presentation). A genuinely unrecognized value still fails validation -- this accepts known synonyms, it doesn't weaken the contract.
+
+**Verified.** New test in `pipeline-summary-audit.spec.ts` exercises both normalization functions directly against synonym and unknown inputs. `npm run lint` clean, `npx vitest run` 283/283, `npx playwright test --project=chromium` 99/99, `npm run build` succeeds.
+
 *End of document. Last synthesized 2026-07-03 from a full-repository discovery pass covering `knowledge-import/` (20 files + README + CLAUDE.md), `pdf-notes.txt`, `orchestrator/` (8 files + README), `skills/senior-ai-solution-architect/` (15 files + README), `skills/senior-product-manager/` (13 files + README), `docs/design/` (8 files), `docs/ux/` (9 files), `docs/domain/` (4 files), `docs/mvp/` (4 files), and the full `src/` tree (12 entities, 7 stores, the repository/simulation layer, `shared/ui`, and `features/mvp`). Every concrete claim above was checked against a real file at time of writing — see §31 for the terminology conflicts found and §63 for the technical debt found during that pass.*

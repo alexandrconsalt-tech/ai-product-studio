@@ -2495,6 +2495,18 @@ test("Проверка результата валидирует Judge, semantic
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined });
 });
 
+test("Судьи принимают синонимы статуса ('warn'/'ok'/'error' и т.п.) вместо строгого pass|warning|fail (реальный прогон 2026-07-22)", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    return {
+      criteriaArray: normalizeCriteriaArray([{name:'x',status:'warn',score:90,explanation:'e'},{name:'y',status:'OK',score:100,explanation:'e'},{name:'z',status:'error',score:0,explanation:'e'},{name:'w',status:'unknown_value',score:50,explanation:'e'}]),
+      single: [normalizeCriteriaStatus('warn'), normalizeCriteriaStatus('Warning'), normalizeCriteriaStatus('ok'), normalizeCriteriaStatus('failed'), normalizeCriteriaStatus('critical'), normalizeCriteriaStatus('totally_unknown')]
+    };
+  })()`));
+  expect(result.criteriaArray.map((item: any) => item.status)).toEqual(["warning", "pass", "fail", "unknown_value"]);
+  expect(result.single).toEqual(["warning", "warning", "pass", "fail", "fail", "totally_unknown"]);
+});
+
 test("Проверка результата звонка восстанавливается после пропущенного id и переформулированного evidence в ответе Judge (реальный прогон 2026-07-21)", async ({ page }) => {
   // Реальный прод-прогон: Outcome Agent дал один call_result с id "result_1";
   // Judge подтвердил его правильно по смыслу (то же value), но в ответе

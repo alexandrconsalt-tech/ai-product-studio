@@ -3461,6 +3461,23 @@ function cleanupOutcomeV9(outcome){
 function normalizedSemanticText(value){
   return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^а-яa-z0-9]+/gi,' ').trim();
 }
+// 2026-07-22 real-run fix: строгая проверка criteria[].status требует ровно
+// 'pass'|'warning'|'fail', но реальный gpt-5-mini иногда сокращает
+// 'warning' до 'warn' (или 'ok'/'ошибка' и т.п.) -- один такой токен в
+// массиве из десятков элементов раньше давал невосстановимую ошибку схемы
+// и (до фикса ретраев выше) останавливал весь пайплайн. Нормализуем
+// распространённые синонимы к трём каноническим значениям до строгой
+// проверки; действительно неизвестное значение по-прежнему считается
+// ошибкой схемы -- это не ослабление контракта, а допуск синонимов.
+const CRITERIA_STATUS_ALIASES={warn:'warning',warnings:'warning',warning:'warning',pass:'pass',passed:'pass',ok:'pass',success:'pass',fail:'fail',failed:'fail',error:'fail',critical:'fail',ошибка:'fail'};
+function normalizeCriteriaStatus(status){
+  if(typeof status!=='string') return status;
+  const key=status.trim().toLowerCase();
+  return CRITERIA_STATUS_ALIASES[key]||status;
+}
+function normalizeCriteriaArray(criteria){
+  return Array.isArray(criteria)?criteria.map(item=>item&&typeof item==='object'&&!Array.isArray(item)?{...item,status:normalizeCriteriaStatus(item.status)}:item):[];
+}
 // 2026-07-22 real-run fix: клиент называет мессенджер по-русски ("в Макс",
 // "вотсап"), а Outcome Agent сохраняет канонический channel латиницей
 // ("MAX", "WhatsApp") -- строковое includes() между "max" и "макс" никогда
@@ -6083,7 +6100,7 @@ function validateTruthIssue(issue,path,ctx){
 function validateTruthJudgeOutput(value,ctx){
   const keys=['status','score','has_hallucinations','has_fact_distortions','has_role_confusion','has_money_or_number_errors','has_agreement_errors','has_quote_errors','has_pii','critical_errors','warnings','checked_fields','explanation'];
   truthExactObject(value,'',keys);
-  if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
+  value.status=normalizeCriteriaStatus(value.status);if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
   if(typeof value.score!=='number'||!Number.isFinite(value.score)) truthFail('score','expected finite number');
   keys.slice(2,9).forEach(key=>{if(typeof value[key]!=='boolean') truthFail(key,'expected boolean');});
   if(!Array.isArray(value.critical_errors)) truthFail('critical_errors','expected array');
@@ -6222,7 +6239,7 @@ function validateCriticalCompletenessItem(item,path,ctx){
 }
 function validateCriticalCompletenessJudgeOutput(value,ctx){
   truthExactObject(value,'',['status','score','critical_items_total','critical_items_present','critical_items_missing','critical_items','missing_items','warnings','explanation']);
-  if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
+  value.status=normalizeCriteriaStatus(value.status);if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
   ['score','critical_items_total','critical_items_present','critical_items_missing'].forEach(key=>{if(typeof value[key]!=='number'||!Number.isFinite(value[key])) truthFail(key,'expected finite number');});
   if(!Array.isArray(value.critical_items)) truthFail('critical_items','expected array');
   if(!Array.isArray(value.missing_items)) truthFail('missing_items','expected array');
@@ -6303,7 +6320,7 @@ function agentUtilityDuplicateCriticalMissing(item,ctx){
 }
 function validateAgentUtilityJudgeOutput(value,ctx){
   truthExactObject(value,'',['status','score','can_continue_without_recording','context_clarity','actionability','scanability','recording_independence','missing_for_next_agent','useful_summary_elements','problems','explanation']);
-  if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
+  value.status=normalizeCriteriaStatus(value.status);if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
   if(typeof value.score!=='number'||!Number.isFinite(value.score)) truthFail('score','expected finite number');
   if(typeof value.can_continue_without_recording!=='boolean') truthFail('can_continue_without_recording','expected boolean');
   ['context_clarity','actionability','scanability','recording_independence'].forEach(key=>{if(typeof value[key]!=='number'||!Number.isFinite(value[key])||value[key]<0||value[key]>100) truthFail(key,'expected number from 0 to 100');});
@@ -6388,7 +6405,7 @@ function validateActionCheckIssue(item,path,ctx){
 }
 function validateActionCheckJudgeOutput(value,ctx){
   truthExactObject(value,'',['status','score','next_step_verified','agreements_checked','agreements_verified','agreements_rejected','checked_components','errors','warnings','explanation']);
-  if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
+  value.status=normalizeCriteriaStatus(value.status);if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
   ['score','agreements_checked','agreements_verified','agreements_rejected'].forEach(key=>{if(typeof value[key]!=='number'||!Number.isFinite(value[key])) truthFail(key,'expected finite number');});
   if(typeof value.next_step_verified!=='boolean') truthFail('next_step_verified','expected boolean');
   truthExactObject(value.checked_components,'checked_components',ACTION_CHECK_COMPONENT_KEYS);ACTION_CHECK_COMPONENT_KEYS.forEach(key=>{if(typeof value.checked_components[key]!=='boolean') truthFail('checked_components.'+key,'expected boolean');});
@@ -6485,7 +6502,7 @@ function validatePresentationIssue(item,path,ctx){
 }
 function validatePresentationJudgeOutput(value,ctx){
   truthExactObject(value,'',['status','score','structure_score','brevity_score','readability_score','repetition_score','limits_score','checks','metrics','errors','warnings','explanation']);
-  if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
+  value.status=normalizeCriteriaStatus(value.status);if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
   ['score','structure_score','brevity_score','readability_score','repetition_score','limits_score'].forEach(key=>{if(typeof value[key]!=='number'||!Number.isFinite(value[key])||value[key]<0||value[key]>100) truthFail(key,'expected number from 0 to 100');});
   truthExactObject(value.checks,'checks',PRESENTATION_CHECK_KEYS);PRESENTATION_CHECK_KEYS.forEach(key=>{if(typeof value.checks[key]!=='boolean') truthFail('checks.'+key,'expected boolean');});
   truthExactObject(value.metrics,'metrics',PRESENTATION_METRIC_KEYS);PRESENTATION_METRIC_KEYS.forEach(key=>{if(typeof value.metrics[key]!=='number'||!Number.isFinite(value.metrics[key])||value.metrics[key]<0) truthFail('metrics.'+key,'expected non-negative number');});
@@ -6735,7 +6752,7 @@ function normalizeFactJudgeOutput(value,input){
     critical_recall_score:number('critical_recall_score',missing.length?0:1),quote_score:number('quote_score',quotesChecked?quotesVerified/quotesChecked:1),
     overall_score:number('overall_score',0),decision:['PASS','PASS_WITH_WARNINGS','MANUAL_REVIEW','FAIL'].includes(q.decision)?q.decision:'PASS'
   };
-  return {...value,verified_facts:verifiedFacts,rejected_facts:rejectedFacts,verified_quotes:verifiedQuotes,rejected_quotes:rejectedQuotes,missing_critical_facts:missing,fact_check_quality:quality,criteria:Array.isArray(value.criteria)?value.criteria:[]};
+  return {...value,verified_facts:verifiedFacts,rejected_facts:rejectedFacts,verified_quotes:verifiedQuotes,rejected_quotes:rejectedQuotes,missing_critical_facts:missing,fact_check_quality:quality,criteria:normalizeCriteriaArray(value.criteria)};
 }
 
 function factJudgeExactKeys(value,path,keys){
@@ -7105,7 +7122,7 @@ function normalizeNeedJudgeOutput(value,input){
     requirement_precision_score:number('requirement_precision_score',requirementsChecked?requirementsVerified/requirementsChecked:1),critical_recall_score:number('critical_recall_score',missing_critical_needs.length?0:1),
     overall_score:number('overall_score',0),decision:['PASS','PASS_WITH_WARNINGS','MANUAL_REVIEW','FAIL'].includes(q.decision)?q.decision:'PASS'
   };
-  return {...value,verified_attributes,rejected_attributes,verified_requirements,rejected_requirements,missing_critical_needs,need_check_quality,criteria:Array.isArray(value.criteria)?value.criteria:[]};
+  return {...value,verified_attributes,rejected_attributes,verified_requirements,rejected_requirements,missing_critical_needs,need_check_quality,criteria:normalizeCriteriaArray(value.criteria)};
 }
 
 function validateNeedJudgeOutput(value,input){
@@ -7592,7 +7609,7 @@ function normalizeOutcomeJudgeOutput(value,input){
     next_step_accuracy_score:number('next_step_accuracy_score',primaryAccepted?1:0),critical_recall_score:number('critical_recall_score',missing_critical_outcomes.length?0:1),overall_score:number('overall_score',0),
     decision:['PASS','PASS_WITH_WARNINGS','MANUAL_REVIEW','FAIL'].includes(q.decision)?q.decision:'PASS'
   };
-  return {...value,verified_call_results,rejected_call_results,verified_agreements,rejected_agreements,verified_primary_next_step,rejected_primary_next_step,missing_critical_outcomes,outcome_check_quality,criteria:Array.isArray(value.criteria)?value.criteria:[]};
+  return {...value,verified_call_results,rejected_call_results,verified_agreements,rejected_agreements,verified_primary_next_step,rejected_primary_next_step,missing_critical_outcomes,outcome_check_quality,criteria:normalizeCriteriaArray(value.criteria)};
 }
 
 function validateOutcomeJudgeOutput(value,input){
