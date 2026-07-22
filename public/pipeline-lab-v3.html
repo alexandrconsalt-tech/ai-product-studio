@@ -1464,6 +1464,16 @@ function migratePipelineConfig(stages, deletedOutKeys){
     // 2026-07-07). Теперь актуальный контракт пропускает только структурные
     // блоки, а content-refresh по promptVersion выполняется всегда.
     const contractCurrent=contractKeys.has(canonicalKey)&&stage.contractVersion===TRANSCRIPTION_SUMMARY_CONTRACT_VERSION;
+    // Структурные поля встроенных hybrid-проверок не являются пользовательской
+    // настройкой. Сохранённый browser config с актуальным contractVersion мог
+    // удержать старый/неверный codeFn и направить новый Judge JSON в legacy
+    // mergeHybridCheck (ложные verified_needs/verified_outcome = {}).
+    // Provider/model/temperature не меняем: выбранный AI Tunnel сохраняется.
+    if(['fact_check','need_check','outcome_check'].includes(canonicalKey)){
+      stage.type='hybrid';
+      stage.codeFn=def.codeFn;
+      delete stage.vendor;
+    }
     if(!contractCurrent){
       if(canonicalKey==='summary'&&IS_TRANSCRIPTION_SUMMARY_MODULE){
         stage.provider=def.provider;
@@ -7002,8 +7012,19 @@ function normalizeNeedExtractionSemantics(value,ctx){
     out.requirements.push({id:'req_auto_'+index,type,value:fact.normalized_value??fact.value,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
   };
   clientFacts.forEach(fact=>{
-    const text=factText(fact);
-    if(/budget|бюджет|price limit|максимальн.*сумм/.test(normalizedSemanticText([fact.category,fact.name].join(' ')))&&/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(text)&&!/(цена|стоимость|объявлен)/.test(text)) addRequirement('price_limit',fact);
+    const text=factText(fact),identity=normalizedSemanticText([fact.category,fact.name].join(' '));
+    // Fact Check уже независимо подтвердил category/name. Поэтому budget_max
+    // остаётся бюджетом клиента даже при разговорной evidence «цена до пяти с
+    // половиной»: запрет на цену объявления применяется к object_price, а не
+    // к явно классифицированному и verified клиентскому лимиту.
+    const verifiedBudget=/budget max|client budget|бюджет|price limit|максимальн.*сумм/.test(identity)&&!/(object|listing|объект|объявлен)/.test(identity);
+    if(verifiedBudget||/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(text)&&!/(цена|стоимость|объявлен)/.test(text)) addRequirement('price_limit',fact);
+    // Минимальная площадь/количество соток — самостоятельное требование
+    // клиента. Оно не должно исчезать только потому, что Need Agent вернул
+    // пустой requirements при наличии verified client_constraint.
+    const verifiedArea=/(minimum area|min area|минимальн.*площад|площад.*минимум|land area|соток)/.test(identity)
+      || /(?:минимум|не меньше|от)\s+\d+(?:[.,]\d+)?\s*(?:сот|м2|м²|кв)/.test(text);
+    if(verifiedArea) addRequirement('area',fact);
     if(/location|локац|район|местополож/.test(normalizedSemanticText([fact.category,fact.name].join(' ')))&&/(ищу|рассматрива|нужн).*район|район.*(?:ищу|рассматрива|нужн)/.test(text)&&!/(улиц|дом|корпус|адрес).{0,40}\d/.test(text)) addRequirement('search_location',fact);
   });
   out.need_meta.interest_count=out.attributes.interest.length;

@@ -317,6 +317,26 @@ test("legacy-конфигурация модуля принудительно п
   expect(stages.find((stage) => stage.outKey === "fact_check")?.prompt).toContain("LLM Fact Judge");
   expect(stages.find((stage) => stage.outKey === "presentation_check")).toMatchObject({ type: "check", codeFn: undefined });
   expect(stages.every((stage) => stage.prompt !== "legacy prompt" || stage.outKey === "validation")).toBe(true);
+
+  const currentContractStages = await page.evaluate(() => eval(`(() => {
+    const stages=defaultPipeline();
+    stages.filter(stage=>['fact_check','need_check','outcome_check'].includes(stage.outKey)).forEach(stage=>{
+      stage.contractVersion=TRANSCRIPTION_SUMMARY_CONTRACT_VERSION;
+      stage.type='check';
+      stage.codeFn='gate';
+      stage.provider='ai-tunnel';
+      stage.model='gpt-5-mini';
+      stage.userEdited=true;
+    });
+    return migratePipelineConfig(stages,[])
+      .filter(stage=>['fact_check','need_check','outcome_check'].includes(stage.outKey))
+      .map(({outKey,type,codeFn,provider,model})=>({outKey,type,codeFn,provider,model}));
+  })()`));
+  expect(currentContractStages).toEqual([
+    { outKey: "fact_check", type: "hybrid", codeFn: "factCheckCode", provider: "ai-tunnel", model: "gpt-5-mini" },
+    { outKey: "need_check", type: "hybrid", codeFn: "needCheckCode", provider: "ai-tunnel", model: "gpt-5-mini" },
+    { outKey: "outcome_check", type: "hybrid", codeFn: "outcomeCheckCode", provider: "ai-tunnel", model: "gpt-5-mini" },
+  ]);
 });
 
 test("регрессия звонка по участку отклоняет Telegram, телефон и вопрос вместо имени", async ({ page }) => {
@@ -2263,6 +2283,9 @@ test("Need Agent использует новый контракт, канони�
     const listingPriceResult=validate(root([],item('не определено'),item('не определено'),[requirement('req_price','price_limit',10000000,['fact_price'],listingPrice.evidence)]),ctxFor([listingPrice]));
     const budget=fact('fact_budget','client_finance','Мой бюджет до десяти миллионов',10000000,{name:'budget_max'});
     const budgetResult=validate(root(),ctxFor([budget]));
+    const reportBudget=fact('fact_report_budget','client_finance','у меня просто цена до пяти с половиной, вот так.','до пяти с половиной',{name:'budget_max',normalized_value:5500000});
+    const reportArea=fact('fact_report_area','client_constraint','Минимум шесть соток мне надо.','минимум шесть соток',{name:'minimum_area',normalized_value:6});
+    const reportNeedsResult=validate(root(),ctxFor([reportBudget,reportArea]));
     const badSource=validate(root([],item('не определено'),item('не определено'),[requirement('req_1','rooms','две комнаты',['fact_missing'],'Нужно две комнаты')]),baseCtx);
     const mismatch=root([item('Новостройки',['fact_newbuild'],newbuild.evidence)]);mismatch.need_meta.interest_count=2;
     const countMismatch=validate(mismatch,multiCtx);
@@ -2278,7 +2301,7 @@ test("Need Agent использует новый контракт, канони�
     renderStages();document.getElementById('transcript').value='Клиент: Хочу квартиру';await runPipeline();
     const pipelineStop={downstreamRan,marker:ctx.marker,needs:ctx.needs};
     pipeline=originalPipeline;renderStages();delete CODE_FUNCS.needDownstreamMarker;callModelWithTransientRetry=original;
-    return {emptyInterest,multipleInterest,unknownInterest,legacyCash,canonicalCash,legacyTerm,canonicalTerm,refusalResult,plotResult,viewingResult,cashResult,approvedResult,pastSaleResult,futureSaleResult,addressResult,districtsResult,listingPriceResult,budgetResult,badSource,countMismatch,blockedCalls,upstreamBlocked,pipelineStop};
+    return {emptyInterest,multipleInterest,unknownInterest,legacyCash,canonicalCash,legacyTerm,canonicalTerm,refusalResult,plotResult,viewingResult,cashResult,approvedResult,pastSaleResult,futureSaleResult,addressResult,districtsResult,listingPriceResult,budgetResult,reportNeedsResult,badSource,countMismatch,blockedCalls,upstreamBlocked,pipelineStop};
   })()`));
 
   expect(result.emptyInterest).toMatchObject({ ok: true, value: { attributes: { interest: [] }, need_meta: { decision: "NO_NEEDS" } } });
@@ -2300,6 +2323,13 @@ test("Need Agent использует новый контракт, канони�
   expect(result.districtsResult.value.requirements).toEqual([expect.objectContaining({ type: "search_location", value: ["Центральный район", "Петроградский район"], source_fact_ids: ["fact_districts"] })]);
   expect(result.listingPriceResult.value.requirements).toEqual([]);
   expect(result.budgetResult.value.requirements).toEqual([expect.objectContaining({ type: "price_limit", value: 10000000, source_fact_ids: ["fact_budget"] })]);
+  expect(result.reportNeedsResult.value).toMatchObject({
+    need_meta: { decision: "EXTRACTED", requirements_count: 2 },
+    requirements: expect.arrayContaining([
+      expect.objectContaining({ type: "price_limit", value: 5500000, source_fact_ids: ["fact_report_budget"] }),
+      expect.objectContaining({ type: "area", value: 6, source_fact_ids: ["fact_report_area"] }),
+    ]),
+  });
   expect(result.badSource.error).toBe('requirements[0].source_fact_ids[0]: unknown verified fact id "fact_missing"');
   expect(result.countMismatch.error).toBe("need_meta.interest_count: expected 1, received 2");
   expect(result.blockedCalls).toBe(0);
