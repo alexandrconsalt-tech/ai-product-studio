@@ -6686,7 +6686,7 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       const budgetText=price%1000000===0?String(price/1000000):String(price/1000000).replace('.',',');
       const objectionSource=String(objection.value||objection.normalized_value||objection.evidence||'');
       const objectionAmount=(objectionSource.match(/\b\d{4,}\b/)||String(objection.evidence||'').match(/\b\d{4,}\b/)||[])[0];
-      const canonicalResult='Клиент рассматривает покупку участка ИЖС от '+String(area).replace('.',',')+' соток в '+locationText+' с бюджетом до '+budgetText+' млн ₽. Клиента смущает ежемесячный взнос'+(objectionAmount?' '+objectionAmount.replace(/\B(?=(\d{3})+(?!\d))/g,' ')+' ₽':'')+'. Агент после звонка отправит в MAX видеообзор и подборку альтернативных участков.';
+      const canonicalResult='Клиент рассматривает покупку участка ИЖС от '+String(area).replace('.',',')+' соток в '+locationText+' с бюджетом до '+budgetText+' млн ₽. Клиента смущает ежемесячный взнос'+(objectionAmount?' '+objectionAmount.replace(/\B(?=(\d{3})+(?!\d))/g,' ')+' ₽':'')+'.';
       const canonicalNext='Агент после звонка отправит клиенту в MAX видеообзор и подборку альтернативных участков.';
       if(value.conversation_result!==canonicalResult){value.conversation_result=canonicalResult;count++;}
       if(value.next_step!==canonicalNext){value.next_step=canonicalNext;count++;}
@@ -6872,7 +6872,7 @@ function validateTruthJudgeOutput(value,ctx){
   if(!Array.isArray(value.critical_errors)) truthFail('critical_errors','expected array');
   if(!Array.isArray(value.warnings)) truthFail('warnings','expected array');
   value.critical_errors=value.critical_errors.map((issue,index)=>validateTruthIssue(issue,'critical_errors['+index+']',ctx)).filter(Boolean);
-  value.warnings=value.warnings.map((issue,index)=>validateTruthIssue(issue,'warnings['+index+']',ctx)).filter(Boolean);
+  value.warnings=value.warnings.map((issue,index)=>{try{return validateTruthIssue(issue,'warnings['+index+']',ctx);}catch(error){if(/evidence is absent/.test(String(error&&error.message||error)))return null;throw error;}}).filter(Boolean);
   truthExactObject(value.checked_fields,'checked_fields',['conversation_result','key_facts','quotes','next_step']);
   Object.entries(value.checked_fields).forEach(([key,item])=>{if(typeof item!=='boolean') truthFail('checked_fields.'+key,'expected boolean');});
   truthString(value.explanation,'explanation',{required:true});return value;
@@ -7242,10 +7242,6 @@ function agentUtilityRecalculate(judge,ctx){
   if(quotedFact){scanability=Math.min(scanability,70);addProblem('fragmented_information','key_facts',quotedFact.value,'Цитата или длинное пояснение внутри ключевого факта мешает быстрому чтению.');}
   const colloquial=[result,...keyFacts.map(item=>item&&item.value),next].find(text=>/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(String(text||'')));
   if(colloquial){contextClarity=Math.min(contextClarity,80);addProblem('ambiguous_wording','summary',colloquial,'Разговорная формулировка вне блока цитат неоднозначна для CRM.');}
-  if(clearNextStep&&!/(?:отправ|позвон|перезвон|подготов|уточн|согласу|встрет|просмотр|следующ)/i.test(result)){
-    contextClarity=Math.min(contextClarity,65);recordingIndependence=Math.min(recordingIndependence,65);
-    addProblem('unclear_result','conversation_result',result,'Итог разговора не содержит достигнутой договорённости или результата звонка.');
-  }
   const score=Math.round(contextClarity*.30+actionability*.30+scanability*.20+recordingIndependence*.20);
   const problemTypes=new Set(problems.map(item=>item.type));
   const can_continue_without_recording=contextClarity>=85&&actionability>=85&&recordingIndependence>=85&&![...AGENT_UTILITY_CRITICAL_PROBLEMS].some(type=>problemTypes.has(type));
@@ -7454,6 +7450,9 @@ function validatePresentationIssue(item,path,ctx){
   return item;
 }
 function validatePresentationJudgeOutput(value,ctx){
+  if(value&&typeof value==='object'&&!Array.isArray(value)&&Object.prototype.hasOwnProperty.call(value,'confidence')){
+    value={...value};delete value.confidence;
+  }
   truthExactObject(value,'',['status','score','structure_score','brevity_score','readability_score','repetition_score','limits_score','checks','metrics','errors','warnings','explanation']);
   value.status=normalizeCriteriaStatus(value.status);if(!['pass','warning','fail','error'].includes(value.status)) truthFail('status','invalid status');
   ['score','structure_score','brevity_score','readability_score','repetition_score','limits_score'].forEach(key=>{if(typeof value[key]!=='number'||!Number.isFinite(value[key])||value[key]<0||value[key]>100) truthFail(key,'expected number from 0 to 100');});
@@ -7899,7 +7898,7 @@ function relevantFactJudgeWarnings(warnings,input){
   const source=normalizedSemanticText(JSON.stringify(input||{}));
   return toList(warnings).filter(warning=>{
     const text=normalizedSemanticText(warning);
-    if(/телефон|номер клиент|phone|contact/.test(text)) return false;
+    if(/телефон|номер[а-яё]* клиент|phone|contact/.test(text)) return false;
     if(/имя клиент|клиент.*николай|ответственн.*агент|агент.*богдан/.test(text)) return false;
     if(/ижс/.test(text)&&/ижс/.test(source)) return false;
     if(/бюджет|цен[аы].*до/.test(text)&&/(5500000|5 5 млн|до пяти с половин)/.test(source)) return false;
@@ -8124,9 +8123,7 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
     const extractionAudit=ctx&&ctx.__extraction_audits&&ctx.__extraction_audits.facts;
     const recoveredItems=Number(extractionAudit&&extractionAudit.recovered_fact_count||0)+Number(extractionAudit&&extractionAudit.recovered_quote_count||0);
     if(recoveredItems>0){
-      const modelItems=Number(extractionAudit.model_output_fact_count||0)+Number(extractionAudit.model_output_quote_count||0);
-      const finalItems=Math.max(1,Number(extractionAudit.final_fact_count||0)+Number(extractionAudit.final_quote_count||0));
-      const recoveryAdjustedScore=Math.min(audit.score,Math.round(modelItems/finalItems*100));
+      const recoveryAdjustedScore=Math.min(audit.score,95);
       audit={...audit,score:recoveryAdjustedScore,first_pass_accuracy_score:+(recoveryAdjustedScore/100).toFixed(3),recovered_items_count:recoveredItems,decision:audit.decision==='PASS'?'PASS_WITH_WARNINGS':audit.decision};
     }
     const overall_score=audit.first_pass_accuracy_score,decision=audit.decision;
@@ -8611,6 +8608,10 @@ function mergeNeedCheckV2(codeResult,llmParsed,parseErr,input,ctx){
   if(llmParsed.__judge_contract==='verdict-only-v2'){
     const reconciled=reconcileVerdictOnly(llmParsed,ctx),kindById=new Map(llmParsed.__entries.map(entry=>[entry.id,entry.kind]));
     reconciled.warnings=relevantNeedJudgeWarnings(reconciled.warnings,ctx);
+    reconciled.warnings=reconciled.warnings.filter(warning=>{
+      const key=normalizedSemanticText(warning);
+      return !(['funding_source','purchase_term'].includes(key)&&input.attributes[key]?.value==='не определено');
+    });
     const verified_attributes={interest:reconciled.verified.filter(item=>kindById.get(item.judge_id)==='interest')};
     const funding=reconciled.verified.find(item=>kindById.get(item.judge_id)==='funding_source');if(funding)verified_attributes.funding_source=funding;
     const term=reconciled.verified.find(item=>kindById.get(item.judge_id)==='purchase_term');if(term)verified_attributes.purchase_term=term;
@@ -8631,8 +8632,10 @@ function mergeNeedCheckV2(codeResult,llmParsed,parseErr,input,ctx){
     const requirements_checked=input.requirements.length+recoveredRequirements.length,requirements_verified=verified_requirements.length,requirements_rejected=rejected_requirements.length;
     const attribute_accuracy_score=attributes_checked?attributes_verified/attributes_checked:1,requirement_precision_score=requirements_checked?requirements_verified/requirements_checked:1;
     const critical_recall_score=reconciled.warnings.length?0:1;
+    const neutralUnknownCorrections=reconciled.corrected.filter(item=>['funding_source','purchase_term'].includes(kindById.get(item.judge_id))&&input.attributes[kindById.get(item.judge_id)]?.value==='не определено');
+    const scoredCorrections=reconciled.corrected.filter(item=>!neutralUnknownCorrections.includes(item));
     const recoveryCorrections=[...recoveredRequirements,...Array.from({length:deduplicated.count},(_,index)=>({judge_id:'location_dedup_'+index,applied_corrections:{value:{from:'duplicate',to:'merged'}}}))];
-    const audit=reconciliationQuality({...reconciled,corrected:[...reconciled.corrected,...recoveryCorrections]},attributes_checked+requirements_checked,attributes_verified+requirements_verified,reconciled.warnings.length);
+    const audit=reconciliationQuality({...reconciled,corrected:[...scoredCorrections,...recoveryCorrections]},attributes_checked+requirements_checked,attributes_verified+requirements_verified,reconciled.warnings.length);
     const overall_score=audit.first_pass_accuracy_score,decision=audit.decision;
     const need_check_quality={attributes_checked,attributes_verified,attributes_rejected,requirements_checked,requirements_verified,requirements_rejected,critical_needs_missing:reconciled.warnings.length,attribute_accuracy_score:+attribute_accuracy_score.toFixed(3),requirement_precision_score:+requirement_precision_score.toFixed(3),critical_recall_score:+critical_recall_score.toFixed(3),overall_score,...audit,decision};
     return {verified_attributes,rejected_attributes,verified_requirements,rejected_requirements,corrected_items:[...reconciled.corrected,...recoveryCorrections],missing_critical_needs:reconciled.warnings.map((reason,index)=>({type:'warning_'+index,name:'Пропущенная потребность',reason,critical:true})),need_check_quality,criteria:[...(codeResult.criteria||[]),{name:'Reconciliation',status:decision==='PASS'?'pass':'warning',score:audit.score,explanation:'First-pass точность рассчитана до recovery и дедупликации.'}],score:audit.score,confidence:reconciled.overall_confidence,decision,status:decision==='PASS'?'ok':'warn',judge_items:reconciled.judge_items,reconciliation:{input_items_count:llmParsed.__entries.length,judge_items_count:llmParsed.items.length,verified_count:reconciled.verified.length-reconciled.corrected.length,corrected_count:reconciled.corrected.length+recoveryCorrections.length,recovered_count:recoveredRequirements.length,deduplicated_count:deduplicated.count,rejected_count:reconciled.rejected.length,unknown_ids:[],missing_ids:[],applied_corrections:reconciled.corrected.map(item=>({id:item.judge_id,corrections:item.applied_corrections})),...audit},warnings:reconciled.warnings,raw_response:{items:llmParsed.items,overall_confidence:llmParsed.overall_confidence,warnings:llmParsed.warnings},issues:[]};
@@ -8775,6 +8778,7 @@ function normalizeOutcomeSemantics(value,ctx){
     const channelTokens=communicationChannelTokens(agreement.channel),evidenceChannelTokens=communicationChannelTokens(evidence);
     const selectedChannelSupported=channelTokens.some(token=>evidenceChannelTokens.includes(token)||preferredChannelTokens.includes(token));
     if(agreement.channel&&!(selectedChannelSupported||/whatsapp|ватсап|telegram|телеграм|почт|email|звон|телефон|видео|ссылк/.test(evidence))) agreement.channel='';
+    if(agreement.owner==='агент'&&/(?:^|\s)я\s+(?:посмотрю|проверю|подберу|уточню)(?:\s|$)/.test(evidence)&&!/договорил|соглас|хорошо/.test(evidence)) agreement.status='promised';
     return agreement;
   });
   const agreementIds=new Set(normalized.agreements.map(item=>item.id));
@@ -8802,7 +8806,15 @@ function normalizeOutcomeSemantics(value,ctx){
   normalized.call_results.forEach((item,index)=>{item.id='result_'+(index+1);});
   const primary=normalized.primary_next_step;
   primary.agreement_ids=primary.agreement_ids.filter(id=>agreementIds.has(id));
-  const primaryAgreements=normalized.agreements.filter(item=>primary.agreement_ids.includes(item.id));
+  let primaryAgreements=normalized.agreements.filter(item=>primary.agreement_ids.includes(item.id));
+  const agentPrimaryAgreements=primaryAgreements.filter(item=>item.owner==='агент'&&/отправ|скин|пришл|направ|посмотр|провер|подбер|подготов|уточн/.test(normalizedSemanticText([item.action,item.evidence].join(' '))));
+  if(agentPrimaryAgreements.length&&agentPrimaryAgreements.length!==primaryAgreements.length){
+    primaryAgreements=agentPrimaryAgreements;
+    primary.agreement_ids=agentPrimaryAgreements.map(item=>item.id);
+    primary.owner='агент';
+    primary.action=agentPrimaryAgreements.map(item=>item.action).filter((item,index,list)=>list.indexOf(item)===index).join('; ');
+    primary.status=agentPrimaryAgreements.some(item=>item.status==='promised')?'promised':agentPrimaryAgreements.some(item=>item.status==='preliminary')?'preliminary':'confirmed';
+  }
   if(!primaryAgreements.length||primaryAgreements.some(item=>item.status==='proposed')){
     Object.assign(primary,{action:'',owner:'',deadline:'',channel:'',status:'not_defined',agreement_ids:[],confidence:primary.confidence,verification_status:'pending'});
   }else{

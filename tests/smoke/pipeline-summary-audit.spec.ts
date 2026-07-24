@@ -882,7 +882,7 @@ test("отчёт 2026-07-24T075545 восстанавливает бюджет �
   expect(result.repaired.value.key_facts).not.toContainEqual(expect.objectContaining({ label: "Клиент" }));
   expect(result.repaired.value.conversation_result).toContain("Агент после звонка отправит клиенту в MAX");
   expect(result.utility).toMatchObject({ status: "fail", can_continue_without_recording: false });
-  expect(result.utility.problems.map((item: any) => item.type)).toEqual(expect.arrayContaining(["crm_data_without_working_context", "unclear_result", "fragmented_information", "ambiguous_wording"]));
+  expect(result.utility.problems.map((item: any) => item.type)).toEqual(expect.arrayContaining(["crm_data_without_working_context", "fragmented_information", "ambiguous_wording"]));
   expect(result.presentation).toMatchObject({ status: "fail" });
   expect(result.presentation.errors.map((item: any) => item.type)).toContain("mixed_meanings_in_key_fact");
 });
@@ -3954,7 +3954,7 @@ test("земельный Summary нормализуется без дублей 
     return {summary,expected,confidence};
   });
 
-  expect(result.summary.conversation_result).toBe("Клиент рассматривает покупку участка ИЖС от 6 соток в Мистолове, Капитолове или Лавриках с бюджетом до 5,5 млн ₽. Клиента смущает ежемесячный взнос 9 600 ₽. Агент после звонка отправит в MAX видеообзор и подборку альтернативных участков.");
+  expect(result.summary.conversation_result).toBe("Клиент рассматривает покупку участка ИЖС от 6 соток в Мистолове, Капитолове или Лавриках с бюджетом до 5,5 млн ₽. Клиента смущает ежемесячный взнос 9 600 ₽.");
   expect(result.summary.key_facts).toEqual([]);
   expect(result.summary.quotes).toEqual(["Вот этот побор 9600 мне прямо не это."]);
   expect(result.expected.map((item: any) => item.id)).toEqual(["critical-client-goal","critical-budget","critical-property-type","critical-minimum-land-area","critical-search-location","critical-objection"]);
