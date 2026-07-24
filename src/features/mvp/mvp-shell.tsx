@@ -160,7 +160,9 @@ export function MvpShell() {
             {view === "inspector" ? <ExecutionInspectorScreen /> : null}
             {view === "prompts" ? <PromptInspectorScreen /> : null}
             {view === "analytics" ? <AnalyticsScreen /> : null}
-            {view === "pipeline-lab-v3" ? <PipelineLabV3Screen /> : null}
+            {view === "pipeline-lab-v3" ? (
+              <PipelineLabV3Screen productId={bundle.project?.id} productName={bundle.project?.name} />
+            ) : null}
             {view === "dashboard" ? <DashboardScreen /> : null}
             {view === "settings" ? <SettingsScreen /> : null}
           </Workspace>

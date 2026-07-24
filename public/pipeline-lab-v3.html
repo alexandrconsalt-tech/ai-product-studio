@@ -2004,7 +2004,7 @@ function stageConfidenceFromOutput(stage,rep,score=null){
 function metaStatusFromScore(score, rep){
   const decision=String(rep.output&&rep.output.decision||'').toUpperCase();
   if(decision==='FAIL' || decision==='RETRY' || decision==='RETRY_STT' || decision==='STOP') return 'fail';
-  if(decision==='WARNING' || decision==='PASS_WITH_WARNINGS' || decision==='MANUAL_REVIEW') return 'warning';
+  if(decision==='WARNING' || decision==='PASS_WITH_WARNINGS' || decision==='PASS_WITH_CORRECTIONS' || decision==='REVIEW_REQUIRED' || decision==='MANUAL_REVIEW') return 'warning';
   if(score==null) return rep.status==='bad'?'fail':(rep.status==='warn'||rep.status==='attn'?'warning':'pass');
   if(rep.status==='bad' || score<70) return 'fail';
   if(rep.status==='warn' || rep.status==='attn' || score<90) return 'warning';
@@ -6051,6 +6051,88 @@ async function callOpenAI(prompt, model, temperature=0.2, maxTokens=2000, respon
   return { text, tokens, finishReason };
 }
 
+function mockPipelineResponse(prompt){
+  const source=String(prompt||'');
+  const fact=(id,category,name,value,normalized_value,speaker,evidence)=>({id,category,name,value,normalized_value,speaker,evidence,confidence:.99,verification_status:'pending'});
+  const facts=[
+    fact('fact_1','client_intent','цель обращения','поиск участка','поиск участка','Клиент','Слушайте, по поводу участка звоню вам.'),
+    fact('fact_2','search_location','область поиска','Мистолово','Мистолово','Клиент','Мистолово'),
+    fact('fact_3','search_location','область поиска','Капитолова','Капитолово','Клиент','Капитолова'),
+    fact('fact_4','search_location','область поиска','Лаврики','Лаврики','Клиент','Лаврики'),
+    fact('fact_5','client_constraint','минимальная площадь участка','6 соток',6,'Клиент','Ну, минимум шесть соток мне надо.'),
+    fact('fact_6','client_finance','бюджет','до 5,5 млн ₽',5500000,'Клиент','Не, ну у меня просто цена до пяти с половиной, вот так.'),
+    fact('fact_7','search_criteria','назначение участка','ИЖС','ИЖС','Клиент','Да, да, конечно, я понял.'),
+    fact('fact_8','client_objection','главное возражение','ежемесячный взнос 9 600 ₽',9600,'Клиент','Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'),
+    fact('fact_9','communication_channel','канал связи','MAX','MAX','Клиент','Да, давайте в Макс лучше.'),
+    fact('fact_10','object_context','обсуждаемый объект','участок 6 соток в КП «Охтинское Раздолье» за 4,65 млн ₽','участок 6 соток в КП «Охтинское Раздолье» за 4,65 млн ₽','Агент','Это коттеджный посёлок Охтинское Раздолье, шесть соток, ежемесячные взносы 9 600.'),
+    fact('fact_11','agent_commitment','отправить видеообзор','отправить видеообзор','отправить видеообзор','Агент','Я могу скинуть вам подробный видеообзор.'),
+    fact('fact_12','agent_commitment','проверить дополнительные варианты','проверить дополнительные варианты','проверить дополнительные варианты','Агент','Я посмотрю, что есть ещё.'),
+    fact('fact_13','agent_commitment','отправить подборку','отправить ссылку на подборку','отправить ссылку на подборку','Агент','Скину видео и сейчас посмотрю, что у нас есть, скину ссылку на подбор.'),
+    fact('fact_14','client_question','другие варианты в локации','А больше ничего нет у вас в этой локации?','А больше ничего нет у вас в этой локации?','Клиент','А больше ничего нет у вас в этой локации?')
+  ];
+  if(source.startsWith('Ты — LLM Fact Judge')){
+    const ids=[...new Set([...source.matchAll(/"id"\s*:\s*"((?:fact|quote)_[^"]+)"/g)].map(match=>match[1]))];
+    return {items:ids.map(id=>({id,verdict:'verified',reason:'подтверждено транскрипцией',confidence:.99,corrections:{}})),overall_confidence:.99,warnings:[]};
+  }
+  if(source.startsWith('Ты — Fact Agent')) return {facts,quotes:[{id:'quote_1',text:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',speaker:'Клиент',supports_fact_ids:['fact_8'],confidence:.99,verification_status:'pending'}],extraction_meta:{fact_count:facts.length,quote_count:1,decision:'EXTRACTED'}};
+  if(source.startsWith('Ты — LLM Need Judge')){
+    const requirementIds=[...new Set([...source.matchAll(/"id"\s*:\s*"(req_[^"]+)"/g)].map(match=>match[1]))];
+    return {items:['funding_source','purchase_term',...requirementIds].map(id=>({id,verdict:'verified',reason:'подтверждено фактами',confidence:.99,corrections:{}})),overall_confidence:.99,warnings:[]};
+  }
+  if(source.startsWith('Ты — Need Agent')) return {
+    attributes:{interest:[],funding_source:{value:'не определено',confidence:.99,evidence:'',source_fact_ids:[],verification_status:'pending'},purchase_term:{value:'не определено',confidence:.99,evidence:'',source_fact_ids:[],verification_status:'pending'}},
+    requirements:[
+      {id:'req_property_type',type:'property_type',value:'ИЖС',confidence:.99,evidence:'Да, да, конечно, я понял.',source_fact_ids:['fact_7'],verification_status:'pending'},
+      {id:'req_minimum_land_area',type:'minimum_land_area',value:6,confidence:.99,evidence:'Ну, минимум шесть соток мне надо.',source_fact_ids:['fact_5'],verification_status:'pending'},
+      {id:'req_price_limit',type:'price_limit',value:5500000,confidence:.99,evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.',source_fact_ids:['fact_6'],verification_status:'pending'},
+      {id:'req_search_location',type:'search_location',value:['Мистолово','Капитолово','Лаврики'],confidence:.99,evidence:'Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',source_fact_ids:['fact_2','fact_3','fact_4'],verification_status:'pending'}
+    ],
+    need_meta:{interest_count:0,requirements_count:4,decision:'EXTRACTED'}
+  };
+  if(source.startsWith('Ты — LLM Outcome Judge')){
+    const ids=[...new Set([...source.matchAll(/"id"\s*:\s*"((?:result|agreement)_[^"]+)"/g)].map(match=>match[1]))];
+    return {items:[...ids,'primary_next_step'].map(id=>({id,verdict:'verified',reason:'подтверждено транскрипцией',confidence:.99,corrections:{}})),overall_confidence:.99,warnings:[]};
+  }
+  if(source.startsWith('Ты — Outcome Agent')) return {
+    call_results:[
+      {id:'result_1',value:'агент отправит материалы',evidence:'Скину видео и сейчас посмотрю, что у нас есть, скину ссылку на подбор.',confidence:.99,verification_status:'pending'},
+      {id:'result_2',value:'агент уточнит информацию',evidence:'Я посмотрю, что есть ещё.',confidence:.99,verification_status:'pending'},
+      {id:'result_3',value:'агент подготовит подборку',evidence:'скину ссылку на подбор',confidence:.99,verification_status:'pending'}
+    ],
+    agreements:[
+      {id:'agreement_1',action:'отправить видеообзор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'promised',evidence:'Скину видео',confidence:.99,verification_status:'pending'},
+      {id:'agreement_2',action:'проверить дополнительные варианты',owner:'агент',recipient:'none',deadline:'после звонка',channel:'',status:'promised',evidence:'Я посмотрю, что есть ещё.',confidence:.99,verification_status:'pending'},
+      {id:'agreement_3',action:'отправить подборку альтернативных участков',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'promised',evidence:'скину ссылку на подбор',confidence:.99,verification_status:'pending'}
+    ],
+    primary_next_step:{action:'Агент после звонка отправит в MAX видеообзор и подборку альтернативных участков',owner:'агент',deadline:'после звонка',channel:'MAX',status:'promised',agreement_ids:['agreement_1','agreement_2','agreement_3'],confidence:.99,verification_status:'pending'},
+    outcome_meta:{result_count:3,agreement_count:3,decision:'EXTRACTED'}
+  };
+  if(source.startsWith('Ты — независимый Fact Judge')) return {status:'pass',score:100,has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false,has_money_or_number_errors:false,has_agreement_errors:false,has_quote_errors:false,has_pii:false,critical_errors:[],warnings:[],checked_fields:{conversation_result:true,key_facts:true,quotes:true,next_step:true},explanation:'Все утверждения подтверждены Store.'};
+  if(source.startsWith('Ты — независимый Judge полноты')) return {status:'pass',score:100,critical_items_total:4,critical_items_present:4,critical_items_missing:0,critical_items:[
+    {id:'critical_goal',category:'client_goal',expected:'покупка участка ИЖС',present:true,summary_field:'conversation_result',summary_fragment:'рассматривает покупку участка ИЖС',evidence:'поиск участка'},
+    {id:'critical_budget',category:'budget',expected:'бюджет до 5,5 млн ₽',present:true,summary_field:'key_facts',summary_fragment:'до 5,5 млн ₽',evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.'},
+    {id:'critical_requirement',category:'required_criteria',expected:'ИЖС и площадь от 6 соток',present:true,summary_field:'key_facts',summary_fragment:'ИЖС, площадь от 6 соток',evidence:'Да, да, конечно, я понял.'},
+    {id:'critical_objection',category:'main_objection',expected:'ежемесячный взнос 9 600 ₽',present:true,summary_field:'key_facts',summary_fragment:'ежемесячный взнос 9 600 ₽',evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'}
+  ],missing_items:[],warnings:[],explanation:'Все критические элементы отражены.'};
+  if(source.startsWith('Ты — независимый Judge практической')) return {status:'pass',score:100,can_continue_without_recording:true,context_clarity:100,actionability:100,scanability:100,recording_independence:100,missing_for_next_agent:[],useful_summary_elements:[],problems:[],explanation:'Саммари позволяет продолжить работу без записи.'};
+  if(source.startsWith('Ты — независимый Judge точности')) return {status:'pass',score:100,next_step_verified:true,agreements_checked:3,agreements_verified:3,agreements_rejected:0,checked_components:{action:true,owner:true,recipient:true,deadline:true,channel:true,status:true,sequence:true},errors:[],warnings:[],explanation:'Следующий шаг соответствует Store.'};
+  if(source.startsWith('Ты — независимый Checker формата')) return {status:'pass',score:100,structure_score:100,brevity_score:100,readability_score:100,repetition_score:100,limits_score:100,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:true},metrics:{total_characters:0,conversation_result_characters:0,key_facts_count:0,quotes_count:0,next_step_characters:0,sentence_count:0},errors:[],warnings:[],explanation:'Формат, структура и краткость соблюдены.'};
+  if(source.startsWith('Ты — Summary Agent для CRM')) return {
+    status:'GENERATED',
+    conversation_result:'Клиент Николай рассматривает покупку участка ИЖС от 6 соток в районе Мистолово с бюджетом до 5,5 млн ₽. Обсудили участок 6 соток в КП «Охтинское Раздолье» за 4,65 млн ₽; клиента смущает ежемесячный взнос 9 600 ₽. Агент предложил отправить видеообзор и подобрать альтернативные участки.',
+    key_facts:[
+      {label:'Бюджет',value:'до 5,5 млн ₽'},
+      {label:'Требования',value:'ИЖС, площадь от 6 соток'},
+      {label:'Локации',value:'Мистолово, Капитолово, Лаврики'},
+      {label:'Основное сомнение',value:'ежемесячный взнос 9 600 ₽'}
+    ],
+    quotes:['Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'],
+    next_step:'Агент после звонка отправит в MAX видеообзор и подборку альтернативных участков.',
+    error:''
+  };
+  return {mock:true,error:'unsupported mock prompt contract'};
+}
+
 async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000, responseFormat=null){
   const apiKey=loadAiTunnelKey();
   if(!apiKey) throw new Error('Не задан API-ключ AI Tunnel — задайте его в разделе «Настройки».');
@@ -6088,7 +6170,8 @@ async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000, resp
 // callBrowserLlm on the React side. Falls through to the original error
 // when there's truly no other vendor to try.
 async function callModel(prompt, model, providerOverride, temperature=0.2, maxTokens=2000, responseFormat=null, allowFallback=true){
-  const selectedProvider=providerOverride||loadExplicitSelectedLlmProvider();
+  const explicitlySelectedProvider=loadExplicitSelectedLlmProvider();
+  const selectedProvider=explicitlySelectedProvider==='mock'?'mock':providerOverride||explicitlySelectedProvider;
   if(selectedProvider==='ai-tunnel'){
     const r=await callAiTunnel(prompt,model,temperature,maxTokens,responseFormat);
     return {...r,actualModel:model,actualProvider:'AI Tunnel'};
@@ -6102,7 +6185,7 @@ async function callModel(prompt, model, providerOverride, temperature=0.2, maxTo
     return {...r,actualModel:r.resolvedModel||model,actualProvider:'Anthropic Direct'};
   }
   if(selectedProvider==='mock'){
-    const text=JSON.stringify({mock:true,model,echo:String(prompt||'').slice(0,200)});
+    const text=JSON.stringify(mockPipelineResponse(prompt));
     return {text,tokens:Math.max(1,Math.round(text.length/4)),actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider'};
   }
   const vendor = MODEL_VENDOR[model] || 'anthropic';
@@ -6149,7 +6232,8 @@ function stageAllowsVendorFallback(stage){
 }
 
 function hasProviderCredentials(stage){
-  const provider=stage?.provider||loadExplicitSelectedLlmProvider();
+  const explicitlySelectedProvider=loadExplicitSelectedLlmProvider();
+  const provider=explicitlySelectedProvider==='mock'?'mock':stage?.provider||explicitlySelectedProvider;
   if(provider==='ai-tunnel') return Boolean(loadAiTunnelKey());
   if(provider==='openai-direct') return Boolean(loadOpenaiKey());
   if(provider==='anthropic-direct') return Boolean(loadApiKey());
@@ -6246,6 +6330,7 @@ const MODULE_SUMMARY_JSON_SCHEMA={type:'object',additionalProperties:false,requi
 }};
 function moduleSummaryDeterministicRepair(value){
   const removedFields=[],removedItems=[];
+  let normalized=false;
   if(!value||typeof value!=='object'||Array.isArray(value)) return {value,repair_attempted:false,removed_fields:removedFields,removed_items:removedItems,contract_status:'INVALID'};
   const rootKeys=['status','conversation_result','key_facts','quotes','next_step','error'];
   Object.keys(value).filter(key=>!rootKeys.includes(key)).forEach(key=>{removedFields.push(key);delete value[key];});
@@ -6264,10 +6349,14 @@ function moduleSummaryDeterministicRepair(value){
         removedItems.push('key_facts['+index+']');
         return false;
       }
+      if(/местополож|локац|район|област[а-яё]*\s+поиск/i.test(String(item&&item.label||''))){
+        const canonical=String(item.value||'').split(',').map(part=>canonicalSearchLocation(part.trim())||part.trim()).filter(Boolean).join(', ');
+        if(canonical&&canonical!==item.value){item.value=canonical;normalized=true;}
+      }
       return true;
     });
   }
-  const attempted=removedFields.length>0||removedItems.length>0;
+  const attempted=removedFields.length>0||removedItems.length>0||normalized;
   return {value,repair_attempted:attempted,removed_fields:removedFields,removed_items:removedItems,contract_status:attempted?'RECOVERED_WITH_WARNING':'VALID'};
 }
 function validateModuleSummaryOutput(value){
@@ -6471,8 +6560,12 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
     const locationRange=String(transcript||'').match(/Там,\s*([А-ЯЁ][А-Яа-яЁё-]+(?:,\s*[А-ЯЁ][А-Яа-яЁё-]+){1,4})(?:,\s*что-нибудь такое)?[.!?]/);
     const locationItem=value.key_facts.find(item=>/местополож|локац|район|област[а-яё]*\s+поиск/i.test(String(item&&item.label||'')));
     if(locationRange&&locationItem){
-      const expandedLocation=locationRange[1].split(',').map(item=>item.trim()).filter(Boolean).join(', ');
+      const expandedLocation=locationRange[1].split(',').map(item=>canonicalSearchLocation(item.trim())||item.trim()).filter(Boolean).join(', ');
       if(expandedLocation&&locationItem.value!==expandedLocation){locationItem.label='Районы поиска';locationItem.value=expandedLocation;count++;}
+    }
+    if(locationItem){
+      const canonicalLocations=String(locationItem.value||'').split(',').map(item=>canonicalSearchLocation(item.trim())||item.trim()).filter(Boolean).join(', ');
+      if(canonicalLocations&&locationItem.value!==canonicalLocations){locationItem.value=canonicalLocations;count++;}
     }
     const repeatedClient=value.conversation_result.replace(/([.!?])\s+Клиент\s+(?=[а-яё])/g,'$1 ');
     if(repeatedClient!==value.conversation_result){value.conversation_result=repeatedClient;count++;}
@@ -6498,6 +6591,7 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
     }
     if(primary&&primary.owner==='агент'&&recipient==='клиент'&&/видео/.test(nextNorm)&&/(?:ссылк.*подбор|направ.*подбор|подборк)/.test(nextNorm)){
       const channel=String(primary.channel||'').trim(),deadline=String(primary.deadline||'').trim();
+      const visibleDeadline=/^не определено$/i.test(deadline)?'':deadline;
       const inspectSource=[primary.action,...linkedAgreements.flatMap(item=>[item&&item.action,item&&item.evidence])].filter(Boolean).join(' ');
       const inspectVariants=/(?:посмотр|провер|подбер|подготов)[а-яё]*(?:\s+\S+){0,5}\s+(?:вариант|подбор)/.test(moduleSummaryNorm(inspectSource));
       const primaryActionNorm=moduleSummaryNorm(primary.action);
@@ -6507,7 +6601,7 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       const selectionIndex=sequenceSource.search(/(?:ссылк|направ[а-яё]*\s+подбор|отправ[а-яё]*\s+подбор)/);
       const inspectBeforeSelection=inspectVariants&&inspectIndex>=0&&selectionIndex>=0&&inspectIndex<selectionIndex;
       const actionText=!inspectVariants?'видеообзор и ссылку на подборку.':inspectBeforeSelection?'видеообзор, затем посмотрит дополнительные варианты и отправит ссылку на подборку.':'видеообзор и ссылку на подборку, затем посмотрит дополнительные варианты.';
-      const concise=['Агент',deadline,'отправит клиенту',channel&&'в '+channel,actionText].filter(Boolean).join(' ');
+      const concise=['Агент',visibleDeadline,'отправит клиенту',channel&&'в '+channel,actionText].filter(Boolean).join(' ');
       if(value.next_step!==concise){value.next_step=concise;nextNorm=moduleSummaryNorm(concise);count++;}
       const resultSentences=value.conversation_result.split(/(?<=[.!?])\s+/);
       const withoutRepeatedAction=resultSentences.filter(sentence=>{
@@ -9412,18 +9506,20 @@ function looksLikePipelinePrompt(text){
 }
 
 function buildPipelineExecutionSummary(active,stageReports,stoppedAtIndex){
-  const executedReports=stageReports.filter(item=>item.report?.execution_status!=='NOT_RUN');
+  const countedStages=active.filter(stage=>stage.outKey!=='stt');
+  const countedReports=stageReports.filter(item=>item.stage?.outKey!=='stt');
+  const executedReports=countedReports.filter(item=>item.report?.execution_status!=='NOT_RUN');
   const successfulReports=executedReports.filter(item=>['ok','warn','attn'].includes(item.report?.status));
   return {
     pipeline_status:stoppedAtIndex>=0?'TECHNICAL_ERROR':'SUCCESS',
-    steps_total:active.length,
+    steps_total:countedStages.length,
     steps_executed:executedReports.length,
     steps_successful:successfulReports.length,
     stopped_at_stage:stoppedAtIndex>=0?(active[stoppedAtIndex].outKey||'facts'):null,
-    stages:active.map((stage,index)=>{
-      if(stoppedAtIndex>=0&&index>stoppedAtIndex) return {outKey:stage.outKey||'',status:'NOT_RUN'};
-      if(index>=executedReports.length) return {outKey:stage.outKey||'',status:'NOT_RUN'};
-      const reportStatus=stageReports[index]?.report?.status;
+    stages:countedStages.map(stage=>{
+      const matched=countedReports.find(item=>item.stage?.outKey===stage.outKey);
+      if(!matched||matched.report?.execution_status==='NOT_RUN') return {outKey:stage.outKey||'',status:'NOT_RUN'};
+      const reportStatus=matched.report?.status;
       return {outKey:stage.outKey||'',status:reportStatus==='ok'?'SUCCESS':['warn','attn'].includes(reportStatus)?'SUCCESS_WITH_WARNING':'FAILED'};
     })
   };
@@ -9606,6 +9702,7 @@ async function runPipeline(){
     }
   }
   const executedReports=stageReports.filter(item=>item.report?.execution_status!=='NOT_RUN');
+  try{attachReviewerScores(stageReports);}catch(error){if(!IS_TRANSCRIPTION_SUMMARY_MODULE) throw error;}
   ctx.pipeline_execution=buildPipelineExecutionSummary(active,stageReports,stoppedAtIndex);
 
   const retry=await retrySummaryQualityFlow(active,stageReports);

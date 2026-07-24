@@ -7,6 +7,13 @@ const moduleUrl = "/pipeline-lab-v3.html?projectId=project_transcription_summary
 const summaryNewUrl = "/pipeline-lab-v3.html?projectId=project_summary_new&productName=" +
   encodeURIComponent("Summary NEW");
 
+test("экран Pipeline Lab передаёт выбранный продукт во встроенный стенд", async ({ page }) => {
+  await page.goto("/?view=pipeline-lab-v3");
+  const frame = page.locator('iframe[title="Pipeline Lab v3"]');
+  await expect(frame).toHaveAttribute("src", /[?&]productId=project_transcription_summary_module/);
+  await expect(frame).toHaveAttribute("src", /productName=/);
+});
+
 const qualityGateFixture = `
   const qgKeys=['truth_check','critical_completeness_check','agent_utility_check','action_check','presentation_check'];
   function qgContext(){
@@ -829,7 +836,7 @@ test("pipeline report 2026-07-24T062250 проходит deterministic regressio
   ]));
   expect(result.deduplicated.requirements.filter((item: any) => item.type === "search_location")).toHaveLength(1);
   expect(result.repaired).toMatchObject({ repair_attempted: true, contract_status: "RECOVERED_WITH_WARNING", removed_items: ["key_facts[1]"] });
-  expect(result.summary.key_facts).toEqual([{ label: "Районы поиска", value: "Мистолово, Капитолова, Лаврики" }]);
+  expect(result.summary.key_facts).toEqual([{ label: "Районы поиска", value: "Мистолово, Капитолово, Лаврики" }]);
   expect(result.questionStatus).toBe("converted_to_action");
 });
 
@@ -850,6 +857,17 @@ test("first-pass scoring не превращает пять corrections из в�
     score: 38,
   });
   expect(quality.score).toBeLessThan(100);
+});
+
+test("PASS_WITH_CORRECTIONS остаётся предупреждением даже при низкой first-pass оценке", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const rep={status:'warn',output:{decision:'PASS_WITH_CORRECTIONS',score:33,criteria:[]},ms:1,tokens:0,cost:0};
+    return {meta:buildStageMeta({outKey:'need_check',codeFn:'needCheckCode'},rep),badge:badgeText(rep.status)};
+  });
+
+  expect(result.meta).toMatchObject({status:"warning",score:33});
+  expect(result.badge).toBe("Внимание");
 });
 
 test("fault injection каждого из 16 этапов останавливает pipeline и помечает downstream NOT_RUN", async ({ page }) => {
@@ -3760,7 +3778,7 @@ test("Summary выбирает доказательные цитаты и сох
     return moduleSummaryApplyStorePolicy(structuredClone(summary),store,transcript);
   });
 
-  expect(result.value.key_facts).toContainEqual({label:"Районы поиска",value:"Мистолово, Капитолова, Лаврики"});
+  expect(result.value.key_facts).toContainEqual({label:"Районы поиска",value:"Мистолово, Капитолово, Лаврики"});
   expect(result.value.quotes).toEqual([
     "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.",
     "Не, ну у меня просто цена до пяти с половиной, вот так."
