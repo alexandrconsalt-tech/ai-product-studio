@@ -7235,10 +7235,11 @@ function agentUtilityOutOfScopeProblem(item){
   const type=String(item&&item.type||''),text=moduleSummaryNorm(JSON.stringify(item||{}));
   if(AGENT_UTILITY_OUT_OF_SCOPE_TYPES.has(type)||/(hallucin|fact.distortion|money|number.error|role.confusion|quote.distortion|quote.not.verified|agreement.not.confirmed|invented|pii|json|schema|limit.error|format.error)/.test(type)) return true;
   if(['crm_data_without_working_context','fragmented_information','difficult_to_scan','unclear_client_situation'].includes(type)&&/(?:key.?facts?.*(?:пуст|отсутств)|(?:пуст|отсутств).*key.?facts?|машинн.*обработ)/.test(text)) return true;
+  if(['action_context','working_context','fragmented_information','crm_data_without_working_context'].includes(type)&&/(?:свернут|структур|ключев.*факт).*(?:summary|карточ|подбор|стенограмм)|(?:summary|карточ|подбор|стенограмм).*(?:свернут|структур|ключев.*факт)/.test(text)) return true;
   if(/(?:телефон|номер телефона|адрес|цена объекта|стоимость объекта|площад|этаж|комнатност|имя агента|имя клиента).*(?:не указан|отсутств|нужно добавить)|(?:не указан|отсутств|нужно добавить).*(?:телефон|адрес|цена объекта|площад|этаж|комнатност|имя)/.test(text)) return true;
   if(/достоверност|неверн.*(?:сумм|бюджет|роль)|дословност.*цитат|искажен.*цитат/.test(text)) return true;
   if(/(?:какой|точн|конкретн).{0,30}(?:видео|файл|url|ссылк|аккаунт)|(?:видео|файл|url|ссылк|аккаунт).{0,30}(?:какой|точн|конкретн)/.test(text)) return true;
-  if(['missing_action_context','difficult_to_scan','unclear_next_step','unclear_client_situation'].includes(type)&&/(?:критери|фильтр|приорит|параметр|включать|исключать|что должно).*(?:подбор|вариант)|(?:подбор|вариант).*(?:критери|фильтр|приорит|параметр|включать|исключать|что должно)/.test(text)) return true;
+  if(['missing_action_context','action_context','working_context','difficult_to_scan','unclear_next_step','unclear_client_situation','crm_data_without_working_context'].includes(type)&&/(?:критери|фильтр|приорит|параметр|включать|исключать|что должно).*(?:подбор|вариант)|(?:подбор|вариант).*(?:критери|фильтр|приорит|параметр|включать|исключать|что должно)/.test(text)) return true;
   if(type==='ambiguous_wording'&&/смущает/.test(text)&&/(?:степен|отказ|готовност|допустим|уровн).*(?:взнос|плат)|(?:взнос|плат).*(?:степен|отказ|готовност|допустим|уровн)/.test(text)) return true;
   if(type==='recording_required'&&/второстеп|необязательн.*детал|мелк.*детал/.test(text)) return true;
   return false;
@@ -7257,7 +7258,20 @@ function validateAgentUtilityJudgeOutput(value,ctx){
   if(!Array.isArray(value.useful_summary_elements)) truthFail('useful_summary_elements','expected array');
   if(!Array.isArray(value.problems)) truthFail('problems','expected array');
   const clearNextStep=agentUtilityHasClearNextStep(ctx);
-  const missing=value.missing_for_next_agent.map((item,index)=>{const path='missing_for_next_agent['+index+']';truthExactObject(item,path,['type','description']);truthString(item.description,path+'.description',{required:true});if(/телефон|номер телефона|адрес|цена объекта|стоимость объекта|площад|этаж|комнатност|имя агента|имя клиента/i.test(item.description)) truthFail(path+'.description','CRM card data cannot be required');if(['funding_source','purchase_term'].includes(item.type)) return null;if(!AGENT_UTILITY_MISSING_TYPES.has(item.type)) truthFail(path+'.type','unknown missing type '+JSON.stringify(item.type));if(agentUtilityOutOfScopeProblem({type:item.type,problem:item.description})) return null;if(clearNextStep&&['next_step','owner','action_context'].includes(item.type)) return null;return item;}).filter(item=>item&&!agentUtilityDuplicateCriticalMissing(item,ctx));
+  const missing=value.missing_for_next_agent.map((item,index)=>{
+    const path='missing_for_next_agent['+index+']';
+    truthExactObject(item,path,['type','description']);
+    truthString(item.description,path+'.description',{required:true});
+    const outOfScope=agentUtilityOutOfScopeProblem({type:item.type,problem:item.description});
+    const structuralSummaryComplaint=/(?:summary|key.?facts?|ключев.*факт|свернут|структур).*(?:карточ|подбор|стенограмм|быстр)|(?:карточ|подбор|стенограмм|быстр).*(?:summary|key.?facts?|ключев.*факт|свернут|структур)/i.test(item.description);
+    if(outOfScope&&structuralSummaryComplaint) return null;
+    if(/телефон|номер телефона|адрес|цена объекта|стоимость объекта|площад|этаж|комнатност|имя агента|имя клиента/i.test(item.description)) truthFail(path+'.description','CRM card data cannot be required');
+    if(['funding_source','purchase_term'].includes(item.type)) return null;
+    if(!AGENT_UTILITY_MISSING_TYPES.has(item.type)) truthFail(path+'.type','unknown missing type '+JSON.stringify(item.type));
+    if(outOfScope) return null;
+    if(clearNextStep&&['next_step','owner','action_context'].includes(item.type)) return null;
+    return item;
+  }).filter(item=>item&&!agentUtilityDuplicateCriticalMissing(item,ctx));
   const useful=value.useful_summary_elements.map((item,index)=>{const path='useful_summary_elements['+index+']';truthExactObject(item,path,['type','description','summary_fragment']);truthString(item.type,path+'.type',{required:true});truthString(item.description,path+'.description',{required:true});truthString(item.summary_fragment,path+'.summary_fragment',{required:true});if(!agentUtilityFragmentExists(item.summary_fragment,ctx)){if(/\.\.\.|…|^\s*[\[{]/.test(item.summary_fragment))return null;truthFail(path+'.summary_fragment','fragment is absent from summary');}return item;}).filter(Boolean);
   const problems=[];
   value.problems.forEach((item,index)=>{const path='problems['+index+']';truthExactObject(item,path,['type','field','summary_fragment','problem']);truthString(item.type,path+'.type',{required:true});truthString(item.field,path+'.field',{required:true});truthString(item.summary_fragment,path+'.summary_fragment',{required:true});truthString(item.problem,path+'.problem',{required:true});if(agentUtilityOutOfScopeProblem(item)) return;if(!AGENT_UTILITY_PROBLEM_TYPES.has(item.type)) truthFail(path+'.type','unknown utility problem type '+JSON.stringify(item.type));if(!agentUtilityFragmentExists(item.summary_fragment,ctx)) truthFail(path+'.summary_fragment','fragment is absent from summary');if(clearNextStep&&['unclear_next_step','unclear_owner','missing_action_context','ambiguous_wording'].includes(item.type)&&/(?:не согласован|противореч|кто.*отвеч|неясно.*отправ)/.test(moduleSummaryNorm(item.problem))) return;problems.push(item);});
@@ -8693,6 +8707,7 @@ function relevantNeedJudgeWarnings(warnings,ctx){
   return toList(warnings).filter(warning=>{
     const text=String(warning||'');
     if(!hasExplicitSearchLocation&&/search_location|локац.*поиск|район.*поиск/i.test(text)) return false;
+    if(/interest/i.test(text)&&/(?:участ|земл|покупк)/i.test(text)&&/(?:отсутств|нет|требуется классиф|входн.*items)/i.test(text)) return false;
     if(!hasCanonicalInterest&&/interest/i.test(text)&&/(?:участ|земл)/i.test(text)) return false;
     return true;
   });
