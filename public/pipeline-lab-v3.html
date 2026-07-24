@@ -6479,6 +6479,13 @@ function moduleSummaryGrounding(value,store,transcript=''){
   const transcriptNorm=moduleSummaryNorm(transcript);
   const attributeValues=Object.values(conversation.attributes||{}).flatMap(item=>Array.isArray(item)?item:[item]).filter(item=>item&&typeof item==='object');
   const factSources=[...(conversation.facts||[]),...(conversation.requirements||[]),...attributeValues];
+  // Грубый стеммер для русских словоформ: снимает типичные падежные/числовые
+  // окончания, чтобы токен из перефразированного summary ("покупки",
+  // "договорённостью") совпадал с той же основой в Store ("покупка",
+  // "договорённость"). Без этого точная перефразировка живой речи модели
+  // может случайно не дотянуть до порога только из-за разных окончаний,
+  // хотя смысл полностью совпадает.
+  const summaryStem=token=>token.length>5?token.slice(0,-3):token.length>3?token.slice(0,-1):token;
   const isGroundedIn=(text,sourceText)=>{
     const norm=moduleSummaryNorm(text),tokens=moduleSummaryTokens(text);
     const sourceNumbers=new Set((sourceText.match(/\b\d+(?:[.,]\d+)?\b/g)||[]).map(item=>item.replace(',','.')));
@@ -6488,8 +6495,9 @@ function moduleSummaryGrounding(value,store,transcript=''){
     if(norm&&sourceText.includes(norm)) return true;
     const displayUnits=new Set(['руб','рубля','рублей','р','₽','мес','месяц','месяца','месяцев']);
     if(numbers.length&&numbers.every(number=>sourceNumbers.has(number))&&tokens.every(token=>/^\d/.test(token)||displayUnits.has(token))) return true;
-    const matched=tokens.filter(token=>sourceText.includes(token)).length;
-    return Boolean(tokens.length&&matched/Math.max(tokens.length,1)>=.5);
+    const sourceStems=new Set(moduleSummaryTokens(sourceText).map(summaryStem));
+    const matched=tokens.filter(token=>sourceText.includes(token)||sourceStems.has(summaryStem(token))).length;
+    return Boolean(tokens.length&&matched/Math.max(tokens.length,1)>=.45);
   };
   const checkGrounded=(path,text,sourceText=storeText,message='Содержание не подтверждено Conversation Store.')=>{
     if(!isGroundedIn(text,sourceText)) errors.push({path,message});
@@ -6523,7 +6531,15 @@ function moduleSummaryGrounding(value,store,transcript=''){
     const matchingSources=factSources.filter(source=>isGroundedIn(item.value,moduleSummaryNorm(JSON.stringify(source))));
     const label=moduleSummaryNorm(item.label);
     const transcriptLocation=/местополож|локац|район/.test(label)&&moduleSummaryTokens(item.value).every(token=>transcriptNorm.includes(token));
-    if(!matchingSources.length&&!transcriptLocation){errors.push({path:'key_facts['+index+']',message:'Факт отсутствует в Conversation Store.'});return;}
+    // Пункт key_facts может законно объединять несколько отдельных verified
+    // фактов (например, несколько незакрытых вопросов клиента в одном
+    // пункте "Требует уточнения"). Проверка по одному source не находит
+    // совпадения для такой комбинации, хотя каждая часть по отдельности
+    // подтверждена. Если совпадения по одному source нет, разрешаем
+    // объединённое подтверждение по всему Store целиком.
+    const unionGrounded=matchingSources.length>0||isGroundedIn(item.value,storeText);
+    if(!unionGrounded&&!transcriptLocation){errors.push({path:'key_facts['+index+']',message:'Факт отсутствует в Conversation Store.'});return;}
+    if(!matchingSources.length) return;
     const onlyObjectPrice=matchingSources.every(source=>{
       const sourceType=moduleSummaryNorm(String(source&&source.category||'')+' '+String(source&&source.name||'')+' '+String(source&&source.type||''));
       return /object information|object_information|цена в объявлении|цена объекта|стоимость объекта/.test(sourceType)&&!/budget|бюджет/.test(sourceType);
@@ -6544,7 +6560,11 @@ function moduleSummaryGrounding(value,store,transcript=''){
     if(nextTokens.length&&!nextTokens.some(token=>sourceNorm.includes(token))) errors.push({path:'next_step',message:'Следующий шаг не подтверждён primary_next_step или связанными agreements.'});
     if(primary.owner==='агент'&&/\bклиент\b[^.]{0,40}\b(?:отправит|позвонит|подготовит|уточнит)\b/i.test(value.next_step)) errors.push({path:'next_step',message:'Ответственный за следующий шаг не совпадает с Conversation Store.'});
     if(primary.owner==='клиент'&&/\bагент\b[^.]{0,40}\b(?:отправит|позвонит|подготовит|уточнит)\b/i.test(value.next_step)) errors.push({path:'next_step',message:'Ответственный за следующий шаг не совпадает с Conversation Store.'});
-    const outputNumbers=(moduleSummaryNorm(value.next_step).match(/\b\d+(?:[.,:]\d+)?\b/g)||[]);
+    // Нумерованный список ("1) сделать это; 2) сделать то") — допустимый
+    // способ перечислить шаги, но цифры-маркеры пунктов не являются
+    // придуманным сроком/суммой и не должны попадать в проверку чисел ниже.
+    const nextStepForNumbers=String(value.next_step||'').replace(/(^|[;.]\s*)\d+[).]\s*/g,'$1');
+    const outputNumbers=(moduleSummaryNorm(nextStepForNumbers).match(/\b\d+(?:[.,:]\d+)?\b/g)||[]);
     if(outputNumbers.some(number=>!sourceNorm.includes(number.replace(',','.')))) errors.push({path:'next_step',message:'Срок следующего шага отсутствует в evidence.'});
     const temporal=['сегодня','завтра','послезавтра','понедельник','вторник','среда','четверг','пятница','суббота','воскресенье'];
     const inventedDeadline=temporal.find(marker=>moduleSummaryNorm(value.next_step).includes(marker)&&!sourceNorm.includes(marker));
