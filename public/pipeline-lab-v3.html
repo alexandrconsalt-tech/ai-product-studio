@@ -7225,6 +7225,7 @@ function agentUtilityOutOfScopeProblem(item){
   if(/(?:телефон|номер телефона|адрес|цена объекта|стоимость объекта|площад|этаж|комнатност|имя агента|имя клиента).*(?:не указан|отсутств|нужно добавить)|(?:не указан|отсутств|нужно добавить).*(?:телефон|адрес|цена объекта|площад|этаж|комнатност|имя)/.test(text)) return true;
   if(/достоверност|неверн.*(?:сумм|бюджет|роль)|дословност.*цитат|искажен.*цитат/.test(text)) return true;
   if(/(?:какой|точн|конкретн).{0,30}(?:видео|файл|url|ссылк|аккаунт)|(?:видео|файл|url|ссылк|аккаунт).{0,30}(?:какой|точн|конкретн)/.test(text)) return true;
+  if(type==='missing_action_context'&&/(?:критери|фильтр|приорит|включать|исключать).*(?:подбор|вариант)|(?:подбор|вариант).*(?:критери|фильтр|приорит|включать|исключать)/.test(text)) return true;
   if(type==='recording_required'&&/второстеп|необязательн.*детал|мелк.*детал/.test(text)) return true;
   return false;
 }
@@ -7337,6 +7338,13 @@ function actionCheckRecipientIssueCovered(item,ctx){
   const selected=actionCheckStore(ctx),primaryAction=moduleSummaryNorm(selected.primary_next_step&&selected.primary_next_step.action),next=moduleSummaryNorm(ctx&&ctx.summary&&ctx.summary.next_step);
   return Boolean(primaryAction&&next.includes(primaryAction));
 }
+function actionCheckPartCovered(action,next){
+  const actionNorm=moduleSummaryNorm(action),nextNorm=moduleSummaryNorm(next),tokens=moduleSummaryTokens(action);
+  if(tokens.length&&tokens.some(token=>nextNorm.includes(token))) return true;
+  if(/(?:провер|посмотр|подбер).*(?:вариант|что есть)|(?:вариант|что есть).*(?:провер|посмотр|подбер)/.test(actionNorm)&&/(?:подборк|альтернативн).*(?:участ|вариант)|(?:участ|вариант).*(?:подборк|альтернативн)/.test(nextNorm)) return true;
+  if(/(?:ссылк|подборк)/.test(actionNorm)&&/подборк.*(?:альтернатив|вариант|участ)/.test(nextNorm)) return true;
+  return false;
+}
 function validateActionCheckIssue(item,path,ctx){
   truthExactObject(item,path,['type','field','summary_fragment','problem','expected','evidence']);
   ['type','field','summary_fragment','problem','expected','evidence'].forEach(key=>truthString(item[key],path+'.'+key,{required:true}));
@@ -7350,6 +7358,7 @@ function validateActionCheckIssue(item,path,ctx){
   }
   if(actionCheckRecipientIssueCovered(item,ctx)) return null;
   if(actionCheckSecondaryAgreementIssue(item,ctx)) return null;
+  if(item.type==='missing_action_part'&&actionCheckPartCovered(item.expected,ctx.summary.next_step)) return null;
   return item;
 }
 function validateActionCheckJudgeOutput(value,ctx){
@@ -7384,7 +7393,7 @@ function actionCheckCodeIssues(ctx){
     const nextInspect=nextNorm.search(inspectRx),nextSelection=nextNorm.search(selectionRx),evidenceInspect=sequenceEvidence.search(inspectRx),evidenceSelection=sequenceEvidence.search(selectionRx);
     const evidenceSupportsSequence=nextInspect>=0&&nextSelection>=0&&evidenceInspect>=0&&evidenceSelection>=0&&Math.sign(nextInspect-nextSelection)===Math.sign(evidenceInspect-evidenceSelection);
     if(!evidenceSupportsSequence&&actionPositions.length>1&&actionPositions.some((position,index)=>index>0&&position<actionPositions[index-1])) issues.push(actionCheckIssue('sequence_distortion','sequence',next,'Порядок связанных действий искажён.',linked.map(item=>item.action).join(' → '),evidence));
-    linked.forEach(item=>{const tokens=moduleSummaryTokens(item.action);if(tokens.length&&!tokens.some(token=>nextNorm.includes(token))) issues.push(actionCheckIssue('missing_action_part','action',next,'Пропущена часть primary next step.',item.action,item.evidence||evidence));});
+    linked.forEach(item=>{if(!actionCheckPartCovered(item.action,next)) issues.push(actionCheckIssue('missing_action_part','action',next,'Пропущена часть primary next step.',item.action,item.evidence||evidence));});
   }
   return issues;
 }
@@ -7422,8 +7431,10 @@ function presentationMetrics(summary){
   return {total_characters:moduleSummaryVisibleText(summary).length,conversation_result_characters:summary.conversation_result.length,key_facts_count:summary.key_facts.length,quotes_count:summary.quotes.length,next_step_characters:summary.next_step.length,sentence_count:sentences.length};
 }
 function validatePresentationSummaryShape(value){
-  truthExactObject(value,'',['status','conversation_result','key_facts','quotes','next_step','error']);
+  const keys=['status','conversation_result','key_facts','quotes','next_step','error',...(Object.prototype.hasOwnProperty.call(value||{},'confidence')?['confidence']:[])];
+  truthExactObject(value,'',keys);
   if(!['GENERATED','MANUAL_REVIEW'].includes(value.status)) truthFail('status','expected GENERATED | MANUAL_REVIEW, received '+JSON.stringify(value.status));
+  if(Object.prototype.hasOwnProperty.call(value,'confidence')&&(typeof value.confidence!=='number'||!Number.isFinite(value.confidence)||value.confidence<0||value.confidence>1)) truthFail('confidence','expected number from 0 to 1');
   truthString(value.conversation_result,'conversation_result');
   if(!Array.isArray(value.key_facts)) truthFail('key_facts','expected array, received '+moduleSummaryType(value.key_facts));
   value.key_facts.forEach((item,index)=>{const path='key_facts['+index+']';truthExactObject(item,path,['label','value']);truthString(item.label,path+'.label');truthString(item.value,path+'.value');});
@@ -7751,6 +7762,22 @@ function applyFactExtractionPolicies(value,ctx){
         recoveredFactCount++;warnings.push('AGENT_INSPECTION_COMMITMENT_ADDED');
       }
     }
+    const canonicalIzh=facts.find(item=>item&&item.category==='search_criteria'&&/ижс/i.test(String(item.normalized_value??item.value)));
+    if(canonicalIzh){
+      const canonicalEvidence=normalizedSemanticText(canonicalIzh.evidence);
+      const duplicateIds=[];
+      for(let index=facts.length-1;index>=0;index--){
+        const item=facts[index];
+        if(item===canonicalIzh||item.category!=='search_criteria') continue;
+        const identity=normalizedSemanticText([item.name,item.value,item.normalized_value].join(' '));
+        if(!/(?:ижс|назначение)/.test(identity)||normalizedSemanticText(item.evidence)!==canonicalEvidence) continue;
+        duplicateIds.push(item.id);facts.splice(index,1);
+      }
+      if(duplicateIds.length){
+        quotes.forEach(quote=>{quote.supports_fact_ids=toList(quote.supports_fact_ids).map(id=>duplicateIds.includes(id)?canonicalIzh.id:id).filter((id,index,list)=>list.indexOf(id)===index);});
+        warnings.push('CONTEXTUAL_IZHS_DUPLICATE_REMOVED');
+      }
+    }
   }
   return {
     value:{...value,facts,quotes,extraction_meta:{fact_count:facts.length,quote_count:quotes.length,decision:facts.length?'EXTRACTED':'NO_FACTS'}},
@@ -7923,6 +7950,7 @@ function relevantFactJudgeWarnings(warnings,input){
   return toList(warnings).filter(warning=>{
     const text=normalizedSemanticText(warning);
     if(/телефон|номер[а-яё]* клиент|phone|contact/.test(text)) return false;
+    if(/дублирующ[а-яё]* факт|duplicate fact/.test(text)) return false;
     if(/имя клиент|клиент.*николай|ответственн.*агент|агент.*богдан/.test(text)) return false;
     if(/ижс/.test(text)&&/ижс/.test(source)) return false;
     if(/бюджет|цен[аы].*до/.test(text)&&/(5500000|5 5 млн|до пяти с половин)/.test(source)) return false;
@@ -8220,7 +8248,7 @@ const NEED_FUNDING_VALUES=new Set(['наличные / депозит','ипот
 const NEED_TERM_VALUES=new Set(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
 const NEED_REQUIREMENT_TYPES=new Set(['search_location','property_type','market_type','residential_complex','rooms','minimum_area','maximum_area','minimum_land_area','maximum_land_area','repair','floor_preference','transport_accessibility','infrastructure','legal_requirement','price_limit','hard_constraint','rejected_option','other_requirement','area','floor','other']);
 const NEED_ITEM_KEYS=['value','confidence','evidence','source_fact_ids','verification_status'];
-const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS']);
+const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE']);
 
 class NeedSchemaError extends Error{
   constructor(message){super(message);this.name='NeedSchemaError';}
@@ -8271,6 +8299,7 @@ function verifiedNeedFacts(ctx){
 
 function normalizeNeedExtractionSemantics(value,ctx){
   const out=JSON.parse(JSON.stringify(value));
+  const semanticTransformations=toList(out.need_meta&&out.need_meta.transformations);
   const facts=verifiedNeedFacts(ctx);
   const factText=fact=>normalizedSemanticText([fact.category,fact.name,fact.value,fact.normalized_value,fact.evidence].flat().join(' '));
   const clientFacts=facts.filter(fact=>fact.speaker==='Клиент');
@@ -8320,6 +8349,15 @@ function normalizeNeedExtractionSemantics(value,ctx){
     if(req.type==='price_limit') return clientConfirmed&&/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(source)&&!/(цена|стоимость|объявлен)/.test(source);
     return clientConfirmed;
   });
+  out.requirements.forEach(req=>{
+    if(req.type!=='search_location') return;
+    const range=String(req.evidence||'').match(/там,\s*([а-яё-]+(?:,\s*[а-яё-]+){1,4}),?\s*что-нибудь такое/i);
+    const locations=range?range[1].split(',').map(item=>canonicalSearchLocation(item.trim())).filter(Boolean):[];
+    const current=toList(req.normalized_value??req.value).map(canonicalSearchLocation).filter(Boolean);
+    if(locations.length<2||locations.every(location=>current.some(item=>moduleSummaryNorm(item)===moduleSummaryNorm(location)))) return;
+    req.value=locations;req.normalized_value=locations;
+    semanticTransformations.push({type:'RECOVER_SEARCH_LOCATION_RANGE',output_requirement_id:req.id,source_requirement_ids:[req.id]});
+  });
   const addRequirement=(type,fact)=>{
     if(out.requirements.some(item=>item.type===type&&item.source_fact_ids.includes(fact.id))) return;
     const used=new Set(out.requirements.map(item=>item.id));
@@ -8353,7 +8391,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
   });
   const locationDeduplication=deduplicateSearchLocationRequirements(out.requirements);
   out.requirements=locationDeduplication.requirements;
-  out.need_meta.transformations=locationDeduplication.transformations;
+  out.need_meta.transformations=[...semanticTransformations,...locationDeduplication.transformations];
   out.need_meta.interest_count=out.attributes.interest.length;
   out.need_meta.requirements_count=out.requirements.length;
   const noNeeds=!out.attributes.interest.length&&!out.requirements.length&&out.attributes.funding_source.value==='не определено'&&out.attributes.purchase_term.value==='не определено';
@@ -8802,7 +8840,9 @@ function normalizeOutcomeSemantics(value,ctx){
     const channelTokens=communicationChannelTokens(agreement.channel),evidenceChannelTokens=communicationChannelTokens(evidence);
     const selectedChannelSupported=channelTokens.some(token=>evidenceChannelTokens.includes(token)||preferredChannelTokens.includes(token));
     if(agreement.channel&&!(selectedChannelSupported||/whatsapp|ватсап|telegram|телеграм|почт|email|звон|телефон|видео|ссылк/.test(evidence))) agreement.channel='';
-    if(agreement.owner==='агент'&&/(?:^|\s)я\s+(?:посмотрю|проверю|подберу|уточню)(?:\s|$)/.test(evidence)&&!/договорил|соглас|хорошо/.test(evidence)) agreement.status='promised';
+    const internalInspection=agreement.owner==='агент'&&/(?:посмотр|провер|подбер).*(?:вариант|что есть)|(?:вариант|что есть).*(?:посмотр|провер|подбер)/.test(normalizedSemanticText([agreement.action,evidence].join(' ')))&&!/(?:отправ|скин|пришл|направ)/.test(normalizedSemanticText(agreement.action));
+    if(internalInspection){agreement.channel='';agreement.status='promised';}
+    else if(agreement.owner==='агент'&&/(?:^|\s)я\s+(?:посмотрю|проверю|подберу|уточню)(?:\s|$)/.test(evidence)&&!/договорил|соглас|хорошо/.test(evidence)) agreement.status='promised';
     return agreement;
   });
   const agreementIds=new Set(normalized.agreements.map(item=>item.id));
@@ -8843,6 +8883,7 @@ function normalizeOutcomeSemantics(value,ctx){
     Object.assign(primary,{action:'',owner:'',deadline:'',channel:'',status:'not_defined',agreement_ids:[],confidence:primary.confidence,verification_status:'pending'});
   }else{
     primary.action=outcomeFutureAction(primary.action,primaryAgreements.map(item=>item.evidence).join(' '));
+    primary.status=primaryAgreements.some(item=>item.status==='promised')?'promised':primaryAgreements.some(item=>item.status==='preliminary')?'preliminary':'confirmed';
     primary.channel=canonicalSelectedChannel(primary.channel);
     if(!primary.deadline){
       const deadlines=[...new Set(primaryAgreements.map(item=>item.deadline).filter(Boolean))];
@@ -9159,6 +9200,14 @@ function outcomeJudgeEntries(input){
 function validateOutcomeJudgeOutput(value,input){
   if(value&&Array.isArray(value.items)){
     value.items.forEach(item=>{
+      const originalAgreement=toList(input&&input.agreements).find(agreement=>agreement&&agreement.id===item.id);
+      const internalInspection=originalAgreement&&/(?:посмотр|провер|подбер).*(?:вариант|что есть)|(?:вариант|что есть).*(?:посмотр|провер|подбер)/.test(normalizedSemanticText([originalAgreement.action,originalAgreement.evidence].join(' ')))&&!/(?:отправ|скин|пришл|направ)/.test(normalizedSemanticText(originalAgreement.action));
+      if(item&&item.verdict==='needs_correction'&&item.corrections&&internalInspection){
+        delete item.corrections.channel;
+        delete item.corrections.confidence;
+        if(item.corrections.status==='confirmed'&&originalAgreement.status==='promised') delete item.corrections.status;
+        if(!Object.keys(item.corrections).length) item.verdict='verified';
+      }
       if(item&&item.verdict==='needs_correction'&&item.corrections&&item.corrections.recipient===''){
         item.verdict='rejected';item.corrections={};
       }

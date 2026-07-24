@@ -3963,6 +3963,56 @@ test("земельный Summary нормализуется без дублей 
   expect(result.confidence).toBe(.963);
 });
 
+test("production-вариативность восстанавливает локации и не создаёт ложные corrections", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript="Агент:\n— Вам ИЖС?\nКлиент:\n— Да, да, конечно, я понял.";
+    const extracted=applyFactExtractionPolicies({
+      facts:[{id:'fact_1',category:'search_criteria',name:'требование по назначению (ИЖС)',value:true,normalized_value:true,speaker:'Клиент',evidence:'Да, да, конечно, я понял.',confidence:.9,verification_status:'pending'}],
+      quotes:[{id:'quote_1',text:'Да, да, конечно, я понял.',speaker:'Клиент',supports_fact_ids:['fact_1'],confidence:.9,verification_status:'pending'}],
+      extraction_meta:{fact_count:1,quote_count:1,decision:'EXTRACTED'}
+    },{transcript});
+    const locationFact={id:'location',category:'search_location',name:'область поиска',value:['Капитолово','Лаврики'],normalized_value:['Капитолово','Лаврики'],speaker:'Клиент',evidence:'Я ищу участки. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',confidence:.95,verification_status:'verified',verified:true};
+    const needs=normalizeNeedExtractionSemantics({
+      attributes:{interest:[],funding_source:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'},purchase_term:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'}},
+      requirements:[{id:'req_location',type:'search_location',value:['Капитолово','Лаврики'],confidence:.9,evidence:locationFact.evidence,source_fact_ids:['location'],verification_status:'pending'}],
+      need_meta:{interest_count:0,requirements_count:1,decision:'EXTRACTED'}
+    },{fact_check:{verified_facts:[locationFact]}});
+    const outcomeInput=normalizeOutcomeSemantics({
+      call_results:[],
+      agreements:[{id:'agreement_1',action:'проверить дополнительные варианты',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'',status:'confirmed',evidence:'Сейчас посмотрю, что есть ещё.',confidence:.9,verification_status:'pending'}],
+      primary_next_step:{action:'проверить дополнительные варианты',owner:'агент',deadline:'после звонка',channel:'',status:'confirmed',agreement_ids:['agreement_1'],confidence:.9,verification_status:'pending'},
+      outcome_meta:{result_count:0,agreement_count:1,decision:'EXTRACTED'}
+    },{fact_check:{verified_facts:[]},transcript:'Агент:\n— Сейчас посмотрю, что есть ещё.'});
+    const judge=validateOutcomeJudgeOutput({items:[
+      {id:'agreement_1',verdict:'needs_correction',reason:'Канал MAX общий.',confidence:.85,corrections:{channel:'MAX',confidence:.85}},
+      {id:'primary_next_step',verdict:'verified',reason:'Шаг подтверждён.',confidence:.9,corrections:{}}
+    ],overall_confidence:.9,warnings:[]},outcomeInput);
+    const outcome=mergeOutcomeCheck({hardFail:false,criteria:[]},judge,null,outcomeInput,{});
+    const summary={status:'GENERATED',conversation_result:'Клиент рассматривает участок.',key_facts:[],quotes:[],next_step:'Агент отправит клиенту подборку альтернативных участков.',error:'',confidence:.95};
+    const utility=validateAgentUtilityJudgeOutput({status:'fail',score:80,can_continue_without_recording:false,context_clarity:80,actionability:80,scanability:100,recording_independence:80,missing_for_next_agent:[],useful_summary_elements:[],problems:[{type:'missing_action_context',field:'next_step',summary_fragment:summary.next_step,problem:'Не указаны критерии приоритизации подборки и фильтры вариантов.'}],explanation:'Проверка'}, {summary,conversation_store:{conversation:{agreements:[{id:'a',action:'отправить подборку',owner:'агент'}],primary_next_step:{action:'отправить подборку',owner:'агент',status:'confirmed',agreement_ids:['a']}}}});
+    return {
+      facts:extracted.value.facts,
+      quoteRefs:extracted.value.quotes[0].supports_fact_ids,
+      locations:needs.requirements[0].value,
+      transformations:needs.need_meta.transformations,
+      outcome:{score:outcome.score,decision:outcome.decision,agreement:outcome.verified_agreements[0],primary:outcome.verified_primary_next_step},
+      utilityProblems:utility.problems,
+      actionCovered:actionCheckPartCovered('проверить дополнительные варианты',summary.next_step),
+      presentationStatus:validatePresentationSummaryShape(summary).status
+    };
+  });
+
+  expect(result.facts.filter((item: any) => /ижс/i.test(String(item.normalized_value ?? item.value)))).toHaveLength(1);
+  expect(result.quoteRefs).toEqual([result.facts[0].id]);
+  expect(result.locations).toEqual(["Мистолово", "Капитолово", "Лаврики"]);
+  expect(result.transformations).toContainEqual(expect.objectContaining({ type: "RECOVER_SEARCH_LOCATION_RANGE" }));
+  expect(result.outcome).toMatchObject({ score: 100, decision: "PASS", agreement: { channel: "", status: "promised" }, primary: { status: "promised" } });
+  expect(result.utilityProblems).toEqual([]);
+  expect(result.actionCovered).toBe(true);
+  expect(result.presentationStatus).toBe("GENERATED");
+});
+
 test("проверки качества не штрафуют общий client goal, дословную цитату и принадлежащий агенту файл", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
