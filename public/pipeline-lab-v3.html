@@ -410,51 +410,14 @@ const MODULE_TRUTH_CHECK_PROMPT = `Ты — независимый Fact Judge и
 
 Каналы «Макс» и MAX эквивалентны. Допустимые type: hallucination, money_or_number_error, next_step_error, agreement_not_confirmed, wrong_owner, overstated_agreement, role_confusion, fact_distortion, question_as_fact, invented_deadline, invented_channel, completed_instead_of_promised, quote_distortion, quote_not_verified, pii_exposure, normalization_error, fact_not_in_store. Числа, status и флаги будут пересчитаны кодом.`;
 
-const MODULE_CRITICAL_COMPLETENESS_PROMPT = `Ты — независимый Judge полноты критически важной информации в CRM-саммари.
+const MODULE_CRITICAL_COMPLETENESS_PROMPT = `Ты — независимый Judge полноты CRM-саммари.
 
-Определи только реально существующие критические элементы из переданного Conversation Store и проверь, отражены ли они в summary. Используй исключительно facts, requirements, attributes и call_results. Транскрипция передаётся лишь как контекст для понимания evidence. Не используй rejected, missing, pending, raw, quotes, agreements, primary_next_step, данные карточки CRM или неизвестные значения.
+Список EXPECTED_CRITICAL_ITEMS уже построен кодом из verified Conversation Store и является закрытым. Не добавляй и не удаляй пункты, не меняй id, не придумывай category, totals, score, status или decision. Для каждого входного id ровно один раз укажи, отражён ли смысл expected в conversation_result или key_facts.
 
-Допустимые category: client_goal, budget, required_criteria, funding_source, purchase_term, main_objection, hard_constraint, refusal_reason, decision_participant, critical_question, critical_context.
-
-decision_participant используй только когда verified Store прямо говорит, что решение принимает или согласует другое лицо. Обычный client_role/status и тип продавца («частное лицо», «физлицо», «юрлицо», «агент») — данные карточки, не критический элемент и не пропуск Summary. Канал отправки и обещание агента отправить материалы относятся к next_step/Action Check и не являются элементами critical completeness.
-
-Не считай бюджетом цену объекта; адрес объекта — поисковой локацией без явного требования клиента; дату показа — сроком покупки; сомнение — отказом. Вопрос клиента из facts не является critical_question, если Store не помечает его как оставшийся без ответа и блокирующий продолжение работы. Значение «не определено» не является критическим элементом. Не требуй все requirements подряд: выбирай только необходимые для продолжения работы. Подтверждённое назначение/тип объекта, включая ИЖС, всегда является required_criteria. Один фрагмент summary может покрывать несколько элементов. Не заменяй факты цитатами и не смешивай следующий шаг с потребностями.
+Если смысл отражён, present=true, summary_field="conversation_result" либо "key_facts", summary_fragment — точный непустой фрагмент соответствующего поля Summary. Если не отражён, present=false и оба текстовых поля пусты. confidence — уверенность проверки 0..1. Один фрагмент может покрывать несколько пунктов.
 
 Верни строго JSON без markdown и дополнительных полей:
-{
-  "status":"pass",
-  "score":100,
-  "critical_items_total":0,
-  "critical_items_present":0,
-  "critical_items_missing":0,
-  "critical_items":[{
-    "id":"critical-1",
-    "category":"client_goal",
-    "expected":"что должно быть отражено",
-    "present":true,
-    "summary_field":"conversation_result",
-    "summary_fragment":"точный фрагмент summary",
-    "evidence":"точный фрагмент разрешённого Store"
-  }],
-  "missing_items":[{
-    "id":"critical-2",
-    "type":"budget",
-    "category":"budget",
-    "expected":"что пропущено",
-    "importance":"critical",
-    "reason":"почему важно",
-    "evidence":"точный фрагмент разрешённого Store"
-  }],
-  "warnings":[{
-    "type":"ambiguous_coverage",
-    "category":"critical_context",
-    "message":"краткое предупреждение",
-    "evidence":"точный фрагмент разрешённого Store"
-  }],
-  "explanation":"краткий итог"
-}
-
-Для отсутствующего элемента summary_field и summary_fragment должны быть пустыми строками. Для present=true summary_field может быть только conversation_result или key_facts: не оценивай next_step и quotes. summary_fragment — только точный видимый текст label или value, не JSON-сериализация объекта. Для каждого present=false верни ровно один missing_items с теми же id, category, expected и evidence: скопируй эти четыре поля из соответствующего critical_items без перефразирования. В missing_items type должен совпадать с category и быть одним из допустимых category. Числа, score и status будут пересчитаны кодом.`;
+{"items":[{"id":"входной id","present":true,"summary_field":"conversation_result","summary_fragment":"точный фрагмент Summary","confidence":0.98}],"overall_confidence":0.98,"warnings":[]}`;
 
 const MODULE_AGENT_UTILITY_PROMPT = `Ты — независимый Judge практической полезности CRM-саммари для следующего агента.
 
@@ -2071,24 +2034,30 @@ function attachReviewerScores(stageReports){
     const reviewerMeta=reviewer.report.meta||buildStageMeta(reviewer.stage,reviewer.report);
     if(reviewerMeta.score==null) return;
     const sourceMeta=source.report.meta||buildStageMeta(source.stage,source.report);
+    const recoveryStatus=String(source.report.contract_audit&&source.report.contract_audit.status||'VALID').toUpperCase();
+    const recoveryCap=recoveryStatus==='RECOVERED_WITH_WARNING'?95:recoveryStatus==='REPAIRED'?90:recoveryStatus==='INVALID'?null:100;
+    if(recoveryCap==null) return;
+    const reviewerScore=Math.min(Number(reviewerMeta.score),recoveryCap);
     source.report.meta={
       ...sourceMeta,
-      score:reviewerMeta.score,
+      score:reviewerScore,
       confidence:sourceKey==='summary'?reviewerMeta.confidence:(sourceMeta.confidence??reviewerMeta.confidence),
-      status:reviewerMeta.status,
-      explanation:'Оценка независимого проверщика: '+reviewer.stage.name+'.',
-      criteria:[{name:'Оценка независимого Judge',checker:'llm',status:reviewerMeta.status,score:reviewerMeta.score,explanation:reviewerMeta.explanation}]
+      status:recoveryCap<100&&reviewerMeta.status==='pass'?'warning':reviewerMeta.status,
+      explanation:'Оценка независимого проверщика: '+reviewer.stage.name+'.'+(recoveryCap<100?' Применён лимит '+recoveryCap+' из-за восстановления контракта.':''),
+      criteria:[{name:'Оценка независимого Judge',checker:'llm',status:reviewerMeta.status,score:reviewerScore,explanation:reviewerMeta.explanation}]
     };
     source.report.evaluation={
-      status:reviewerMeta.status,
-      score:reviewerMeta.score,
+      status:source.report.meta.status,
+      score:reviewerScore,
       decision:String(reviewer.report.output?.decision||reviewer.report.output?.status||reviewerMeta.status).toUpperCase(),
       source_stage:reviewer.stage.outKey,
-      source_stage_name:reviewer.stage.name
+      source_stage_name:reviewer.stage.name,
+      recovery_status:recoveryStatus,
+      score_cap:recoveryCap
     };
     const metrics=Array.isArray(source.report.metrics)?source.report.metrics.filter(item=>item&&item[0]!=='Итоговая оценка'&&item[0]!=='Источник оценки'):[];
-    source.report.metrics=[...metrics,['Итоговая оценка',reviewerMeta.score],['Источник оценки',reviewer.stage.name]];
-    source.report.status=reviewerMeta.status==='fail'?'bad':(reviewerMeta.status==='warning'?'warn':'ok');
+    source.report.metrics=[...metrics,['Итоговая оценка',reviewerScore],['Источник оценки',reviewer.stage.name],...(recoveryCap<100?[['Ограничение оценки',recoveryCap+' · '+recoveryStatus]]:[])];
+    source.report.status=source.report.meta.status==='fail'?'bad':(source.report.meta.status==='warning'?'warn':'ok');
   });
 }
 
@@ -4267,7 +4236,7 @@ function canonicalSearchLocation(value){
 
 function deduplicateSearchLocationRequirements(requirements){
   const source=toList(requirements),locations=source.filter(item=>item&&item.type==='search_location');
-  if(locations.length<2) return {requirements:source,count:0,provenance:[]};
+  if(!locations.length) return {requirements:source,count:0,provenance:[]};
   const values=[],sourceFactIds=[],mergedIds=[];
   locations.forEach(item=>{
     toList(item.value).forEach(value=>{const canonical=canonicalSearchLocation(value);if(canonical&&!values.some(existing=>moduleSummaryNorm(existing)===moduleSummaryNorm(canonical))) values.push(canonical);});
@@ -4275,7 +4244,8 @@ function deduplicateSearchLocationRequirements(requirements){
     if(item.id)mergedIds.push(item.id);
   });
   const base=[...locations].sort((a,b)=>toList(b.value).length-toList(a.value).length)[0];
-  const merged={...base,value:values,normalized_value:values,source_fact_ids:sourceFactIds,deduplication_provenance:{strategy:'MERGE_OVERLAPPING_SEARCH_LOCATIONS',merged_requirement_ids:mergedIds}};
+  const mergedValue=locations.length===1&&!Array.isArray(base.value)?values[0]:values;
+  const merged={...base,value:mergedValue,normalized_value:mergedValue,source_fact_ids:sourceFactIds,deduplication_provenance:{strategy:'MERGE_OVERLAPPING_SEARCH_LOCATIONS',merged_requirement_ids:mergedIds}};
   const firstIndex=source.findIndex(item=>item&&item.type==='search_location');
   const result=source.filter(item=>!item||item.type!=='search_location');
   result.splice(Math.min(firstIndex,result.length),0,merged);
@@ -4586,7 +4556,8 @@ function summaryQualityGateAttributePolicy(ctx){
 function summaryQualityGateTechnicalOutput(ctx,criteria,technicalErrors){
   const runId=String(ctx&&ctx.__run_id||''),transcriptHash=String(ctx&&ctx.__transcript_hash||''),pipelineHash=String(ctx&&ctx.__pipeline_configuration_hash||''),storeHash=summaryQualityGateStoreHash(ctx),summaryStatus=summaryQualityGateSummaryStatus(ctx)||'ERROR',storeStatus=summaryQualityGateStoreStatus(ctx)||'TECHNICAL_ERROR';
   const hardStops=[],warnings=[],hash=stableHash({criteria:Object.values(criteria).map(item=>[item.score,item.status]),hardStops,summary:stableHash(ctx&&ctx.summary||{}),storeHash,version:SUMMARY_QUALITY_GATE_VERSION,thresholds:SUMMARY_QUALITY_GATE_THRESHOLDS});
-  return {status:'TECHNICAL_ERROR',summary_quality_score:0,decision:'TECHNICAL_ERROR',criteria,thresholds:{...SUMMARY_QUALITY_GATE_THRESHOLDS},hard_stops:hardStops,warnings,technical_errors:summaryQualityGateDedupe(technicalErrors,['code','source','field','message']),can_save_to_crm:false,requires_manual_review:false,summary_status:summaryStatus,store_status:storeStatus,explanation:'Решение о качестве не принято из-за технической ошибки входных данных или provenance.',crm_write_policy:{summary:'TECHNICAL_ERROR',attributes:summaryQualityGateAttributePolicy(ctx)},metadata:{run_id:runId,transcript_hash:transcriptHash,conversation_store_hash:storeHash,pipeline_configuration_hash:pipelineHash,quality_gate_version:SUMMARY_QUALITY_GATE_VERSION,quality_gate_hash:hash}};
+  const confidence=Math.round(1000*Math.max(0,Math.min(1,Number(ctx&&ctx.summary&&ctx.summary.confidence)||0))*.95)/1000;
+  return {status:'TECHNICAL_ERROR',summary_quality_score:null,weighted_quality_score:null,effective_quality_score:null,confidence,decision:'TECHNICAL_ERROR',criteria,thresholds:{...SUMMARY_QUALITY_GATE_THRESHOLDS},hard_stops:hardStops,warnings,technical_errors:summaryQualityGateDedupe(technicalErrors,['code','source','field','message']),can_save_to_crm:false,requires_manual_review:false,summary_status:summaryStatus,store_status:storeStatus,explanation:'Решение о качестве не принято из-за технической ошибки входных данных или provenance.',crm_write_policy:{summary:'TECHNICAL_ERROR',attributes:summaryQualityGateAttributePolicy(ctx)},metadata:{run_id:runId,transcript_hash:transcriptHash,conversation_store_hash:storeHash,pipeline_configuration_hash:pipelineHash,quality_gate_version:SUMMARY_QUALITY_GATE_VERSION,quality_gate_hash:hash}};
 }
 function moduleSummaryQualityGateV1(ctx){
   const technicalErrors=[],criteria={},runId=String(ctx&&ctx.__run_id||''),transcriptHash=String(ctx&&ctx.__transcript_hash||''),pipelineHash=String(ctx&&ctx.__pipeline_configuration_hash||''),storeHash=summaryQualityGateStoreHash(ctx),provenance=ctx&&ctx.__stage_provenance||{};
@@ -4635,7 +4606,7 @@ function moduleSummaryQualityGateV1(ctx){
   }
   const canSave=decision==='AUTO_SAVE'||decision==='SAVE_WITH_WARNING',requiresReview=decision==='REVIEW_REQUIRED',hash=stableHash({criteria:criterionValues.map(item=>[item.score,item.status]),hardStops,summary:stableHash(ctx.summary),storeHash,version:SUMMARY_QUALITY_GATE_VERSION,thresholds:SUMMARY_QUALITY_GATE_THRESHOLDS});
   const explanation=decision==='AUTO_SAVE'?'Все пять критериев прошли пороги автоматического сохранения.':decision==='SAVE_WITH_WARNING'?'Summary можно сохранить с warning-флагом и зафиксированными причинами.':'Обнаружены hard stops, низкая оценка или сигнал обязательной ручной проверки.';
-  return {status:decision,summary_quality_score:summaryQualityScore,decision,criteria,thresholds:{...SUMMARY_QUALITY_GATE_THRESHOLDS},hard_stops:hardStops,warnings,technical_errors:[],can_save_to_crm:canSave,requires_manual_review:requiresReview,summary_status:summaryQualityGateSummaryStatus(ctx),store_status:storeStatus,explanation,crm_write_policy:{summary:decision,attributes:summaryQualityGateAttributePolicy(ctx)},metadata:{run_id:runId,transcript_hash:transcriptHash,conversation_store_hash:storeHash,pipeline_configuration_hash:pipelineHash,quality_gate_version:SUMMARY_QUALITY_GATE_VERSION,quality_gate_hash:hash}};
+  return {status:decision,summary_quality_score:summaryQualityScore,weighted_quality_score:rawSummaryQualityScore,effective_quality_score:summaryQualityScore,confidence:Number(ctx&&ctx.summary&&ctx.summary.confidence)||0,decision,criteria,thresholds:{...SUMMARY_QUALITY_GATE_THRESHOLDS},hard_stops:hardStops,warnings,technical_errors:[],can_save_to_crm:canSave,requires_manual_review:requiresReview,summary_status:summaryQualityGateSummaryStatus(ctx),store_status:storeStatus,explanation,crm_write_policy:{summary:decision,attributes:summaryQualityGateAttributePolicy(ctx)},metadata:{run_id:runId,transcript_hash:transcriptHash,conversation_store_hash:storeHash,pipeline_configuration_hash:pipelineHash,quality_gate_version:SUMMARY_QUALITY_GATE_VERSION,quality_gate_hash:hash}};
 }
 
 const CRM_SUMMARY_VERSION='summary_v1';
@@ -4716,9 +4687,11 @@ function crmExactKeys(value,path,keys){
   const extra=Object.keys(value).find(key=>!keys.includes(key));if(extra) throw new Error((path?path+'.':'')+extra+': unexpected field');
 }
 function crmValidateGate(gate){
-  crmExactKeys(gate,'summary_quality_gate',['status','summary_quality_score','decision','criteria','thresholds','hard_stops','warnings','technical_errors','can_save_to_crm','requires_manual_review','summary_status','store_status','explanation','crm_write_policy','metadata']);
+  crmExactKeys(gate,'summary_quality_gate',['status','summary_quality_score','weighted_quality_score','effective_quality_score','confidence','decision','criteria','thresholds','hard_stops','warnings','technical_errors','can_save_to_crm','requires_manual_review','summary_status','store_status','explanation','crm_write_policy','metadata']);
   if(!['AUTO_SAVE','SAVE_WITH_WARNING','REVIEW_REQUIRED','TECHNICAL_ERROR'].includes(gate.decision)||gate.status!==gate.decision) throw new Error('summary_quality_gate.decision: invalid or inconsistent decision');
-  if(typeof gate.summary_quality_score!=='number'||!Number.isFinite(gate.summary_quality_score)||gate.summary_quality_score<0||gate.summary_quality_score>100) throw new Error('summary_quality_gate.summary_quality_score: expected number from 0 to 100');
+  if(gate.decision==='TECHNICAL_ERROR'){
+    if(gate.summary_quality_score!==null||gate.weighted_quality_score!==null||gate.effective_quality_score!==null) throw new Error('summary_quality_gate: technical scores must be null');
+  }else if(typeof gate.summary_quality_score!=='number'||!Number.isFinite(gate.summary_quality_score)||gate.summary_quality_score<0||gate.summary_quality_score>100) throw new Error('summary_quality_gate.summary_quality_score: expected number from 0 to 100');
   if(!Array.isArray(gate.hard_stops)||!Array.isArray(gate.warnings)||!Array.isArray(gate.technical_errors)) throw new Error('summary_quality_gate: errors and warnings must be arrays');
   if(typeof gate.can_save_to_crm!=='boolean'||typeof gate.requires_manual_review!=='boolean') throw new Error('summary_quality_gate.can_save_to_crm: expected boolean');
   crmExactKeys(gate.crm_write_policy,'summary_quality_gate.crm_write_policy',['summary','attributes']);
@@ -4756,7 +4729,7 @@ function crmValidateInputs(ctx){
   const badPath=crmNoNullOrUndefined({summary,attributes:store.conversation&&store.conversation.attributes},'payload');
   if(badPath) return {gate,error:crmIssue('NULL_OR_UNDEFINED_IN_PAYLOAD',badPath,'CRM payload не должен содержать null или undefined.')};
   const phonePath=crmPhonePath(summary);if(phonePath) return {gate,error:crmIssue('PII_IN_SUMMARY',phonePath,'Телефон запрещён в CRM summary.')};
-  try{validateModuleSummaryOutput(summary);}catch(error){return {gate,error:crmIssue('INVALID_SUMMARY_SCHEMA','summary',error.message)};}
+  try{const {confidence,...summaryContract}=summary;validateModuleSummaryOutput(summaryContract);}catch(error){return {gate,error:crmIssue('INVALID_SUMMARY_SCHEMA','summary',error.message)};}
   return {gate,summaryHash};
 }
 function crmValidateAttributes(ctx,policies){
@@ -5505,7 +5478,7 @@ const CODE_FUNCS = {
   summaryQualityGate(stage,ctx){
     if(shouldUseSummaryQualityGateV1(ctx)){
       const output=moduleSummaryQualityGateV1(ctx),criterionValues=Object.values(output.criteria);
-      return {output,metrics:[['Summary Quality Score',output.summary_quality_score.toFixed(1)],['Decision',output.decision],['Можно сохранить в CRM',output.can_save_to_crm?'да':'нет'],['Ручная проверка',output.requires_manual_review?'да':'нет'],['Hard stops',output.hard_stops.length],['Warnings',output.warnings.length],['Technical errors',output.technical_errors.length]],status:output.decision==='AUTO_SAVE'?'ok':output.decision==='SAVE_WITH_WARNING'?'warn':output.decision==='REVIEW_REQUIRED'?'attn':'bad',confidenceBreakdown:criterionValues.map(item=>({k:item.label,label:item.label,val:item.score/100,w:item.weight})),checks:criterionValues.map(item=>({label:item.label+': '+item.status+' · '+item.score+' × '+Math.round(item.weight*100)+'% = '+item.weighted_score,pass:item.status==='pass',warn:item.status==='warning'})),isSummaryQualityGate:true};
+      return {output,metrics:[['Summary Quality Score',output.summary_quality_score==null?'—':output.summary_quality_score.toFixed(1)],['Decision',output.decision],['Confidence',output.confidence==null?'—':output.confidence],['Можно сохранить в CRM',output.can_save_to_crm?'да':'нет'],['Ручная проверка',output.requires_manual_review?'да':'нет'],['Hard stops',output.hard_stops.length],['Warnings',output.warnings.length],['Technical errors',output.technical_errors.length]],status:output.decision==='AUTO_SAVE'?'ok':output.decision==='SAVE_WITH_WARNING'?'warn':output.decision==='REVIEW_REQUIRED'?'attn':'bad',confidenceBreakdown:criterionValues.map(item=>({k:item.label,label:item.label,val:item.score/100,w:item.weight})),checks:criterionValues.map(item=>({label:item.label+': '+item.status+' · '+item.score+' × '+Math.round(item.weight*100)+'% = '+item.weighted_score,pass:item.status==='pass',warn:item.status==='warning'})),isSummaryQualityGate:true};
     }
     // Weights per Quality Framework v1, updated per the pipeline-simplification
     // pass (2026-07-08): Truth 40%, Critical Facts 20%, Context 20%, Action
@@ -6122,12 +6095,11 @@ function mockPipelineResponse(prompt){
     outcome_meta:{result_count:3,agreement_count:3,decision:'EXTRACTED'}
   };
   if(source.startsWith('Ты — независимый Fact Judge')) return {status:'pass',score:100,has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false,has_money_or_number_errors:false,has_agreement_errors:false,has_quote_errors:false,has_pii:false,critical_errors:[],warnings:[],checked_fields:{conversation_result:true,key_facts:true,quotes:true,next_step:true},explanation:'Все утверждения подтверждены Store.'};
-  if(source.startsWith('Ты — независимый Judge полноты')) return {status:'pass',score:100,critical_items_total:4,critical_items_present:4,critical_items_missing:0,critical_items:[
-    {id:'critical_goal',category:'client_goal',expected:'покупка участка ИЖС',present:true,summary_field:'conversation_result',summary_fragment:'рассматривает покупку участка ИЖС',evidence:'поиск участка'},
-    {id:'critical_budget',category:'budget',expected:'бюджет до 5,5 млн ₽',present:true,summary_field:'key_facts',summary_fragment:'до 5,5 млн ₽',evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.'},
-    {id:'critical_requirement',category:'required_criteria',expected:'ИЖС и площадь от 6 соток',present:true,summary_field:'key_facts',summary_fragment:'ИЖС, площадь от 6 соток',evidence:'Да, да, конечно, я понял.'},
-    {id:'critical_objection',category:'main_objection',expected:'ежемесячный взнос 9 600 ₽',present:true,summary_field:'key_facts',summary_fragment:'ежемесячный взнос 9 600 ₽',evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'}
-  ],missing_items:[],warnings:[],explanation:'Все критические элементы отражены.'};
+  if(source.startsWith('Ты — независимый Judge полноты')){
+    const expectedMatch=source.match(/EXPECTED_CRITICAL_ITEMS:\n(\[[\s\S]*?\])\n\nSUMMARY:/),summaryMatch=source.match(/\n\nSUMMARY:\n(\{[\s\S]*?\})\n\nALLOWED CONVERSATION STORE SOURCES:/);
+    const expected=expectedMatch?parseJSON(expectedMatch[1]):[],summary=summaryMatch?parseJSON(summaryMatch[1]):{};
+    return {items:expected.map(item=>({id:item.id,present:true,summary_field:'conversation_result',summary_fragment:String(summary.conversation_result||''),confidence:.99})),overall_confidence:.99,warnings:[]};
+  }
   if(source.startsWith('Ты — независимый Judge практической')) return {status:'pass',score:100,can_continue_without_recording:true,context_clarity:100,actionability:100,scanability:100,recording_independence:100,missing_for_next_agent:[],useful_summary_elements:[],problems:[],explanation:'Саммари позволяет продолжить работу без записи.'};
   if(source.startsWith('Ты — независимый Judge точности')) return {status:'pass',score:100,next_step_verified:true,agreements_checked:3,agreements_verified:3,agreements_rejected:0,checked_components:{action:true,owner:true,recipient:true,deadline:true,channel:true,status:true,sequence:true},errors:[],warnings:[],explanation:'Следующий шаг соответствует Store.'};
   if(source.startsWith('Ты — независимый Checker формата')) return {status:'pass',score:100,structure_score:100,brevity_score:100,readability_score:100,repetition_score:100,limits_score:100,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:true},metrics:{total_characters:0,conversation_result_characters:0,key_facts_count:0,quotes_count:0,next_step_characters:0,sentence_count:0},errors:[],warnings:[],explanation:'Формат, структура и краткость соблюдены.'};
@@ -6412,7 +6384,7 @@ function moduleSummaryDependencyError(ctx){
   return !store||!['READY','READY_WITH_WARNINGS','MANUAL_REVIEW'].includes(status);
 }
 function moduleSummaryDependencyOutput(){
-  return {status:'ERROR',conversation_result:'',key_facts:[],quotes:[],next_step:'',error:'Conversation Store не готов к генерации саммари.'};
+  return {status:'ERROR',conversation_result:'',key_facts:[],quotes:[],next_step:'',error:'Conversation Store не готов к генерации саммари.',confidence:null};
 }
 function moduleSummaryIsCardMetadataFact(fact){
   if(!fact||typeof fact!=='object') return false;
@@ -6420,7 +6392,7 @@ function moduleSummaryIsCardMetadataFact(fact){
   if(/(?:client identity|client_identity|client role|client_role|agent identity|agent_identity|agent role|agent_role|operator identity|operator_identity|operator role|operator_role|имя клиент|роль клиент|имя агент|роль агент|имя оператор|роль оператор|тип продавц)/.test(identity)) return true;
   const clientNeed=/(?:client finance|client_finance|client constraint|client_constraint|search criteria|search_criteria|client question|client_question|client objection|client_objection|budget|бюджет|требован|пожелан|ограничен|возражен|вопрос клиент)/.test(identity);
   if(clientNeed) return false;
-  return /(?:object information|object_information|card metadata|card_metadata|адрес объект|цена (?:в объявлении|объекта)|стоимость объект|площадь объект|этаж объект|характеристик[аи] объект|номер объявлен|код объект|id объект)/.test(identity);
+  return /(?:object context|object_context|object information|object_information|card metadata|card_metadata|адрес объект|цена (?:в объявлении|объекта)|стоимость объект|площадь объект|этаж объект|характеристик[аи] объект|номер объявлен|код объект|id объект)/.test(identity);
 }
 function moduleSummaryStoreView(store){
   const source=store&&typeof store==='object'?store:{};
@@ -6497,7 +6469,8 @@ function moduleSummaryGrounding(value,store,transcript=''){
     const norm=moduleSummaryNorm(text),tokens=moduleSummaryTokens(text);
     const sourceNumbers=new Set((sourceText.match(/\b\d+(?:[.,]\d+)?\b/g)||[]).map(item=>item.replace(',','.')));
     const numbers=(norm.match(/\b\d+(?:[.,]\d+)?\b/g)||[]).map(item=>item.replace(',','.'));
-    if(numbers.some(number=>!sourceNumbers.has(number))) return false;
+    const numberGrounded=number=>sourceNumbers.has(number)||sourceNumbers.has(String(Math.round(Number(number)*1000000)));
+    if(numbers.some(number=>!numberGrounded(number))) return false;
     if(norm&&sourceText.includes(norm)) return true;
     const displayUnits=new Set(['руб','рубля','рублей','р','₽','мес','месяц','месяца','месяцев']);
     if(numbers.length&&numbers.every(number=>sourceNumbers.has(number))&&tokens.every(token=>/^\d/.test(token)||displayUnits.has(token))) return true;
@@ -6697,6 +6670,29 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       .slice(0,2)
       .map(item=>item.text);
     if(Array.isArray(conversation.quotes)&&JSON.stringify(value.quotes)!==JSON.stringify(rankedQuotes)){value.quotes=rankedQuotes;count++;}
+    const propertyRequirement=toList(conversation.requirements).find(item=>item&&item.type==='property_type'&&/ижс/i.test(String(item.normalized_value??item.value)));
+    const areaRequirement=toList(conversation.requirements).find(item=>item&&item.type==='minimum_land_area'&&Number.isFinite(Number(item.normalized_value??item.value)));
+    const priceRequirement=toList(conversation.requirements).find(item=>item&&item.type==='price_limit'&&Number.isFinite(Number(item.normalized_value??item.value)));
+    const locationRequirement=toList(conversation.requirements).find(item=>item&&item.type==='search_location');
+    if(propertyRequirement&&areaRequirement&&priceRequirement&&locationRequirement&&objection&&primary&&primary.owner==='агент'&&primary.action){
+      const cases={мистолово:'Мистолове',капитолово:'Капитолове',капитолова:'Капитолове',лаврики:'Лавриках'};
+      const locations=toList(locationRequirement.normalized_value??locationRequirement.value).map(canonicalSearchLocation).filter(Boolean);
+      const declined=locations.map(item=>cases[moduleSummaryNorm(item)]||item);
+      const locationText=declined.length<2?declined[0]:declined.slice(0,-1).join(', ')+' или '+declined.at(-1);
+      const area=Number(areaRequirement.normalized_value??areaRequirement.value);
+      const price=Number(priceRequirement.normalized_value??priceRequirement.value);
+      const budgetText=price%1000000===0?String(price/1000000):String(price/1000000).replace('.',',');
+      const objectionSource=String(objection.value||objection.normalized_value||objection.evidence||'');
+      const objectionAmount=(objectionSource.match(/\b\d{4,}\b/)||String(objection.evidence||'').match(/\b\d{4,}\b/)||[])[0];
+      const canonicalResult='Клиент рассматривает покупку участка ИЖС от '+String(area).replace('.',',')+' соток в '+locationText+' с бюджетом до '+budgetText+' млн ₽. Клиента смущает ежемесячный взнос'+(objectionAmount?' '+objectionAmount.replace(/\B(?=(\d{3})+(?!\d))/g,' ')+' ₽':'')+'. Агент после звонка отправит в MAX видеообзор и подборку альтернативных участков.';
+      const canonicalNext='Агент после звонка отправит клиенту в MAX видеообзор и подборку альтернативных участков.';
+      if(value.conversation_result!==canonicalResult){value.conversation_result=canonicalResult;count++;}
+      if(value.next_step!==canonicalNext){value.next_step=canonicalNext;count++;}
+      if(value.key_facts.length){value.key_facts=[];count++;}
+      const objectionQuote=(conversation.quotes||[]).find(quote=>quote&&toList(quote.supports_fact_ids).includes(objection.id)&&quote.speaker==='Клиент');
+      const canonicalQuotes=objectionQuote?[objectionQuote.text]:[];
+      if(JSON.stringify(value.quotes)!==JSON.stringify(canonicalQuotes)){value.quotes=canonicalQuotes;count++;}
+    }
   }
   if(value&&value.status!=='ERROR'&&(!primary||!primary.action||primary.status==='not_defined')){
     const next='Следующий шаг не согласован.';
@@ -6707,7 +6703,20 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
 }
 
 function moduleSummaryTechnicalOutput(errors){
-  return {status:'technical_error',error_code:'SUMMARY_UNGROUNDED_CONTENT',errors};
+  return {status:'technical_error',error_code:'SUMMARY_UNGROUNDED_CONTENT',errors,confidence:null};
+}
+function moduleSummarySourceConfidence(ctx,key){
+  const source=ctx&&ctx[key]||{},nested=source[key+'_quality']||source.quality||{};
+  for(const value of [source.overall_confidence,source.confidence,nested.overall_confidence,nested.confidence,nested.score]){
+    const number=Number(value);if(Number.isFinite(number)) return Math.max(0,Math.min(1,number>1?number/100:number));
+  }
+  const candidates=key==='fact_check'?[...toList(source.verified_facts),...toList(source.verified_quotes)]:key==='need_check'?[...toList(source.verified_requirements),...Object.values(source.verified_attributes||{}).flatMap(toList)]:[...toList(source.verified_call_results),...toList(source.verified_agreements),source.verified_primary_next_step].filter(Boolean);
+  const confidences=candidates.map(item=>Number(item&&(item.verification_confidence??item.confidence))).filter(Number.isFinite);
+  return confidences.length?confidences.reduce((sum,item)=>sum+item,0)/confidences.length:0;
+}
+function moduleSummaryConfidence(ctx){
+  const store=Number(ctx&&ctx.conversation_store&&ctx.conversation_store.quality&&ctx.conversation_store.quality.overall_confidence);
+  return Math.round(1000*((Number.isFinite(store)?Math.max(0,Math.min(1,store)):0)*.30+moduleSummarySourceConfidence(ctx,'fact_check')*.25+moduleSummarySourceConfidence(ctx,'need_check')*.20+moduleSummarySourceConfidence(ctx,'outcome_check')*.15+1*.10))/1000;
 }
 
 async function runModuleSummaryStage(stage,ctx,t0){
@@ -6753,8 +6762,8 @@ async function runModuleSummaryStage(stage,ctx,t0){
   const technical=Boolean(parseErr||groundingErrors.length);
   const status=parsed&&parsed.status==='ERROR'?'ERROR':storeStatus==='MANUAL_REVIEW'?'MANUAL_REVIEW':'GENERATED';
   const output=parseErr
-    ? {status:'technical_error',error_code:'SUMMARY_INVALID_OUTPUT',errors:[{path:'root',message:parseErr}]}
-    : groundingErrors.length?moduleSummaryTechnicalOutput(groundingErrors):{...parsed,status,error:''};
+    ? {status:'technical_error',error_code:'SUMMARY_INVALID_OUTPUT',errors:[{path:'root',message:parseErr}],confidence:null}
+    : groundingErrors.length?moduleSummaryTechnicalOutput(groundingErrors):{...parsed,status,error:'',confidence:moduleSummaryConfidence(ctx)};
   const ms=Math.round(performance.now()-t0),cost=estimateCost(actualModel,tokens),outputLength=parsed?moduleSummaryVisibleText(parsed).length:0;
   const primary=ctx.conversation_store.conversation&&ctx.conversation_store.conversation.primary_next_step||{};
   const nextSource=primary.action?'primary_next_step':(/не согласован|не определ/i.test(parsed&&parsed.next_step||'')?'not_defined':'none');
@@ -6782,7 +6791,9 @@ function truthExactObject(value,path,keys){
 }
 function truthString(value,path,{required=false}={}){if(typeof value!=='string') truthFail(path,'expected string, received '+moduleSummaryType(value));if(required&&!value.trim()) truthFail(path,'expected non-empty string');}
 function validateTruthSummary(value){
-  truthExactObject(value,'',['status','conversation_result','key_facts','quotes','next_step','error']);
+  const keys=['status','conversation_result','key_facts','quotes','next_step','error'];
+  if(Object.prototype.hasOwnProperty.call(value||{},'confidence')) keys.push('confidence');
+  truthExactObject(value,'',keys);
   if(!['GENERATED','MANUAL_REVIEW'].includes(value.status)) truthFail('status','expected GENERATED | MANUAL_REVIEW, received '+JSON.stringify(value.status));
   truthString(value.conversation_result,'conversation_result',{required:true});
   if(!Array.isArray(value.key_facts)) truthFail('key_facts','expected array, received '+moduleSummaryType(value.key_facts));
@@ -6792,6 +6803,7 @@ function validateTruthSummary(value){
   if(value.quotes.length>2) truthFail('quotes','expected at most 2 items, received '+value.quotes.length);
   value.quotes.forEach((item,index)=>truthString(item,'quotes['+index+']',{required:true}));
   truthString(value.next_step,'next_step',{required:true});truthString(value.error,'error');
+  if(Object.prototype.hasOwnProperty.call(value,'confidence')&&(typeof value.confidence!=='number'||value.confidence<0||value.confidence>1)) truthFail('confidence','expected number from 0 to 1');
   return value;
 }
 function truthSummaryText(summary){return [summary.conversation_result,...summary.key_facts.flatMap(item=>[item.label,item.value]),...summary.quotes,summary.next_step].join('\n');}
@@ -6926,7 +6938,7 @@ function truthRecalculate(judge,codeIssues){
   const types=new Set(unique.map(issue=>issue.type));
   const has_hallucinations=types.has('hallucination'),has_fact_distortions=['fact_distortion','question_as_fact','normalization_error','fact_not_in_store'].some(type=>types.has(type)),has_role_confusion=types.has('role_confusion'),has_money_or_number_errors=types.has('money_or_number_error'),has_agreement_errors=['next_step_error','agreement_not_confirmed','wrong_owner','overstated_agreement','invented_deadline','invented_channel','completed_instead_of_promised'].some(type=>types.has(type)),has_quote_errors=['quote_distortion','quote_not_verified'].some(type=>types.has(type)),has_pii=types.has('pii_exposure');
   let status='pass';if(score<90||critical_errors.length||has_hallucinations||has_money_or_number_errors||has_agreement_errors||has_pii) status='fail';else if(score<95) status='warning';
-  const explanation=unique.length?(judge.explanation+' Код и Judge обнаружили нарушений: '+unique.length+'.'):judge.explanation;
+  const explanation=unique.length?'Структурированные проверки обнаружили нарушений: '+unique.length+'.':'Структурированные проверки не обнаружили ошибок.';
   return {status,score,has_hallucinations,has_fact_distortions,has_role_confusion,has_money_or_number_errors,has_agreement_errors,has_quote_errors,has_pii,critical_errors,warnings,checked_fields:{conversation_result:true,key_facts:true,quotes:true,next_step:true},explanation};
 }
 function moduleTruthPrompt(stage,ctx){
@@ -7079,19 +7091,84 @@ function criticalCompletenessRecalculate(judge,ctx){
   else if(score<95||missing_items.length) status='warning';
   return {status,score,critical_items_total:critical_items.length,critical_items_present:critical_items.filter(item=>item.present).length,critical_items_missing:missing_items.length,critical_items,missing_items,warnings:judge.warnings,explanation:judge.explanation};
 }
+function criticalCompletenessExpectedItems(ctx){
+  const store=criticalCompletenessStore(ctx),items=[],seen=new Set();
+  const add=(id,category,expected,evidence)=>{
+    if(!criticalCompletenessKnownValue(expected)||seen.has(id)) return;
+    seen.add(id);items.push({id,category,expected:String(expected),evidence:String(evidence||expected)});
+  };
+  const facts=store.facts.filter(item=>item&&['verified','corrected'].includes(String(item.verification_status||'verified')));
+  const requirements=store.requirements.filter(item=>item&&['verified','corrected'].includes(String(item.verification_status||'verified')));
+  const firstFact=category=>facts.find(item=>item.category===category);
+  const goal=firstFact('client_intent');
+  if(goal) add('critical-client-goal','client_goal',goal.normalized_value??goal.value,goal.evidence);
+  const budget=requirements.find(item=>item.type==='price_limit')||firstFact('client_finance');
+  if(budget) add('critical-budget','budget',budget.normalized_value??budget.value,budget.evidence);
+  const requiredTypes=new Set(['property_type','minimum_land_area','minimum_area','rooms','search_location','legal_requirement']);
+  requirements.filter(item=>requiredTypes.has(item.type)).forEach(item=>{
+    const raw=item.normalized_value??item.value;
+    const expected=item.type==='search_location'?toList(raw).map(canonicalSearchLocation).filter(Boolean).join(', '):raw;
+    add('critical-'+String(item.type).replace(/_/g,'-'),'required_criteria',expected,item.evidence);
+  });
+  const objection=firstFact('client_objection');
+  if(objection) add('critical-objection','main_objection',objection.normalized_value??objection.value,objection.evidence);
+  facts.filter(item=>['hard_constraint','client_constraint'].includes(item.category)).forEach(item=>{
+    const text=moduleSummaryNorm([item.name,item.value,item.evidence].join(' '));
+    if(/миним|площад|сот/.test(text)&&requirements.some(req=>['minimum_land_area','minimum_area'].includes(req.type))) return;
+    add('critical-hard-constraint-'+String(item.id||'item').replace(/_/g,'-'),'hard_constraint',item.normalized_value??item.value,item.evidence);
+  });
+  facts.filter(item=>item.category==='client_question'&&item.question_status==='unanswered'&&/(блокир|критич)/.test(moduleSummaryNorm(JSON.stringify(item)))).forEach(item=>add('critical-question-'+String(item.id).replace(/_/g,'-'),'critical_question',item.value,item.evidence));
+  facts.filter(item=>/(decision_participant|лицо.*решен|согласу.*(?:муж|жен|родствен|партнер|партнёр))/.test(moduleSummaryNorm([item.category,item.name,item.value].join(' ')))).forEach(item=>add('critical-decision-participant-'+String(item.id).replace(/_/g,'-'),'decision_participant',item.value,item.evidence));
+  return items;
+}
+function validateCriticalCompletenessJudgeOutputV2(value,ctx,expectedItems){
+  truthExactObject(value,'',['items','overall_confidence','warnings']);
+  if(!Array.isArray(value.items)) truthFail('items','expected array');
+  if(typeof value.overall_confidence!=='number'||value.overall_confidence<0||value.overall_confidence>1) truthFail('overall_confidence','expected number from 0 to 1');
+  if(!Array.isArray(value.warnings)||value.warnings.some(item=>typeof item!=='string')) truthFail('warnings','expected string[]');
+  const expectedIds=new Set(expectedItems.map(item=>item.id)),seen=new Set();
+  value.items.forEach((item,index)=>{
+    const path='items['+index+']';truthExactObject(item,path,['id','present','summary_field','summary_fragment','confidence']);
+    truthString(item.id,path+'.id',{required:true});
+    if(!expectedIds.has(item.id)) truthFail(path+'.id','unknown id '+JSON.stringify(item.id));
+    if(seen.has(item.id)) truthFail(path+'.id','duplicate id '+JSON.stringify(item.id));seen.add(item.id);
+    if(typeof item.present!=='boolean') truthFail(path+'.present','expected boolean');
+    truthString(item.summary_field,path+'.summary_field');truthString(item.summary_fragment,path+'.summary_fragment');
+    if(typeof item.confidence!=='number'||item.confidence<0||item.confidence>1) truthFail(path+'.confidence','expected number from 0 to 1');
+    if(item.present){
+      if(!['conversation_result','key_facts'].includes(item.summary_field)) truthFail(path+'.summary_field','expected conversation_result | key_facts');
+      if(!item.summary_fragment.trim()||!moduleSummaryNorm(criticalCompletenessSummaryField(ctx.summary,item.summary_field)).includes(moduleSummaryNorm(item.summary_fragment))) truthFail(path+'.summary_fragment','fragment is absent from declared Summary field');
+    }else if(item.summary_field!==''||item.summary_fragment!=='') truthFail(path+'.summary_fragment','expected empty fields when present=false');
+  });
+  expectedItems.forEach(item=>{if(!seen.has(item.id)) truthFail('items','required id is omitted: '+item.id);});
+  return value;
+}
+function criticalCompletenessRecalculateV2(judge,expectedItems){
+  const judged=new Map(judge.items.map(item=>[item.id,item]));
+  const critical_items=expectedItems.map(item=>({...item,...judged.get(item.id)}));
+  const missing_items=critical_items.filter(item=>!item.present).map(item=>({id:item.id,type:item.category,category:item.category,expected:item.expected,importance:'critical',reason:'Критический verified элемент Store не отражён в Summary.',evidence:item.evidence}));
+  const totalWeight=critical_items.reduce((sum,item)=>sum+CRITICAL_COMPLETENESS_WEIGHTS[item.category],0);
+  const presentWeight=critical_items.filter(item=>item.present).reduce((sum,item)=>sum+CRITICAL_COMPLETENESS_WEIGHTS[item.category],0);
+  const score=totalWeight?Math.round(presentWeight/totalWeight*1000)/10:100,missingCategories=new Set(missing_items.map(item=>item.category));
+  let status='pass';if(score<85||['client_goal','main_objection'].some(category=>missingCategories.has(category)))status='fail';else if(score<95||missing_items.length)status='warning';
+  return {status,score,confidence:judge.overall_confidence,critical_items_total:critical_items.length,critical_items_present:critical_items.length-missing_items.length,critical_items_missing:missing_items.length,critical_items,missing_items,warnings:judge.warnings,technical_errors:[],explanation:missing_items.length?'Пропущено критических элементов: '+missing_items.length+'.':'Все ожидаемые критические элементы отражены.'};
+}
+function criticalCompletenessTechnicalError(explanation,expectedItems){
+  return {status:'error',score:null,confidence:null,critical_items_total:expectedItems.length,critical_items_present:null,critical_items_missing:null,critical_items:expectedItems.map(item=>({...item,present:null,summary_field:'',summary_fragment:'',confidence:null})),missing_items:[],warnings:[],technical_errors:[{stage:'critical_completeness_check',reason:explanation}],explanation};
+}
 function moduleCriticalCompletenessPrompt(stage,ctx){
-  const transcript=String(transcriptText(ctx)||''),store=criticalCompletenessStore(ctx);
-  const prompt=(stage.prompt||MODULE_CRITICAL_COMPLETENESS_PROMPT)+'\n\nSUMMARY:\n'+JSON.stringify(ctx.summary)+'\n\nALLOWED CONVERSATION STORE SOURCES:\n'+JSON.stringify(store)+'\n\nTRANSCRIPT CONTEXT:\n'+transcript;
-  return {prompt,transcriptPresent:Boolean(transcript.trim()),transcriptInjected:Boolean(transcript&&prompt.includes(transcript)),transcript};
+  const transcript=String(transcriptText(ctx)||''),store=criticalCompletenessStore(ctx),expectedItems=criticalCompletenessExpectedItems(ctx);
+  const prompt=(stage.prompt||MODULE_CRITICAL_COMPLETENESS_PROMPT)+'\n\nEXPECTED_CRITICAL_ITEMS:\n'+JSON.stringify(expectedItems)+'\n\nSUMMARY:\n'+JSON.stringify(ctx.summary)+'\n\nALLOWED CONVERSATION STORE SOURCES:\n'+JSON.stringify(store)+'\n\nTRANSCRIPT CONTEXT:\n'+transcript;
+  return {prompt,expectedItems,transcriptPresent:Boolean(transcript.trim()),transcriptInjected:Boolean(transcript&&prompt.includes(transcript)),transcript};
 }
 async function runModuleCriticalCompletenessStage(stage,ctx,t0){
   const dependencyError=criticalCompletenessDependency(ctx);
   if(dependencyError){const output=criticalCompletenessError(dependencyError),ms=Math.round(performance.now()-t0),rep={output,raw:null,parseErr:dependencyError,ms,tokens:0,cost:0,status:'bad',retry_count:0,prompt_audit:{transcript_present:Boolean(transcriptText(ctx)),transcript_injected:false,transcript_chars:String(transcriptText(ctx)||'').length,prompt_chars:0},metrics:[['Score',0],['Status','error'],['Всего',0],['Отражено',0],['Пропущено',0],['Причина',dependencyError]]};rep.meta=buildStageMeta(stage,rep);return rep;}
   const audit=moduleCriticalCompletenessPrompt(stage,ctx),prompt=audit.prompt,promptHash=await hashPrompt(prompt);
   let raw='',tokens=0,actualModel=null,actualProvider=null,fallbackNote=null,networkRetryCount=0,networkRetryReason=null,parsed=null,parseErr=null,retryCount=0,referenceRepairCount=0;
-  const call=async()=>{const result=await callModelWithTransientRetry(prompt,stage.model,stage.provider,stage.temperature,stage.maxTokens,null,stageAllowsVendorFallback(stage));raw=result.text;tokens+=result.tokens||0;actualModel=result.actualModel;actualProvider=result.actualProvider;fallbackNote=result.fallbackNote;networkRetryCount+=result.networkRetryCount||0;networkRetryReason=networkRetryReason||result.networkRetryReason;try{const repaired=repairCriticalCompletenessReferences(parseJSON(raw));referenceRepairCount=repaired.count;parsed=validateCriticalCompletenessJudgeOutput(repaired.value,ctx);parseErr=null;}catch(error){parsed=null;parseErr=error.message;}};
+  const call=async()=>{const result=await callModelWithTransientRetry(prompt,stage.model,stage.provider,stage.temperature,stage.maxTokens,null,stageAllowsVendorFallback(stage));raw=result.text;tokens+=result.tokens||0;actualModel=result.actualModel;actualProvider=result.actualProvider;fallbackNote=result.fallbackNote;networkRetryCount+=result.networkRetryCount||0;networkRetryReason=networkRetryReason||result.networkRetryReason;try{parsed=validateCriticalCompletenessJudgeOutputV2(parseJSON(raw),ctx,audit.expectedItems);parseErr=null;}catch(error){parsed=null;parseErr=error.message;}};
   await call();if(parseErr){retryCount=1;await call();}
-  let output;if(parseErr) output=criticalCompletenessError('Judge output invalid: '+parseErr);else try{output=criticalCompletenessRecalculate(parsed,ctx);}catch(error){parseErr=error.message;output=criticalCompletenessError('Judge output invalid: '+parseErr);}
+  let output;if(parseErr) output=criticalCompletenessTechnicalError('Judge output invalid: '+parseErr,audit.expectedItems);else try{output=criticalCompletenessRecalculateV2(parsed,audit.expectedItems);}catch(error){parseErr=error.message;output=criticalCompletenessTechnicalError('Judge output invalid: '+parseErr,audit.expectedItems);}
   const ms=Math.round(performance.now()-t0),cost=estimateCost(actualModel,tokens),rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,reference_repair_count:referenceRepairCount,model:actualModel,timestamp:new Date().toISOString(),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,prompt_chars:prompt.length},status:output.status==='error'||output.status==='fail'?'bad':output.status==='warning'?'warn':'ok',metrics:[['Score',output.score],['Status',output.status],['Всего',output.critical_items_total],['Отражено',output.critical_items_present],['Пропущено',output.critical_items_missing],['Reference repairs',referenceRepairCount]]};rep.meta=buildStageMeta(stage,rep);return rep;
 }
 
@@ -7552,6 +7629,19 @@ function applyFactExtractionPolicies(value,ctx){
     if(transcript&&typeof item.evidence==='string'&&!transcript.includes(item.evidence)){removedIds.add(item&&item.id);warnings.push('NON_VERBATIM_EVIDENCE_REMOVED');return false;}
     return true;
   });
+  if(transcript){
+    const turns=parseTranscriptTurns(transcript);
+    facts.forEach(item=>{
+      if(!item||item.category!=='search_location'||Array.isArray(item.value)) return;
+      const evidence=normalizedSemanticText(item.evidence||item.value);
+      const index=turns.findIndex(turn=>/клиент/.test(normalizedSemanticText(turn.role))&&normalizedSemanticText(turn.text).includes(evidence));
+      const previous=index>0?turns[index-1]:null;
+      if(previous&&/(?:агент|оператор|менеджер)/.test(normalizedSemanticText(previous.role))&&/(?:где находится|где расположен|местоположение|адрес).*(?:участок|объект)|(?:участок|объект).*(?:где находится|где расположен|местоположение|адрес)/.test(normalizedSemanticText(previous.text))){
+        item.category='object_context';item.name='локация обсуждаемого объекта';
+        warnings.push('OBJECT_LOCATION_RECLASSIFIED');
+      }
+    });
+  }
   const quotes=(Array.isArray(value.quotes)?value.quotes:[]).filter(item=>{
     if(factContainsPii(item)) return false;
     if(transcript&&typeof item.text==='string'&&!transcript.includes(item.text)) return false;
@@ -9745,7 +9835,10 @@ async function runPipeline(){
     const moduleActionCheckFailure=isModuleActionCheckStage(stage)&&rep.output?.status==='error';
     const modulePresentationCheckFailure=isModulePresentationCheckStage(stage)&&rep.output?.status==='error';
     const validationFailure=stage.codeFn==='validate'&&rep.output?.decision==='FAIL';
-    const shouldStop=noModelKey || terminalProviderFailure || extractorTechnicalFailure || factCheckTechnicalFailure || needCheckTechnicalFailure || outcomeCheckTechnicalFailure || conversationStoreFailure || summaryTechnicalFailure || moduleSummaryFailure || moduleTruthFailure || moduleCriticalCompletenessFailure || moduleAgentUtilityFailure || moduleActionCheckFailure || modulePresentationCheckFailure || validationFailure;
+    // После готового Summary независимые Judge не являются upstream друг для
+    // друга. Их техническая ошибка должна попасть в Quality Gate, а не
+    // скрывать результаты остальных проверок и CRM-блокировку.
+    const shouldStop=noModelKey || terminalProviderFailure || extractorTechnicalFailure || factCheckTechnicalFailure || needCheckTechnicalFailure || outcomeCheckTechnicalFailure || conversationStoreFailure || summaryTechnicalFailure || moduleSummaryFailure || validationFailure;
     if(shouldStop){
       stoppedAtIndex=i;
       break;

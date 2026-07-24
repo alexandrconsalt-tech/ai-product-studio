@@ -634,10 +634,10 @@ test("этап №12 использует новый контракт полно
     maxTokens: 8000,
     promptVersion: 10,
   });
-  expect(stage.prompt).toContain("critical_items_total");
-  expect(stage.prompt).toContain("Не считай бюджетом цену объекта");
-  expect(stage.prompt).toContain("Обычный client_role/status");
-  expect(stage.prompt).toContain("без перефразирования");
+  expect(stage.prompt).toContain("EXPECTED_CRITICAL_ITEMS");
+  expect(stage.prompt).toContain("не придумывай category, totals, score, status или decision");
+  expect(stage.prompt).toContain('"overall_confidence":0.98');
+  expect(stage.prompt).toContain('"warnings":[]');
 });
 
 test("код полноты сам пересчитывает весовой score, status и не штрафует semantic-дубли", async ({ page }) => {
@@ -978,12 +978,12 @@ test("этап полноты блокируется по dependency и дела
     const blocked=await runStage(stage,{summary:null,conversation_store:null,__transcript:'Клиент: тест'});
     const run='run-1',transcriptHash='tr-1',pipelineHash='pipe-1',storeHash='store-1';
     const summary={status:'GENERATED',conversation_result:'Цель клиента — купить квартиру.',key_facts:[],quotes:[],next_step:'Шаг не согласован.',error:''};
-    const conversation={facts:[{id:'f1',category:'intent',name:'client_goal',value:'Купить квартиру',evidence:'Клиент хочет купить квартиру'}],requirements:[],attributes:{},call_results:[]};
+    const conversation={facts:[{id:'f1',category:'client_intent',name:'client_goal',value:'Купить квартиру',evidence:'Клиент хочет купить квартиру',verification_status:'verified'}],requirements:[],attributes:{},call_results:[]};
     const ctx={summary,conversation_store:{status:'READY',conversation,provenance:{run_id:run,transcript_hash:transcriptHash,pipeline_configuration_hash:pipelineHash},store_meta:{conversation_store_hash:storeHash}},__run_id:run,__transcript_hash:transcriptHash,__pipeline_configuration_hash:pipelineHash,__summary_provenance:{run_id:run,transcript_hash:transcriptHash,pipeline_configuration_hash:pipelineHash,conversation_store_hash:storeHash},__transcript:'Клиент: Клиент хочет купить квартиру'};
-    const valid={status:'fail',score:0,critical_items_total:0,critical_items_present:0,critical_items_missing:0,critical_items:[{id:'goal',category:'client_goal',expected:'Купить квартиру',present:true,summary_field:'conversation_result',summary_fragment:'купить квартиру',evidence:'Клиент хочет купить квартиру'}],missing_items:[],warnings:[],explanation:'Цель отражена.'};
+    const valid={items:[{id:'critical-client-goal',present:true,summary_field:'conversation_result',summary_fragment:'купить квартиру',confidence:.98}],overall_confidence:.98,warnings:[]};
     let retryCalls=0;callModelWithTransientRetry=async()=>{retryCalls++;return {text:retryCalls===1?'{broken':JSON.stringify(valid),tokens:5,actualModel:'deepseek-v3.2-exp',actualProvider:'ai-tunnel'}};
     const repaired=await runStage(stage,ctx);
-    const orphan={...valid,critical_items:[],missing_items:[{id:'goal',type:'client_goal',category:'client_goal',expected:'Купить квартиру',importance:'critical',reason:'Нужно для продолжения работы',evidence:'Клиент хочет купить квартиру'}]};
+    const orphan={...valid,items:[]};
     callModelWithTransientRetry=async()=>({text:JSON.stringify(orphan),tokens:5,actualModel:'deepseek-v3.2-exp',actualProvider:'ai-tunnel'});
     const referenceRepaired=await runStage(stage,ctx);
     const outOfScopeRepair=repairCriticalCompletenessReferences({critical_items:[
@@ -1002,7 +1002,7 @@ test("этап полноты блокируется по dependency и дела
   expect(result.repaired).toMatchObject({ retry_count: 1, parseErr: null });
   expect(result.repaired.output).toMatchObject({ status: "pass", score: 100, critical_items_total: 1, critical_items_present: 1 });
   expect(result.repaired.prompt_audit).toMatchObject({ transcript_present: true, transcript_injected: true });
-  expect(result.referenceRepaired).toMatchObject({ parseErr: null, reference_repair_count: 1, output: { status: "fail", critical_items_total: 1, critical_items_missing: 1 } });
+  expect(result.referenceRepaired).toMatchObject({ retry_count: 1, output: { status: "error", score: null, critical_items_total: 1 } });
   expect(result.outOfScopeRepair).toMatchObject({ count: 3, value: { critical_items: [], missing_items: [] } });
   expect(result.serializedRepair).toMatchObject({ count: 2, value: { critical_items: [{ summary_fragment: "5 500 000" }], missing_items: [] } });
   expect(result.objectPriceRepair).toMatchObject({ count: 1, value: { critical_items: [], missing_items: [] } });
@@ -1694,7 +1694,7 @@ test("Quality Gate отклоняет ошибочные, неполные и st
     return {checkerError,missing,invalidScore,inconsistent,staleRun,staleTranscript,staleStore,stalePipeline,missingExecution,missingProvenance,summaryError,storeError,hashA,hashB,hashC};
   })()`), qualityGateFixture);
   for (const key of ["checkerError", "missing", "invalidScore", "inconsistent", "staleRun", "staleTranscript", "staleStore", "stalePipeline", "missingExecution", "missingProvenance", "summaryError", "storeError"] as const) {
-    expect(result[key]).toMatchObject({ status: "TECHNICAL_ERROR", decision: "TECHNICAL_ERROR", summary_quality_score: 0, can_save_to_crm: false, requires_manual_review: false });
+    expect(result[key]).toMatchObject({ status: "TECHNICAL_ERROR", decision: "TECHNICAL_ERROR", summary_quality_score: null, weighted_quality_score: null, effective_quality_score: null, can_save_to_crm: false, requires_manual_review: false });
   }
   expect(result.checkerError.technical_errors.map((item: any) => item.code)).toContain("CHECKER_STATUS_ERROR");
   expect(result.missing.technical_errors.map((item: any) => item.code)).toContain("MISSING_CHECK_RESULT");
@@ -1731,7 +1731,7 @@ test("Quality Gate разделяет политику Summary и провере
   expect(result.disputed.crm_write_policy.attributes.funding_source).toBe("REVIEW_REQUIRED");
   expect(result.empty.crm_write_policy.attributes.interest).toBe("DO_NOT_SAVE");
   expect(result.perfect.crm_write_policy.attributes.purchase_term).toBe("SAVE");
-  expect(result.rootKeys).toEqual(["status", "summary_quality_score", "decision", "criteria", "thresholds", "hard_stops", "warnings", "technical_errors", "can_save_to_crm", "requires_manual_review", "summary_status", "store_status", "explanation", "crm_write_policy", "metadata"]);
+  expect(result.rootKeys).toEqual(["status", "summary_quality_score", "weighted_quality_score", "effective_quality_score", "confidence", "decision", "criteria", "thresholds", "hard_stops", "warnings", "technical_errors", "can_save_to_crm", "requires_manual_review", "summary_status", "store_status", "explanation", "crm_write_policy", "metadata"]);
   expect(result.hasNull).toBe(false);
   for (const text of ["Summary Quality Score", "Decision", "Можно сохранить в CRM", "Ручная проверка", "Достоверность", "Полнота критически важной информации", "Полезность для агента", "Договорённости и следующий шаг", "Формат, структура и краткость", "Weighted score", "Hard stops", "Warnings", "Technical errors", "CRM write policy", "Funding source", "Purchase term", "Explanation"]) {
     expect(result.html).toContain(text);
@@ -3012,7 +3012,7 @@ test("Need Agent использует новый контракт, канони�
     requirements: expect.arrayContaining([
       expect.objectContaining({ type: "price_limit", value: 5500000, source_fact_ids: ["fact_report_budget"] }),
       expect.objectContaining({ type: "minimum_land_area", value: 6, source_fact_ids: ["fact_report_area"] }),
-      expect.objectContaining({ type: "search_location", value: "Деревня Мистолово", source_fact_ids: ["fact_report_location"] }),
+      expect.objectContaining({ type: "search_location", value: "Мистолово", source_fact_ids: ["fact_report_location"] }),
     ]),
   });
   expect(result.reportNeedsResult.value.requirements).not.toEqual(expect.arrayContaining([
@@ -3533,7 +3533,7 @@ test("Генерация саммари использует только Conver
   expect(result.preliminaryCalls).toBe(1);
   expect(result.preliminary.output).toMatchObject({ status: "GENERATED", next_step: "Агент: Посмотреть квартиру." });
   expect(result.dependencyCalls).toBe(0);
-  for (const blocked of [result.missingStore, result.technicalStore, result.dependencyStore]) expect(blocked.output).toEqual({ status: "ERROR", conversation_result: "", key_facts: [], quotes: [], next_step: "", error: "Conversation Store не готов к генерации саммари." });
+  for (const blocked of [result.missingStore, result.technicalStore, result.dependencyStore]) expect(blocked.output).toEqual({ status: "ERROR", conversation_result: "", key_facts: [], quotes: [], next_step: "", error: "Conversation Store не готов к генерации саммари.", confidence: null });
   expect(result.targetCalls).toBe(1);
   expect(result.targetReport.output).toMatchObject({ status: "GENERATED", conversation_result: expect.stringContaining("Клиент Николай"), key_facts: [expect.objectContaining({ label: "Бюджет", value: "до 5,5 млн ₽" }), expect.objectContaining({ label: "Требования" }), expect.objectContaining({ label: "Локации" }), expect.objectContaining({ label: "Основное сомнение" })], quotes: ["Вот этот побор 9 600 мне прямо не это"], next_step: "Агент отправит клиенту в MAX видеообзор и ссылку на подборку." });
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, summary: { status: "ERROR" } });
@@ -3856,6 +3856,53 @@ test("Fact policy добавляет перечисленные клиентом
     verification_status: "pending"
   }));
   expect(result.value.extraction_meta.fact_count).toBe(2);
+});
+
+test("локация из ответа на вопрос об объекте не становится областью поиска", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript=["Оператор: Где находится участок?","Клиент: Деревня Мистолово.","Оператор: Какие районы рассматриваете?","Клиент: Там, Мистолово, Капитолова, Лаврики, что-нибудь такое."].join("\n");
+    const value={facts:[{id:'fact_1',category:'search_location',name:'поиск: локация',value:'Деревня Мистолово',normalized_value:'Деревня Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',confidence:.98,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
+    const policy=applyFactExtractionPolicies(value,{__transcript:transcript});
+    const recovered=conversationStoreRecoveredRequirements(policy.value.facts,[]);
+    return {policy,requirements:deduplicateSearchLocationRequirements(recovered)};
+  });
+
+  expect(result.policy.warnings).toContain("OBJECT_LOCATION_RECLASSIFIED");
+  expect(result.policy.value.facts).toContainEqual(expect.objectContaining({ id: "fact_1", category: "object_context" }));
+  expect(result.policy.value.facts).toContainEqual(expect.objectContaining({ category: "search_location", value: ["Мистолово", "Капитолова", "Лаврики"] }));
+  expect(result.requirements.requirements.filter((item: any) => item.type === "search_location")).toEqual([
+    expect.objectContaining({ value: ["Мистолово", "Капитолово", "Лаврики"] }),
+  ]);
+});
+
+test("земельный Summary нормализуется без дублей и получает confidence", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const facts=[
+      {id:'goal',category:'client_intent',value:'покупка участка',evidence:'по поводу участка звоню',verification_status:'verified'},
+      {id:'budget',category:'client_finance',value:5500000,normalized_value:5500000,evidence:'цена до пяти с половиной',verification_status:'verified'},
+      {id:'objection',category:'client_objection',value:'возражение против ежемесячных взносов 9600',evidence:'Вот этот побор 9600 мне прямо не это.',verification_status:'verified'},
+    ];
+    const requirements=[
+      {id:'type',type:'property_type',value:'ИЖС',evidence:'ИЖС?',verification_status:'verified'},
+      {id:'area',type:'minimum_land_area',value:6,normalized_value:6,evidence:'минимум шесть соток',verification_status:'verified'},
+      {id:'price',type:'price_limit',value:5500000,normalized_value:5500000,evidence:'цена до пяти с половиной',verification_status:'verified'},
+      {id:'locations',type:'search_location',value:['Мистолово','Капитолово','Лаврики'],evidence:'Мистолово, Капитолова, Лаврики',verification_status:'verified'},
+    ];
+    const store={conversation:{facts,requirements,attributes:{},quotes:[{id:'q',text:facts[2].evidence,speaker:'Клиент',supports_fact_ids:['objection']}],agreements:[{id:'a',recipient:'клиент',action:'отправить видеообзор и подборку альтернативных участков',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed'}],primary_next_step:{action:'отправить видеообзор и подборку альтернативных участков',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['a']}}};
+    const draft={status:'GENERATED',conversation_result:'Клиент интересуется участком в районе Деревня Мистолово / Капитолова / Лаврики и отвергает взнос.',key_facts:[{label:'Бюджет',value:'5 500 000'}],quotes:['цена до пяти с половиной',facts[2].evidence],next_step:'отправить материалы',error:''};
+    const summary=moduleSummaryApplyStorePolicy(draft,store).value;
+    const expected=criticalCompletenessExpectedItems({conversation_store:store});
+    const confidence=moduleSummaryConfidence({conversation_store:{...store,quality:{overall_confidence:1}},fact_check:{overall_confidence:.95},need_check:{overall_confidence:.95},outcome_check:{overall_confidence:.9}});
+    return {summary,expected,confidence};
+  });
+
+  expect(result.summary.conversation_result).toBe("Клиент рассматривает покупку участка ИЖС от 6 соток в Мистолове, Капитолове или Лавриках с бюджетом до 5,5 млн ₽. Клиента смущает ежемесячный взнос 9 600 ₽. Агент после звонка отправит в MAX видеообзор и подборку альтернативных участков.");
+  expect(result.summary.key_facts).toEqual([]);
+  expect(result.summary.quotes).toEqual(["Вот этот побор 9600 мне прямо не это."]);
+  expect(result.expected.map((item: any) => item.id)).toEqual(["critical-client-goal","critical-budget","critical-property-type","critical-minimum-land-area","critical-search-location","critical-objection"]);
+  expect(result.confidence).toBe(.963);
 });
 
 test("проверки качества не штрафуют общий client goal, дословную цитату и принадлежащий агенту файл", async ({ page }) => {
@@ -4385,7 +4432,7 @@ test("Conversation Store восстанавливает критические r
   expect(result.ready.conversation.requirements).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: "minimum_land_area", normalized_value: 6, source_fact_ids: ["fact_area"] }),
     expect.objectContaining({ type: "price_limit", normalized_value: 5500000, source_fact_ids: ["fact_budget"] }),
-    expect.objectContaining({ type: "search_location", normalized_value: ["Мистолово", "Капитолова", "Лаврики"], source_fact_ids: ["fact_locations"] }),
+    expect.objectContaining({ type: "search_location", normalized_value: ["Мистолово", "Капитолово", "Лаврики"], source_fact_ids: ["fact_locations"] }),
   ]));
   expect(result.ready.conversation.facts.find((item) => item.id === "fact_question")?.question_status).toBe("answered");
   expect(result.ready.conversation.primary_next_step.steps).toEqual([
