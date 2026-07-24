@@ -4051,6 +4051,7 @@ test("production-вариативность восстанавливает ло�
   expect(result.actionCovered).toBe(true);
   expect(result.presentationStatus).toBe("GENERATED");
   expect(result.extractionRuntime).toContain("Math.min(Number(stage.maxTokens)||5500,5500)");
+  expect(result.extractionRuntime).toContain("prompt.replace(/^[ \\t]+/gm,'')");
 });
 
 test("проверки качества не штрафуют общий client goal, дословную цитату и принадлежащий агенту файл", async ({ page }) => {

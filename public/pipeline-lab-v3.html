@@ -9619,7 +9619,13 @@ async function runStage(stage, ctx){
     const promptAudit=isSummaryNewStage(stage)
       ? summaryNewPrompt(stage,ctx)
       : ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
-    const prompt=promptAudit.prompt;
+    let prompt=promptAudit.prompt;
+    // AI Tunnel учитывает размер входа в предварительном контроле бюджета.
+    // Удаляем только форматирующие отступы системного Fact prompt; текст
+    // правил, JSON-схема и транскрипция остаются без смысловых изменений.
+    if(isFactsExtraction&&stage.provider==='ai-tunnel'){
+      prompt=prompt.replace(/^[ \t]+/gm,'').replace(/\n{3,}/g,'\n\n');
+    }
     const contractConfigurationError=isFactsExtraction?factContractConfigurationError():null;
     if(contractConfigurationError){
       const output={status:'technical_error',decision:'ERROR',score:null,error_code:'CONTRACT_CONFIGURATION_ERROR',schema_error:contractConfigurationError,parse_error:contractConfigurationError,retry_count:0,raw_response:null,critical_errors:[contractConfigurationError],issues:[contractConfigurationError]};
