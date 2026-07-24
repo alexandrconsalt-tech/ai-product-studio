@@ -9246,16 +9246,32 @@ function validateOutcomeJudgeOutput(value,input){
     value.items.forEach(item=>{
       const originalAgreement=toList(input&&input.agreements).find(agreement=>agreement&&agreement.id===item.id);
       const internalInspection=originalAgreement&&/(?:посмотр|провер|подбер).*(?:вариант|что есть)|(?:вариант|что есть).*(?:посмотр|провер|подбер)/.test(normalizedSemanticText([originalAgreement.action,originalAgreement.evidence].join(' ')))&&!/(?:отправ|скин|пришл|направ)/.test(normalizedSemanticText(originalAgreement.action));
+      const explicitAgentPromise=originalAgreement&&originalAgreement.owner==='агент'&&originalAgreement.status==='promised'
+        &&/(?:отправлю|скину|пришлю|направлю|посмотрю|проверю|подберу)/.test(normalizedSemanticText(originalAgreement.evidence));
+      if(item&&item.verdict==='needs_correction'&&item.corrections&&explicitAgentPromise&&item.corrections.status==='preliminary'){
+        delete item.corrections.status;
+        delete item.corrections.confidence;
+        if(!Object.keys(item.corrections).length) item.verdict='verified';
+      }
       if(item&&item.verdict==='needs_correction'&&item.corrections&&internalInspection){
         delete item.corrections.channel;
         delete item.corrections.confidence;
-        if(item.corrections.status==='confirmed'&&originalAgreement.status==='promised') delete item.corrections.status;
+        if(['confirmed','preliminary'].includes(item.corrections.status)&&originalAgreement.status==='promised') delete item.corrections.status;
         if(!Object.keys(item.corrections).length) item.verdict='verified';
       }
       if(item&&item.verdict==='needs_correction'&&item.corrections&&item.corrections.recipient===''){
         item.verdict='rejected';item.corrections={};
       }
-      if(item&&item.id==='primary_next_step'&&item.verdict==='needs_correction'&&item.corrections&&item.corrections.status==='pending') item.corrections.status='preliminary';
+      if(item&&item.id==='primary_next_step'&&item.verdict==='needs_correction'&&item.corrections){
+        if(item.corrections.status==='pending') item.corrections.status='preliminary';
+        const primary=input&&input.primary_next_step,linked=toList(input&&input.agreements).filter(agreement=>toList(primary&&primary.agreement_ids).includes(agreement.id));
+        const allAgentPromises=primary&&primary.status==='promised'&&linked.length>0&&linked.every(agreement=>agreement.owner==='агент'&&['confirmed','promised'].includes(agreement.status));
+        if(allAgentPromises&&item.corrections.status==='preliminary'){
+          delete item.corrections.status;
+          delete item.corrections.confidence;
+          if(!Object.keys(item.corrections).length) item.verdict='verified';
+        }
+      }
     });
     return validateVerdictOnlyJudge(value,outcomeJudgeEntries(input),OutcomeJudgeSchemaError);
   }

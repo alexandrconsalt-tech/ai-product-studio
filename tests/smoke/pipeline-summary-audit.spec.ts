@@ -4001,8 +4001,8 @@ test("production-вариативность восстанавливает ло�
       outcome_meta:{result_count:0,agreement_count:1,decision:'EXTRACTED'}
     },{fact_check:{verified_facts:[]},transcript:'Агент:\n— Сейчас посмотрю, что есть ещё.'});
     const judge=validateOutcomeJudgeOutput({items:[
-      {id:'agreement_1',verdict:'needs_correction',reason:'Канал MAX общий.',confidence:.85,corrections:{channel:'MAX',confidence:.85}},
-      {id:'primary_next_step',verdict:'verified',reason:'Шаг подтверждён.',confidence:.9,corrections:{}}
+      {id:'agreement_1',verdict:'needs_correction',reason:'Ошибочно понижен статус.',confidence:.7,corrections:{channel:'MAX',status:'preliminary',confidence:.7}},
+      {id:'primary_next_step',verdict:'needs_correction',reason:'Ошибочно понижен статус.',confidence:.7,corrections:{status:'preliminary',confidence:.7}}
     ],overall_confidence:.9,warnings:[]},outcomeInput);
     const outcome=mergeOutcomeCheck({hardFail:false,criteria:[]},judge,null,outcomeInput,{});
     const summary={status:'GENERATED',conversation_result:'Клиент рассматривает покупку участка.',key_facts:[],quotes:[],next_step:'Агент отправит клиенту подборку альтернативных участков.',error:'',confidence:.95};
