@@ -655,7 +655,7 @@ function defaultPipeline(){
     },
     {
       id:s(), enabled:true, type:'llm', name:'Извлечение фактов и цитат',
-      model:'gpt-5-mini', outKey:'facts', promptId:'fact-agent-v2', promptVersion:6, promptUpdatedAt:'2026-07-24', maxTokens:6000,
+      model:'gpt-5-mini', outKey:'facts', promptId:'fact-agent-v2', promptVersion:7, promptUpdatedAt:'2026-07-24', maxTokens:6000,
       prompt:
 `Ты — Fact Agent пайплайна анализа звонков по недвижимости.
 Извлеки только явно подтверждённые факты и значимые дословные цитаты клиента. Факты ещё не считаются проверенными: следующий этап выполнит независимую смысловую проверку.
@@ -707,7 +707,8 @@ ${factCategoryPromptBlock()}.
 - Денежную запись из объявления вида «четыре 650» в контексте цены недвижимости нормализуй как 4650000; не оставляй числовой normalized_value строкой.
 - Канал «Макс» нормализуй как строку "MAX" и не объединяй его с предложенными, но не выбранными каналами.
 - Не извлекай телефоны, email и другие PII. Это правило применяется также кодом после ответа модели.
-- Каждую названную клиентом область поиска верни отдельным фактом category="search_location".
+- Каждую названную клиентом область поиска (район/город/территория, где клиент ХОЧЕТ искать) верни отдельным фактом category="search_location".
+- Адрес объекта, по которому звонит клиент (например, «звоню по поводу продажи квартиры на Текстильщиков, 9»), — это адрес обсуждаемого объекта, а не область поиска; извлекай его как category="object_information", а не "search_location". category="search_location" используй только когда клиент прямо называет район/город, где хочет найти ДРУГОЙ объект.
 - Канал связи верни отдельным фактом category="communication_channel", каждое обещанное действие агента — отдельным category="agent_commitment".
 - Не индексируй малозначимые характеристики объекта, если они не влияют на потребность, ограничение, возражение, результат звонка или следующий шаг.
 - fact_count и quote_count точно равны длинам массивов.
@@ -4221,7 +4222,7 @@ function conversationStoreRecoveredRequirements(facts,existing){
     if(fact.category==='client_constraint'&&/(?:сот|площад)/.test(text)&&/(?:миним|не меньше|от\\s+\\d)/.test(text)&&Number.isFinite(Number(fact.normalized_value))) add(fact,'minimum_land_area',Number(fact.normalized_value),Number(fact.normalized_value));
     if(fact.category==='client_finance'&&/(?:бюджет|цена до|до\\s+(?:пяти|\\d))/.test(text)&&!/(?:цена объявления|рекламн|текущ.*объект)/.test(text)&&Number.isFinite(Number(fact.normalized_value))) add(fact,'price_limit',Number(fact.normalized_value),Number(fact.normalized_value));
     const locations=Array.isArray(fact.normalized_value)?fact.normalized_value:Array.isArray(fact.value)?fact.value:[fact.normalized_value??fact.value].filter(Boolean);
-    if(fact.category==='search_location'&&locations.length) add(fact,'search_location',locations.length===1?locations[0]:locations,locations.length===1?locations[0]:locations);
+    if(fact.category==='search_location'&&locations.length&&!/(?:адрес объект|звон.*(?:продаж|объявлен)|текущ.*объект)/.test(text)) add(fact,'search_location',locations.length===1?locations[0]:locations,locations.length===1?locations[0]:locations);
     if(fact.category==='search_criteria'&&/ижс/.test(text)) add(fact,'property_type','ИЖС','ИЖС');
   });
   return recovered;
@@ -4743,7 +4744,7 @@ function crmValidateInputs(ctx){
   const badPath=crmNoNullOrUndefined({summary,attributes:store.conversation&&store.conversation.attributes},'payload');
   if(badPath) return {gate,error:crmIssue('NULL_OR_UNDEFINED_IN_PAYLOAD',badPath,'CRM payload не должен содержать null или undefined.')};
   const phonePath=crmPhonePath(summary);if(phonePath) return {gate,error:crmIssue('PII_IN_SUMMARY',phonePath,'Телефон запрещён в CRM summary.')};
-  try{const {confidence,...summaryContract}=summary;validateModuleSummaryOutput(summaryContract);}catch(error){return {gate,error:crmIssue('INVALID_SUMMARY_SCHEMA','summary',error.message)};}
+  try{const {confidence,...summaryContract}=summary;validateModuleSummaryOutput(summaryContract,['GENERATED','MANUAL_REVIEW']);}catch(error){return {gate,error:crmIssue('INVALID_SUMMARY_SCHEMA','summary',error.message)};}
   return {gate,summaryHash};
 }
 function crmValidateAttributes(ctx,policies){
@@ -6359,9 +6360,10 @@ function moduleSummaryDeterministicRepair(value){
   const attempted=removedFields.length>0||removedItems.length>0||normalized;
   return {value,repair_attempted:attempted,removed_fields:removedFields,removed_items:removedItems,contract_status:attempted?'RECOVERED_WITH_WARNING':'VALID'};
 }
-function validateModuleSummaryOutput(value){
+function validateModuleSummaryOutput(value,allowedStatuses){
+  const statuses=allowedStatuses||['GENERATED'];
   moduleSummaryObject(value,'',['status','conversation_result','key_facts','quotes','next_step','error']);
-  if(value.status!=='GENERATED') moduleSummaryFail('status','expected GENERATED, received '+JSON.stringify(value.status));
+  if(!statuses.includes(value.status)) moduleSummaryFail('status','expected '+statuses.join(' or ')+', received '+JSON.stringify(value.status));
   moduleSummaryString(value.conversation_result,'conversation_result',{required:true});
   if(!Array.isArray(value.key_facts)) moduleSummaryFail('key_facts','expected array, received '+moduleSummaryType(value.key_facts));
   if(value.key_facts.length>4) moduleSummaryFail('key_facts','expected at most 4 items, received '+value.key_facts.length,true);
