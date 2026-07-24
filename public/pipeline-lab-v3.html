@@ -9621,10 +9621,10 @@ async function runStage(stage, ctx){
       : ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
     let prompt=promptAudit.prompt;
     // AI Tunnel учитывает размер входа в предварительном контроле бюджета.
-    // Удаляем только форматирующие отступы системного Fact prompt; текст
+    // Схлопываем только форматирующие пробелы системного Fact prompt; текст
     // правил, JSON-схема и транскрипция остаются без смысловых изменений.
     if(isFactsExtraction&&stage.provider==='ai-tunnel'){
-      prompt=prompt.replace(/^[ \t]+/gm,'').replace(/\n{3,}/g,'\n\n');
+      prompt=prompt.replace(/\s+/g,' ').trim();
     }
     const contractConfigurationError=isFactsExtraction?factContractConfigurationError():null;
     if(contractConfigurationError){
