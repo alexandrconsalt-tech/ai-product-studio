@@ -6479,13 +6479,21 @@ function moduleSummaryGrounding(value,store,transcript=''){
   const transcriptNorm=moduleSummaryNorm(transcript);
   const attributeValues=Object.values(conversation.attributes||{}).flatMap(item=>Array.isArray(item)?item:[item]).filter(item=>item&&typeof item==='object');
   const factSources=[...(conversation.facts||[]),...(conversation.requirements||[]),...attributeValues];
-  // Грубый стеммер для русских словоформ: снимает типичные падежные/числовые
-  // окончания, чтобы токен из перефразированного summary ("покупки",
-  // "договорённостью") совпадал с той же основой в Store ("покупка",
-  // "договорённость"). Без этого точная перефразировка живой речи модели
-  // может случайно не дотянуть до порога только из-за разных окончаний,
-  // хотя смысл полностью совпадает.
-  const summaryStem=token=>token.length>5?token.slice(0,-3):token.length>3?token.slice(0,-1):token;
+  // Русская морфология меняет длину слова по-разному в зависимости от
+  // основы и суффикса ("интерес" -> "интересуется", "покупка" -> "покупки"),
+  // поэтому сравнение по фиксированному усечённому суффиксу ненадёжно: у
+  // разных по длине словоформ обрезка может не совпасть даже при общем
+  // корне. Вместо этого сравниваем по общему префиксу заданной длины —
+  // для русских слов корень почти всегда лежит в первых 5-6 буквах, а
+  // словоизменение происходит в хвосте.
+  const ROOT_PREFIX_LEN=6;
+  const sameRoot=(a,b)=>{
+    if(a===b) return true;
+    const len=Math.min(a.length,b.length);
+    if(len<4) return false;
+    const shared=Math.min(len,ROOT_PREFIX_LEN);
+    return a.slice(0,shared)===b.slice(0,shared);
+  };
   const isGroundedIn=(text,sourceText)=>{
     const norm=moduleSummaryNorm(text),tokens=moduleSummaryTokens(text);
     const sourceNumbers=new Set((sourceText.match(/\b\d+(?:[.,]\d+)?\b/g)||[]).map(item=>item.replace(',','.')));
@@ -6495,8 +6503,8 @@ function moduleSummaryGrounding(value,store,transcript=''){
     if(norm&&sourceText.includes(norm)) return true;
     const displayUnits=new Set(['руб','рубля','рублей','р','₽','мес','месяц','месяца','месяцев']);
     if(numbers.length&&numbers.every(number=>sourceNumbers.has(number))&&tokens.every(token=>/^\d/.test(token)||displayUnits.has(token))) return true;
-    const sourceStems=new Set(moduleSummaryTokens(sourceText).map(summaryStem));
-    const matched=tokens.filter(token=>sourceText.includes(token)||sourceStems.has(summaryStem(token))).length;
+    const sourceTokens=moduleSummaryTokens(sourceText);
+    const matched=tokens.filter(token=>sourceText.includes(token)||sourceTokens.some(sourceToken=>sameRoot(token,sourceToken))).length;
     return Boolean(tokens.length&&matched/Math.max(tokens.length,1)>=.45);
   };
   const checkGrounded=(path,text,sourceText=storeText,message='Содержание не подтверждено Conversation Store.')=>{
@@ -6560,10 +6568,12 @@ function moduleSummaryGrounding(value,store,transcript=''){
     if(nextTokens.length&&!nextTokens.some(token=>sourceNorm.includes(token))) errors.push({path:'next_step',message:'Следующий шаг не подтверждён primary_next_step или связанными agreements.'});
     if(primary.owner==='агент'&&/\bклиент\b[^.]{0,40}\b(?:отправит|позвонит|подготовит|уточнит)\b/i.test(value.next_step)) errors.push({path:'next_step',message:'Ответственный за следующий шаг не совпадает с Conversation Store.'});
     if(primary.owner==='клиент'&&/\bагент\b[^.]{0,40}\b(?:отправит|позвонит|подготовит|уточнит)\b/i.test(value.next_step)) errors.push({path:'next_step',message:'Ответственный за следующий шаг не совпадает с Conversation Store.'});
-    // Нумерованный список ("1) сделать это; 2) сделать то") — допустимый
-    // способ перечислить шаги, но цифры-маркеры пунктов не являются
-    // придуманным сроком/суммой и не должны попадать в проверку чисел ниже.
-    const nextStepForNumbers=String(value.next_step||'').replace(/(^|[;.]\s*)\d+[).]\s*/g,'$1');
+    // Нумерованный список ("1) сделать это", "Шаги: 1) ...; 2) ...") —
+    // допустимый способ перечислить шаги независимо от того, что стоит
+    // перед маркером (двоеточие, точка с запятой, начало строки). Цифра
+    // прямо перед закрывающей скобкой — однозначный маркер пункта списка,
+    // а не придуманный срок/сумма, и не должна попадать в проверку чисел.
+    const nextStepForNumbers=String(value.next_step||'').replace(/\b\d+\)/g,'');
     const outputNumbers=(moduleSummaryNorm(nextStepForNumbers).match(/\b\d+(?:[.,:]\d+)?\b/g)||[]);
     if(outputNumbers.some(number=>!sourceNorm.includes(number.replace(',','.')))) errors.push({path:'next_step',message:'Срок следующего шага отсутствует в evidence.'});
     const temporal=['сегодня','завтра','послезавтра','понедельник','вторник','среда','четверг','пятница','суббота','воскресенье'];
@@ -8225,10 +8235,25 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
     reconciled.verified.filter(item=>factJudgeEntries(input).find(entry=>entry.id===item.judge_id)?.kind==='quote'&&!verified_quotes.includes(item)).forEach(item=>rejected_quotes.push({...item,verification_status:'rejected',verified:false,error_type:'quote_supports_rejected_fact',rejection_reason:'Цитата ссылается на отклонённый факт.'}));
     const facts_checked=input.facts.length,facts_verified=verified_facts.length,facts_rejected=rejected_facts.length;
     const quotes_checked=input.quotes.length,quotes_verified=verified_quotes.length,quotes_rejected=rejected_quotes.length;
-    const precision_score=facts_checked?facts_verified/facts_checked:1,quote_score=quotes_checked?quotes_verified/quotes_checked:1;
-    const criticalInput=input.facts.filter(factIsCritical),criticalVerified=criticalInput.filter(item=>verifiedFactIds.has(item.id)).length;
+    // pii_phone-отклонение — это код, обязательный по политике приватности
+    // (см. factCodeSemanticRejection), а не промах извлечения: судья мог
+    // корректно подтвердить факт (например, "клиент попросил номер агента"),
+    // и код всё равно уберёт его из verified store, потому что запись о
+    // телефоне туда никогда не должна попасть. Если считать такие пункты
+    // обычным facts_checked/quotes_checked, разговор, где клиент просто
+    // назвал номер (обычное дело в звонках), получает заниженный precision/
+    // score за то, что фильтр приватности отработал правильно. Убираем эти
+    // пункты только из знаменателя оценки; в facts_checked/facts_rejected
+    // они остаются для прозрачности отчёта.
+    const piiRejectedFactIds=new Set(codeRejected.filter(item=>item.error_type==='pii_phone').map(item=>item.id));
+    const piiRejectedFactsCount=piiRejectedFactIds.size;
+    const piiRejectedQuotesCount=rejected_quotes.filter(item=>item.error_type==='quote_supports_rejected_fact'&&toList(item.supports_fact_ids).some(id=>piiRejectedFactIds.has(id))).length;
+    const scoreEligibleFactsChecked=Math.max(0,facts_checked-piiRejectedFactsCount);
+    const scoreEligibleQuotesChecked=Math.max(0,quotes_checked-piiRejectedQuotesCount);
+    const precision_score=scoreEligibleFactsChecked?facts_verified/scoreEligibleFactsChecked:1,quote_score=scoreEligibleQuotesChecked?quotes_verified/scoreEligibleQuotesChecked:1;
+    const criticalInput=input.facts.filter(factIsCritical).filter(item=>!piiRejectedFactIds.has(item.id)),criticalVerified=criticalInput.filter(item=>verifiedFactIds.has(item.id)).length;
     const critical_recall_score=criticalInput.length?criticalVerified/criticalInput.length:1;
-    let audit=reconciliationQuality(reconciled,facts_checked+quotes_checked,facts_verified+quotes_verified,reconciled.warnings.length);
+    let audit=reconciliationQuality(reconciled,scoreEligibleFactsChecked+scoreEligibleQuotesChecked,facts_verified+quotes_verified,reconciled.warnings.length);
     const extractionAudit=ctx&&ctx.__extraction_audits&&ctx.__extraction_audits.facts;
     const recoveredItems=Number(extractionAudit&&extractionAudit.recovered_fact_count||0)+Number(extractionAudit&&extractionAudit.recovered_quote_count||0);
     if(recoveredItems>0){
