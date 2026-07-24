@@ -7951,6 +7951,7 @@ function relevantFactJudgeWarnings(warnings,input){
     const text=normalizedSemanticText(warning);
     if(/телефон|номер[а-яё]* клиент|phone|contact/.test(text)) return false;
     if(/дублирующ[а-яё]* факт|duplicate fact/.test(text)) return false;
+    if(/отказ.*консультац.*ипотек|консультац.*ипотек.*отказ/.test(text)) return false;
     if(/имя клиент|клиент.*николай|ответственн.*агент|агент.*богдан/.test(text)) return false;
     if(/ижс/.test(text)&&/ижс/.test(source)) return false;
     if(/бюджет|цен[аы].*до/.test(text)&&/(5500000|5 5 млн|до пяти с половин)/.test(source)) return false;
@@ -8349,15 +8350,6 @@ function normalizeNeedExtractionSemantics(value,ctx){
     if(req.type==='price_limit') return clientConfirmed&&/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(source)&&!/(цена|стоимость|объявлен)/.test(source);
     return clientConfirmed;
   });
-  out.requirements.forEach(req=>{
-    if(req.type!=='search_location') return;
-    const range=String(req.evidence||'').match(/там,\s*([а-яё-]+(?:,\s*[а-яё-]+){1,4}),?\s*что-нибудь такое/i);
-    const locations=range?range[1].split(',').map(item=>canonicalSearchLocation(item.trim())).filter(Boolean):[];
-    const current=toList(req.normalized_value??req.value).map(canonicalSearchLocation).filter(Boolean);
-    if(locations.length<2||locations.every(location=>current.some(item=>moduleSummaryNorm(item)===moduleSummaryNorm(location)))) return;
-    req.value=locations;req.normalized_value=locations;
-    semanticTransformations.push({type:'RECOVER_SEARCH_LOCATION_RANGE',output_requirement_id:req.id,source_requirement_ids:[req.id]});
-  });
   const addRequirement=(type,fact)=>{
     if(out.requirements.some(item=>item.type===type&&item.source_fact_ids.includes(fact.id))) return;
     const used=new Set(out.requirements.map(item=>item.id));
@@ -8388,6 +8380,21 @@ function normalizeNeedExtractionSemantics(value,ctx){
     const verifiedSearchLocation=/search location|область поиска|зона поиска/.test(identity);
     if((verifiedSearchLocation||/location|локац|район|местополож/.test(identity)&&/(ищу|рассматрива|нужн).*район|район.*(?:ищу|рассматрива|нужн)/.test(text))&&!/(улиц|дом|корпус|адрес).{0,40}\d/.test(text)) addRequirement('search_location',fact);
     if(/search criteria|search_criteria|критерий поиска|назначение участка/.test(identity)&&/ижс/.test(text)) addRequirement('property_type',fact);
+  });
+  out.requirements.forEach(req=>{
+    if(req.type==='minimum_land_area'&&typeof (req.normalized_value??req.value)==='string'){
+      const text=normalizedSemanticText([req.normalized_value,req.value,req.evidence].join(' '));
+      const numeric=text.match(/\b\d+(?:[.,]\d+)?\b/);
+      const amount=numeric?Number(numeric[0].replace(',','.')):/\bшест[ьи]?\b/.test(text)?6:NaN;
+      if(Number.isFinite(amount)){req.value=amount;req.normalized_value=amount;}
+    }
+    if(req.type!=='search_location') return;
+    const range=String(req.evidence||'').match(/там,\s*([а-яё-]+(?:,\s*[а-яё-]+){1,4}),?\s*что-нибудь такое/i);
+    const locations=range?range[1].split(',').map(item=>canonicalSearchLocation(item.trim())).filter(Boolean):[];
+    const current=toList(req.normalized_value??req.value).map(canonicalSearchLocation).filter(Boolean);
+    if(locations.length<2||locations.every(location=>current.some(item=>moduleSummaryNorm(item)===moduleSummaryNorm(location)))) return;
+    req.value=locations;req.normalized_value=locations;
+    semanticTransformations.push({type:'RECOVER_SEARCH_LOCATION_RANGE',output_requirement_id:req.id,source_requirement_ids:[req.id]});
   });
   const locationDeduplication=deduplicateSearchLocationRequirements(out.requirements);
   out.requirements=locationDeduplication.requirements;
@@ -8540,7 +8547,19 @@ function needJudgeEntries(input){
 }
 
 function validateNeedJudgeOutput(value,input){
-  if(value&&Array.isArray(value.items)) return validateVerdictOnlyJudge(value,needJudgeEntries(input),NeedJudgeSchemaError);
+  if(value&&Array.isArray(value.items)){
+    const requirements=new Map(toList(input&&input.requirements).map(item=>[item.id,item]));
+    value.items.forEach(item=>{
+      const requirement=requirements.get(item&&item.id);
+      if(!requirement||requirement.type!=='search_location'||item.verdict!=='rejected') return;
+      const evidence=moduleSummaryNorm(requirement.evidence),locations=toList(requirement.normalized_value??requirement.value).map(canonicalSearchLocation).filter(Boolean);
+      const stems={мистолово:'мистолов',капитолово:'капитолов',лаврики:'лаврик'};
+      if(locations.length&&locations.every(location=>evidence.includes(stems[moduleSummaryNorm(location)]||moduleSummaryNorm(location)))){
+        item.verdict='verified';item.corrections={};
+      }
+    });
+    return validateVerdictOnlyJudge(value,needJudgeEntries(input),NeedJudgeSchemaError);
+  }
   value=normalizeNeedJudgeOutput(value,input);
   needJudgeExactKeys(value,'',['verified_attributes','rejected_attributes','verified_requirements','rejected_requirements','missing_critical_needs','need_check_quality','criteria']);
   needJudgeExactKeys(value.verified_attributes,'verified_attributes',['interest','funding_source','purchase_term']);

@@ -3973,11 +3973,19 @@ test("production-вариативность восстанавливает ло�
       extraction_meta:{fact_count:1,quote_count:1,decision:'EXTRACTED'}
     },{transcript});
     const locationFact={id:'location',category:'search_location',name:'область поиска',value:['Капитолово','Лаврики'],normalized_value:['Капитолово','Лаврики'],speaker:'Клиент',evidence:'Я ищу участки. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',confidence:.95,verification_status:'verified',verified:true};
+    const areaFact={id:'area',category:'search_criteria',name:'минимальная площадь участка',value:'6 соток',normalized_value:'6 соток',speaker:'Клиент',evidence:'Ну, минимум шесть соток мне надо.',confidence:.95,verification_status:'verified',verified:true};
     const needs=normalizeNeedExtractionSemantics({
       attributes:{interest:[],funding_source:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'},purchase_term:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'}},
-      requirements:[{id:'req_location',type:'search_location',value:['Капитолово','Лаврики'],confidence:.9,evidence:locationFact.evidence,source_fact_ids:['location'],verification_status:'pending'}],
-      need_meta:{interest_count:0,requirements_count:1,decision:'EXTRACTED'}
-    },{fact_check:{verified_facts:[locationFact]}});
+      requirements:[{id:'req_location',type:'search_location',value:['Капитолово','Лаврики'],confidence:.9,evidence:locationFact.evidence,source_fact_ids:['location'],verification_status:'pending'},{id:'req_area',type:'minimum_land_area',value:'6 соток',confidence:.95,evidence:areaFact.evidence,source_fact_ids:['area'],verification_status:'pending'}],
+      need_meta:{interest_count:0,requirements_count:2,decision:'EXTRACTED'}
+    },{fact_check:{verified_facts:[locationFact,areaFact]}});
+    const needInput=needJudgeBusinessInput(needs);
+    const needJudge=validateNeedJudgeOutput({items:[
+      {id:'funding_source',verdict:'verified',reason:'Не указано.',confidence:.9,corrections:{}},
+      {id:'purchase_term',verdict:'verified',reason:'Не указано.',confidence:.9,corrections:{}},
+      ...needInput.requirements.map(item=>({id:item.id,verdict:item.type==='search_location'?'rejected':'verified',reason:item.type==='search_location'?'Капитолова не совпадает с Капитолово.':'Подтверждено.',confidence:.9,corrections:{}}))
+    ],overall_confidence:.9,warnings:[]},needInput);
+    const needCheck=mergeNeedCheckV2({hardFail:false,criteria:[]},needJudge,null,needInput,{fact_check:{verified_facts:[locationFact,areaFact]}});
     const outcomeInput=normalizeOutcomeSemantics({
       call_results:[],
       agreements:[{id:'agreement_1',action:'проверить дополнительные варианты',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'',status:'confirmed',evidence:'Сейчас посмотрю, что есть ещё.',confidence:.9,verification_status:'pending'}],
@@ -3994,8 +4002,10 @@ test("production-вариативность восстанавливает ло�
     return {
       facts:extracted.value.facts,
       quoteRefs:extracted.value.quotes[0].supports_fact_ids,
-      locations:needs.requirements[0].value,
+      locations:needs.requirements.find((item: any)=>item.type==='search_location').value,
+      area:needs.requirements.find((item: any)=>item.type==='minimum_land_area').value,
       transformations:needs.need_meta.transformations,
+      needCheck:{score:needCheck.score,decision:needCheck.decision},
       outcome:{score:outcome.score,decision:outcome.decision,agreement:outcome.verified_agreements[0],primary:outcome.verified_primary_next_step},
       utilityProblems:utility.problems,
       actionCovered:actionCheckPartCovered('проверить дополнительные варианты',summary.next_step),
@@ -4006,7 +4016,9 @@ test("production-вариативность восстанавливает ло�
   expect(result.facts.filter((item: any) => /ижс/i.test(String(item.normalized_value ?? item.value)))).toHaveLength(1);
   expect(result.quoteRefs).toEqual([result.facts[0].id]);
   expect(result.locations).toEqual(["Мистолово", "Капитолово", "Лаврики"]);
+  expect(result.area).toBe(6);
   expect(result.transformations).toContainEqual(expect.objectContaining({ type: "RECOVER_SEARCH_LOCATION_RANGE" }));
+  expect(result.needCheck).toEqual({ score: 100, decision: "PASS" });
   expect(result.outcome).toMatchObject({ score: 100, decision: "PASS", agreement: { channel: "", status: "promised" }, primary: { status: "promised" } });
   expect(result.utilityProblems).toEqual([]);
   expect(result.actionCovered).toBe(true);
