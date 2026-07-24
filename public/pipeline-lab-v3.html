@@ -4429,8 +4429,14 @@ function buildConversationStoreV1(ctx){
   toList(oc.missing_critical_outcomes).filter(item=>item&&((item.critical===true)||item.severity==='critical')).forEach((item,index)=>store_issues.push({code:'MISSING_CRITICAL_OUTCOME',stage:'outcome_check',entity_id:String(item.id||'missing_outcome_'+index),severity:'critical',message:String(item.reason||item.name||'Пропущен критический результат.')}));
   let decision='READY';
   if(decisions.some(value=>value==='FAIL'||value==='MANUAL_REVIEW'||value==='REVIEW_REQUIRED')) decision='MANUAL_REVIEW';
-  else if(decisions.some(value=>value==='PASS_WITH_WARNINGS'||value==='PASS_WITH_CORRECTIONS'||value==='WARNING')) decision='READY_WITH_WARNINGS';
-  else if(!decisions.every(value=>value==='PASS')) decision='MANUAL_REVIEW';
+  else if(decisions.some(value=>value==='PASS_WITH_WARNINGS'||value==='WARNING')) decision='READY_WITH_WARNINGS';
+  // PASS_WITH_CORRECTIONS means the Judge caught and fixed a minor
+  // extraction detail; the corrected item is still verified:true and enters
+  // the store like any other verified item (see conversationStoreCloneVerified
+  // below), so it is treated as equivalent to PASS here rather than
+  // permanently downgrading store readiness for a successfully-corrected
+  // item — same reasoning as cleanFactRecovery above.
+  else if(!decisions.every(value=>value==='PASS'||value==='PASS_WITH_CORRECTIONS')) decision='MANUAL_REVIEW';
   if(store_issues.some(item=>item.severity==='critical')) decision='MANUAL_REVIEW';
   const overall_confidence=Math.min(qualityValues.fact_check,qualityValues.need_check,qualityValues.outcome_check);
   const provenance={run_id,transcript_hash,pipeline_configuration_hash,source_stage_ids};
