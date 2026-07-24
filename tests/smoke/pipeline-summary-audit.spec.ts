@@ -4005,8 +4005,12 @@ test("production-вариативность восстанавливает ло�
       {id:'primary_next_step',verdict:'verified',reason:'Шаг подтверждён.',confidence:.9,corrections:{}}
     ],overall_confidence:.9,warnings:[]},outcomeInput);
     const outcome=mergeOutcomeCheck({hardFail:false,criteria:[]},judge,null,outcomeInput,{});
-    const summary={status:'GENERATED',conversation_result:'Клиент рассматривает участок.',key_facts:[],quotes:[],next_step:'Агент отправит клиенту подборку альтернативных участков.',error:'',confidence:.95};
-    const utility=validateAgentUtilityJudgeOutput({status:'fail',score:80,can_continue_without_recording:false,context_clarity:80,actionability:80,scanability:100,recording_independence:80,missing_for_next_agent:[],useful_summary_elements:[],problems:[{type:'missing_action_context',field:'next_step',summary_fragment:summary.next_step,problem:'Не указаны критерии приоритизации подборки и фильтры вариантов.'},{type:'crm_data_without_working_context',field:'key_facts',summary_fragment:summary.conversation_result,problem:'Ключевые факты записаны в свободном тексте conversation_result, но поле key_facts пустое — это усложняет быстрое считывание карточки и машинную обработку.'}],explanation:'Проверка'}, {summary,conversation_store:{conversation:{agreements:[{id:'a',action:'отправить подборку',owner:'агент'}],primary_next_step:{action:'отправить подборку',owner:'агент',status:'confirmed',agreement_ids:['a']}}}});
+    const summary={status:'GENERATED',conversation_result:'Клиент рассматривает покупку участка.',key_facts:[],quotes:[],next_step:'Агент отправит клиенту подборку альтернативных участков.',error:'',confidence:.95};
+    const utility=validateAgentUtilityJudgeOutput({status:'fail',score:80,can_continue_without_recording:false,context_clarity:80,actionability:80,scanability:100,recording_independence:80,missing_for_next_agent:[],useful_summary_elements:[],problems:[{type:'missing_action_context',field:'next_step',summary_fragment:summary.next_step,problem:'Не указаны критерии приоритизации подборки и фильтры вариантов.'},{type:'crm_data_without_working_context',field:'key_facts',summary_fragment:summary.conversation_result,problem:'Ключевые факты записаны в свободном тексте conversation_result, но поле key_facts пустое — это усложняет быстрое считывание карточки и машинную обработку.'},{type:'difficult_to_scan',field:'next_step',summary_fragment:summary.next_step,problem:'Нет приоритизации или краткого контекста: что должно быть в подборке и какие параметры считать первыми.'}],explanation:'Проверка'}, {summary,conversation_store:{conversation:{agreements:[{id:'a',action:'отправить подборку',owner:'агент'}],primary_next_step:{action:'отправить подборку',owner:'агент',status:'confirmed',agreement_ids:['a']}}}});
+    const materials=normalizeOutcomeSemantics({call_results:[],agreements:[{id:'agreement_materials',action:'отправить ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'',channel:'',status:'confirmed',evidence:'Скину ссылку на подбор.',confidence:.9,verification_status:'pending'}],primary_next_step:{action:'отправить ссылку на подбор',owner:'агент',deadline:'',channel:'',status:'confirmed',agreement_ids:['agreement_materials'],confidence:.9,verification_status:'pending'},outcome_meta:{result_count:0,agreement_count:1,decision:'EXTRACTED'}},{fact_check:{verified_facts:[{category:'communication_channel',value:'MAX',normalized_value:'MAX',evidence:'Да, давайте в Макс лучше.',verified:true,verification_status:'verified'}]},__transcript:'Агент: Сейчас скину ссылку на подбор.\nКлиент: Да, давайте в Макс лучше.'});
+    const expected=criticalCompletenessExpectedItems({conversation_store:{conversation:{facts:[{id:'goal',category:'client_intent',value:'узнать про участок',evidence:'Слушайте, по поводу участка звоню вам.',verification_status:'verified'}],requirements:[{id:'budget',type:'price_limit',value:5500000,evidence:'до пяти с половиной',verification_status:'verified'},{id:'type',type:'property_type',value:'ИЖС',evidence:'ИЖС',verification_status:'verified'}],attributes:{},call_results:[],agreements:[],primary_next_step:{}}}});
+    const truthPurchaseIssue=repairTruthJudgeIssue({type:'fact_distortion',field:'conversation_result',summary_fragment:'Клиент рассматривает покупку участка',problem:'Явное намерение покупки не подтверждено.',evidence:'fact_1 evidence: Слушайте, по поводу участка звоню вам.'},{summary,conversation_store:{conversation:{requirements:[{type:'price_limit'},{type:'property_type'},{type:'search_location'}]}}});
+    const presentationOptional=validatePresentationIssue({type:'empty_required_field',field:'key_facts',summary_fragment:'Клиент рассматривает покупку участка',problem:'Поле key_facts пусто.'},'errors[0]',{summary});
     return {
       facts:extracted.value.facts,
       quoteRefs:extracted.value.quotes[0].supports_fact_ids,
@@ -4015,6 +4019,10 @@ test("production-вариативность восстанавливает ло�
       transformations:needs.need_meta.transformations,
       needCheck:{score:needCheck.score,decision:needCheck.decision},
       outcome:{score:outcome.score,decision:outcome.decision,agreement:outcome.verified_agreements[0],primary:outcome.verified_primary_next_step},
+      materials:materials.agreements[0],
+      expectedIds:expected.map(item=>item.id),
+      truthPurchaseIssue,
+      presentationOptional,
       utilityProblems:utility.problems,
       actionCovered:actionCheckPartCovered('проверить дополнительные варианты',summary.next_step),
       presentationStatus:validatePresentationSummaryShape(summary).status
@@ -4028,6 +4036,10 @@ test("production-вариативность восстанавливает ло�
   expect(result.transformations).toContainEqual(expect.objectContaining({ type: "RECOVER_SEARCH_LOCATION_RANGE" }));
   expect(result.needCheck).toEqual({ score: 100, decision: "PASS" });
   expect(result.outcome).toMatchObject({ score: 100, decision: "PASS", agreement: { channel: "", status: "promised" }, primary: { status: "promised" } });
+  expect(result.materials).toMatchObject({ channel: "MAX", status: "promised", deadline: "после звонка" });
+  expect(result.expectedIds).not.toContain("critical-client-goal");
+  expect(result.truthPurchaseIssue).toBeNull();
+  expect(result.presentationOptional).toBeNull();
   expect(result.utilityProblems).toEqual([]);
   expect(result.actionCovered).toBe(true);
   expect(result.presentationStatus).toBe("GENERATED");

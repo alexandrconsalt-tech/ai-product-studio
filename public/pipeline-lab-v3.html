@@ -6859,6 +6859,11 @@ function truthCheckDependency(ctx){
 function truthIssueEvidenceSource(ctx){return moduleSummaryNorm(JSON.stringify(ctx.conversation_store&&ctx.conversation_store.conversation||{}))+' '+moduleSummaryNorm(transcriptText(ctx));}
 function repairTruthJudgeIssue(issue,ctx){
   if(!issue||typeof issue!=='object'||Array.isArray(issue)||!issue.type||!issue.summary_fragment||!issue.evidence) return issue;
+  if(issue.type==='fact_distortion'&&/(?:намерен|цель|покупк).*(?:не подтверж|нет|отсутств)|(?:не подтверж|нет|отсутств).*(?:намерен|цель|покупк)/.test(moduleSummaryNorm(issue.problem))){
+    const result=moduleSummaryNorm(ctx&&ctx.summary&&ctx.summary.conversation_result),store=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation||{};
+    const purchaseContext=toList(store.requirements).filter(item=>['price_limit','property_type','minimum_land_area','minimum_area','search_location'].includes(String(item&&item.type||''))).length;
+    if(/клиент.*(?:рассматривает|ищет|подбирает).*(?:покупк|участ)/.test(result)&&purchaseContext>=2) return null;
+  }
   // Judge иногда сам искажает summary_fragment на одно слово и затем объявляет
   // корректную дословную цитату ошибочной. Если evidence дословно совпадает с
   // одной из цитат Summary, quote_distortion/quote_not_verified объективно
@@ -7133,7 +7138,8 @@ function criticalCompletenessExpectedItems(ctx){
   const requirements=store.requirements.filter(item=>item&&['verified','corrected'].includes(String(item.verification_status||'verified')));
   const firstFact=category=>facts.find(item=>item.category===category);
   const goal=firstFact('client_intent');
-  if(goal) add('critical-client-goal','client_goal',goal.normalized_value??goal.value,goal.evidence);
+  const genericLandGoal=goal&&requirements.length>0&&/(?:по поводу|узнать про|интересует)\s+(?:земельн\w*\s+)?участок/.test(moduleSummaryNorm([goal.normalized_value??goal.value,goal.evidence].join(' ')));
+  if(goal&&!genericLandGoal) add('critical-client-goal','client_goal',goal.normalized_value??goal.value,goal.evidence);
   const budget=requirements.find(item=>item.type==='price_limit')||firstFact('client_finance');
   if(budget) add('critical-budget','budget',budget.normalized_value??budget.value,budget.evidence);
   const requiredTypes=new Set(['property_type','minimum_land_area','minimum_area','rooms','search_location','legal_requirement']);
@@ -7232,7 +7238,7 @@ function agentUtilityOutOfScopeProblem(item){
   if(/(?:телефон|номер телефона|адрес|цена объекта|стоимость объекта|площад|этаж|комнатност|имя агента|имя клиента).*(?:не указан|отсутств|нужно добавить)|(?:не указан|отсутств|нужно добавить).*(?:телефон|адрес|цена объекта|площад|этаж|комнатност|имя)/.test(text)) return true;
   if(/достоверност|неверн.*(?:сумм|бюджет|роль)|дословност.*цитат|искажен.*цитат/.test(text)) return true;
   if(/(?:какой|точн|конкретн).{0,30}(?:видео|файл|url|ссылк|аккаунт)|(?:видео|файл|url|ссылк|аккаунт).{0,30}(?:какой|точн|конкретн)/.test(text)) return true;
-  if(type==='missing_action_context'&&/(?:критери|фильтр|приорит|включать|исключать).*(?:подбор|вариант)|(?:подбор|вариант).*(?:критери|фильтр|приорит|включать|исключать)/.test(text)) return true;
+  if(['missing_action_context','difficult_to_scan','unclear_next_step','unclear_client_situation'].includes(type)&&/(?:критери|фильтр|приорит|параметр|включать|исключать|что должно).*(?:подбор|вариант)|(?:подбор|вариант).*(?:критери|фильтр|приорит|параметр|включать|исключать|что должно)/.test(text)) return true;
   if(type==='recording_required'&&/второстеп|необязательн.*детал|мелк.*детал/.test(text)) return true;
   return false;
 }
@@ -7471,6 +7477,7 @@ function validatePresentationIssue(item,path,ctx){
   truthExactObject(item,path,['type','field','summary_fragment','problem']);['type','field','summary_fragment','problem'].forEach(key=>truthString(item[key],path+'.'+key,{required:true}));
   if(presentationOutOfScopeIssue(item)) return null;
   if(!PRESENTATION_ISSUE_TYPES.has(item.type)) truthFail(path+'.type','unknown presentation issue type '+JSON.stringify(item.type));
+  if(item.type==='empty_required_field'&&item.field==='key_facts'&&Array.isArray(ctx&&ctx.summary&&ctx.summary.key_facts)) return null;
   if(/^quotes(?:\[|$)/.test(item.field)&&['fragmented_text','difficult_to_scan','unclear_wording'].includes(item.type)) return null;
   if(item.type==='difficult_to_scan'&&item.field==='conversation_result'){
     const listed=String(item.summary_fragment||'').split(',').map(part=>part.trim()).filter(Boolean);
@@ -8854,6 +8861,9 @@ function normalizeOutcomeSemantics(value,ctx){
   normalized.agreements=normalized.agreements.filter(outcomeFutureActionSupported).map(agreement=>{
     agreement.action=outcomeFutureAction(agreement.action,agreement.evidence);
     agreement.channel=canonicalSelectedChannel(agreement.channel);
+    const materialSend=agreement.owner==='агент'&&/(?:отправ|скин|пришл|направ).*(?:видео|ссылк|подбор|материал)|(?:видео|ссылк|подбор|материал).*(?:отправ|скин|пришл|направ)/.test(normalizedSemanticText([agreement.action,agreement.evidence].join(' ')));
+    if(materialSend&&!agreement.channel&&preferredChannel) agreement.channel=preferredChannel;
+    if(materialSend&&agreement.status==='confirmed'&&!/(?:клиент|—\s*да|давайте|соглас)/.test(normalizedSemanticText(agreement.evidence))) agreement.status='promised';
     const explicitDeadline=!agreement.deadline?outcomeExplicitFollowUpDeadline(ctx,agreement):null;
     if(explicitDeadline){
       agreement.deadline=explicitDeadline.deadline;
