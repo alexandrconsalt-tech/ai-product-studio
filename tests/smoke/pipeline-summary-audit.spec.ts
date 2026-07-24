@@ -3982,11 +3982,12 @@ test("production-вариативность восстанавливает ло�
     },{transcript});
     const locationFact={id:'location',category:'search_location',name:'область поиска',value:['Капитолово','Лаврики'],normalized_value:['Капитолово','Лаврики'],speaker:'Клиент',evidence:'Я ищу участки. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',confidence:.95,verification_status:'verified',verified:true};
     const areaFact={id:'area',category:'search_criteria',name:'минимальная площадь участка',value:'6 соток',normalized_value:'6 соток',speaker:'Клиент',evidence:'Ну, минимум шесть соток мне надо.',confidence:.95,verification_status:'verified',verified:true};
+    const marketFact={id:'market',category:'other_important',name:'наличие вариантов по бюджету',value:'в Мистолово нет вариантов до 5.5 млн',normalized_value:null,speaker:'Клиент',evidence:'В Мистолово до пяти с половиной ничего.',confidence:.9,verification_status:'verified',verified:true};
     const needs=normalizeNeedExtractionSemantics({
       attributes:{interest:[],funding_source:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'},purchase_term:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'}},
-      requirements:[{id:'req_location',type:'search_location',value:['Капитолово','Лаврики'],confidence:.9,evidence:locationFact.evidence,source_fact_ids:['location'],verification_status:'pending'},{id:'req_area',type:'minimum_land_area',value:'6 соток',confidence:.95,evidence:areaFact.evidence,source_fact_ids:['area'],verification_status:'pending'}],
+      requirements:[{id:'req_location',type:'search_location',value:['Капитолово','Лаврики'],confidence:.9,evidence:locationFact.evidence,source_fact_ids:['location'],verification_status:'pending'},{id:'req_area',type:'minimum_land_area',value:'6 соток',confidence:.95,evidence:areaFact.evidence,source_fact_ids:['area'],verification_status:'pending'},{id:'req_market',type:'price_limit',value:'в Мистолово нет вариантов до 5.5 млн',confidence:.9,evidence:marketFact.evidence,source_fact_ids:['market'],verification_status:'pending'}],
       need_meta:{interest_count:0,requirements_count:2,decision:'EXTRACTED'}
-    },{fact_check:{verified_facts:[locationFact,areaFact]}});
+    },{fact_check:{verified_facts:[locationFact,areaFact,marketFact]}});
     const needInput=needJudgeBusinessInput(needs);
     const needJudge=validateNeedJudgeOutput({items:[
       {id:'funding_source',verdict:'verified',reason:'Не указано.',confidence:.9,corrections:{}},
@@ -4001,7 +4002,7 @@ test("production-вариативность восстанавливает ло�
       outcome_meta:{result_count:0,agreement_count:1,decision:'EXTRACTED'}
     },{fact_check:{verified_facts:[]},transcript:'Агент:\n— Сейчас посмотрю, что есть ещё.'});
     const judge=validateOutcomeJudgeOutput({items:[
-      {id:'agreement_1',verdict:'needs_correction',reason:'Ошибочно понижен статус.',confidence:.7,corrections:{channel:'MAX',status:'preliminary',confidence:.7}},
+      {id:'agreement_1',verdict:'needs_correction',reason:'Ошибочно понижен статус.',confidence:.7,corrections:{channel:'MAX',deadline:'после звонка',status:'preliminary',confidence:.7}},
       {id:'primary_next_step',verdict:'needs_correction',reason:'Ошибочно понижен статус.',confidence:.7,corrections:{status:'preliminary',confidence:.7}}
     ],overall_confidence:.9,warnings:[]},outcomeInput);
     const outcome=mergeOutcomeCheck({hardFail:false,criteria:[]},judge,null,outcomeInput,{});
@@ -4017,6 +4018,7 @@ test("production-вариативность восстанавливает ло�
       quoteRefs:extracted.value.quotes[0].supports_fact_ids,
       locations:needs.requirements.find((item: any)=>item.type==='search_location').value,
       area:needs.requirements.find((item: any)=>item.type==='minimum_land_area').value,
+      marketPriceRequirements:needs.requirements.filter((item: any)=>item.type==='price_limit'),
       transformations:needs.need_meta.transformations,
       needCheck:{score:needCheck.score,decision:needCheck.decision},
       outcome:{score:outcome.score,decision:outcome.decision,agreement:outcome.verified_agreements[0],primary:outcome.verified_primary_next_step},
@@ -4035,6 +4037,7 @@ test("production-вариативность восстанавливает ло�
   expect(result.quoteRefs).toEqual([result.facts[0].id]);
   expect(result.locations).toEqual(["Мистолово", "Капитолово", "Лаврики"]);
   expect(result.area).toBe(6);
+  expect(result.marketPriceRequirements).toEqual([]);
   expect(result.transformations).toContainEqual(expect.objectContaining({ type: "RECOVER_SEARCH_LOCATION_RANGE" }));
   expect(result.needCheck).toEqual({ score: 100, decision: "PASS" });
   expect(result.outcome).toMatchObject({ score: 100, decision: "PASS", agreement: { channel: "", status: "promised" }, primary: { status: "promised" } });

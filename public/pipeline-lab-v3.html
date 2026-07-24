@@ -8375,6 +8375,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
     const sourceFacts=req.source_fact_ids.map(id=>byId.get(id)).filter(Boolean);
     const source=normalizedSemanticText([req.evidence,...sourceFacts.map(factText)].join(' '));
     if(req.type==='price_limit'&&sourceFacts.some(fact=>fact.category==='client_question')) return false;
+    if(req.type==='price_limit'&&/(?:наличие|нет|не было|не наш|ничего).*(?:вариант|объект|предложен)|(?:вариант|объект|предложен).*(?:нет|не было|не наш|ничего)/.test(source)) return false;
     const clientConfirmed=sourceFacts.some(fact=>fact.speaker==='Клиент')&&/(хочу|ищу|нужн|важн|рассматрива|не хочу|требован|предпочита|бюджет|лимит|рассчитыва|готов)/.test(source);
     if(req.type==='search_location') return clientConfirmed&&/(район|город|локац|метро|ищу|рассматрива)/.test(source)&&!(/(?:улиц|ул |дом|корпус|адрес).{0,40}\d/.test(source)&&!/(ищу|рассматрива|район)/.test(source));
     if(req.type==='price_limit') return clientConfirmed&&/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(source)&&!/(цена|стоимость|объявлен)/.test(source);
@@ -8395,8 +8396,11 @@ function normalizeNeedExtractionSemantics(value,ctx){
     // к явно классифицированному и verified клиентскому лимиту.
     const verifiedBudget=(fact.category==='client_finance'||/budget max|client budget|client finance|бюджет|price limit|ценов.*предел|максимальн.*(?:сумм|цена)/.test(identity))
       &&!/(object|listing|объект|объявлен)/.test(identity)
+      &&fact.normalized_value!==null
+      &&fact.normalized_value!==''
       &&Number.isFinite(Number(fact.normalized_value));
-    if(verifiedBudget||/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(text)&&!/(цена|стоимость|объявлен)/.test(text)) addRequirement('price_limit',fact);
+    const marketAvailability=/(?:наличие|нет|не было|не наш|ничего).*(?:вариант|объект|предложен)|(?:вариант|объект|предложен).*(?:нет|не было|не наш|ничего)/.test(text);
+    if(verifiedBudget||!marketAvailability&&/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(text)&&!/(цена|стоимость|объявлен)/.test(text)) addRequirement('price_limit',fact);
     // Минимальная площадь/количество соток — самостоятельное требование
     // клиента. Оно не должно исчезать только потому, что Need Agent вернул
     // пустой requirements при наличии verified client_constraint.
@@ -9260,6 +9264,13 @@ function validateOutcomeJudgeOutput(value,input){
   if(value&&Array.isArray(value.items)){
     value.items.forEach(item=>{
       const originalAgreement=toList(input&&input.agreements).find(agreement=>agreement&&agreement.id===item.id);
+      const originalEntry=item&&item.id==='primary_next_step'?input&&input.primary_next_step:originalAgreement||toList(input&&input.call_results).find(result=>result&&result.id===item.id);
+      if(item&&item.verdict==='needs_correction'&&item.corrections&&originalEntry){
+        Object.keys(item.corrections).forEach(key=>{
+          if(moduleSummaryNorm(JSON.stringify(item.corrections[key]))===moduleSummaryNorm(JSON.stringify(originalEntry[key]))) delete item.corrections[key];
+        });
+        if(!Object.keys(item.corrections).length) item.verdict='verified';
+      }
       const internalInspection=originalAgreement&&/(?:посмотр|провер|подбер).*(?:вариант|что есть)|(?:вариант|что есть).*(?:посмотр|провер|подбер)/.test(normalizedSemanticText([originalAgreement.action,originalAgreement.evidence].join(' ')))&&!/(?:отправ|скин|пришл|направ)/.test(normalizedSemanticText(originalAgreement.action));
       const explicitAgentPromise=originalAgreement&&originalAgreement.owner==='агент'&&originalAgreement.status==='promised'
         &&/(?:отправлю|скину|пришлю|направлю|посмотрю|проверю|подберу)/.test(normalizedSemanticText(originalAgreement.evidence));
