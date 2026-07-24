@@ -9647,7 +9647,15 @@ async function runStage(stage, ctx){
       : isFactsExtraction
       ? {type:'json_schema',json_schema:{name:'facts_v2',strict:true,schema:FACT_EXTRACTION_JSON_SCHEMA}}
       : null;
-    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason,structuredOutputApplied,networkRetryCount=0,networkRetryReason}=await callModelWithTransientRetry(prompt, stage.model, stage.provider, stage.temperature, stage.maxTokens,responseFormat,stageAllowsVendorFallback(stage));
+    // AI Tunnel оценивает максимальную стоимость до запуска запроса. На
+    // длинной транскрипции резерв 6000 превышал лимит ключа всего на 0,24 ₽
+    // и останавливал весь pipeline до первого ответа модели. Для строгой
+    // схемы Fact Agent достаточно 5500 output tokens; пользовательский
+    // меньший лимит сохраняем, а другие этапы и провайдеры не затрагиваем.
+    const effectiveExtractionMaxTokens=isFactsExtraction&&stage.provider==='ai-tunnel'
+      ? Math.min(Number(stage.maxTokens)||5500,5500)
+      : stage.maxTokens;
+    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason,structuredOutputApplied,networkRetryCount=0,networkRetryReason}=await callModelWithTransientRetry(prompt, stage.model, stage.provider, stage.temperature, effectiveExtractionMaxTokens,responseFormat,stageAllowsVendorFallback(stage));
     const promptHash=await hashPrompt(prompt);
     let parsed=null, parseErr=null, parseErrKind=null,contractWarnings=[],extractionAudit=null;
     try{

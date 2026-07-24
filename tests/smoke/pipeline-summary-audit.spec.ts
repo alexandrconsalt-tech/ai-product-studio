@@ -4029,7 +4029,8 @@ test("production-вариативность восстанавливает ло�
       presentationQuoteRepeat,
       utilityProblems:utility.problems,
       actionCovered:actionCheckPartCovered('проверить дополнительные варианты',summary.next_step),
-      presentationStatus:validatePresentationSummaryShape(summary).status
+      presentationStatus:validatePresentationSummaryShape(summary).status,
+      extractionRuntime:runStage.toString()
     };
   });
 
@@ -4049,6 +4050,7 @@ test("production-вариативность восстанавливает ло�
   expect(result.utilityProblems).toEqual([]);
   expect(result.actionCovered).toBe(true);
   expect(result.presentationStatus).toBe("GENERATED");
+  expect(result.extractionRuntime).toContain("Math.min(Number(stage.maxTokens)||5500,5500)");
 });
 
 test("проверки качества не штрафуют общий client goal, дословную цитату и принадлежащий агенту файл", async ({ page }) => {
