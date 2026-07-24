@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import regressionCases from "../fixtures/transcription-summary-regression-32-36.json";
+import pipelineReportRegression from "../fixtures/pipeline-report-2026-07-24T062250.414.regression.json";
 
 const moduleUrl = "/pipeline-lab-v3.html?projectId=project_transcription_summary_module&productName=" +
   encodeURIComponent("Модуль транскрибации и AI-саммари звонков");
@@ -339,6 +340,175 @@ test("legacy-конфигурация модуля принудительно п
   ]);
 });
 
+test("all system AI stages migrate from mock to AI Tunnel for this product", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const providers = await page.evaluate(() => eval(`(() => {
+    const keys=['facts','fact_check','needs','need_check','outcome','outcome_check','summary','truth_check','critical_completeness_check','agent_utility_check','action_check','presentation_check'];
+    const source=defaultPipeline().map(stage=>keys.includes(stage.outKey)
+      ? {...stage,provider:'mock',userEdited:false}
+      : stage);
+    return migratePipelineConfig(source,[])
+      .filter(stage=>keys.includes(stage.outKey))
+      .map(stage=>[stage.outKey,stage.provider]);
+  })()`));
+
+  expect(Object.fromEntries(providers)).toEqual({
+    facts: "ai-tunnel",
+    fact_check: "ai-tunnel",
+    needs: "ai-tunnel",
+    need_check: "ai-tunnel",
+    outcome: "ai-tunnel",
+    outcome_check: "ai-tunnel",
+    summary: "ai-tunnel",
+    truth_check: "ai-tunnel",
+    critical_completeness_check: "ai-tunnel",
+    agent_utility_check: "ai-tunnel",
+    action_check: "ai-tunnel",
+    presentation_check: "ai-tunnel",
+  });
+});
+
+test("production legacy Judge model migrates only for untouched stages of this product", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const keys=['facts','fact_check','needs','need_check','outcome','outcome_check','summary','truth_check','critical_completeness_check','agent_utility_check','action_check','presentation_check'];
+    const makePipeline=userEdited=>defaultPipeline().map(stage=>keys.includes(stage.outKey)
+      ? {...stage,model:'claude-sonnet-4-6',userEdited}
+      : stage);
+    const system=migratePipelineConfig(makePipeline(false),[])
+      .filter(stage=>keys.includes(stage.outKey))
+      .map(stage=>stage.model);
+    const customFactCheck=migratePipelineConfig(makePipeline(true),[])
+      .find(stage=>stage.outKey==='fact_check').model;
+    return {system,customFactCheck};
+  })()`));
+
+  expect(result.system).toEqual(Array(12).fill("gpt-5-mini"));
+  expect(result.customFactCheck).toBe("claude-sonnet-4-6");
+});
+
+test("production report 95 refreshes misclassified system prompts but preserves runtime settings", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const legacy={
+      facts:[3,'Ты — Fact Extraction Agent.'],fact_check:[4,'Ты — Fact Verification Agent.'],
+      needs:[5,'Ты — Need Extraction Agent.'],need_check:[4,'Ты — Need Verification Agent.'],
+      outcome:[4,'Ты — Outcome Agent.'],outcome_check:[3,'Ты — Outcome Verification Agent.'],
+      summary:[3,'Ты — Summary Agent CRM агентства недвижимости.'],truth_check:[3,'Ты — Summary Faithfulness Agent.'],
+      critical_completeness_check:[3,'Ты — Summary Completeness Agent.'],agent_utility_check:[3,'Ты — Summary Usefulness Agent.'],
+      action_check:[3,'Ты — Summary Agreement Agent.'],presentation_check:[3,'Ты — Summary Format Agent.']
+    };
+    const defaults=defaultPipeline();
+    const expected=Object.fromEntries(defaults.filter(stage=>legacy[stage.outKey]).map(stage=>[stage.outKey,{version:stage.promptVersion,prompt:stage.prompt}]));
+    const source=defaults.filter(stage=>stage.outKey!=='stt').map(stage=>legacy[stage.outKey]
+      ? {...stage,promptVersion:legacy[stage.outKey][0],prompt:legacy[stage.outKey][1]+'\\n\\nСистемный legacy prompt.',promptSource:'user_override',userEdited:true,model:'gpt-5-mini',provider:'ai-tunnel',temperature:.7,maxTokens:10000,contractVersion:TRANSCRIPTION_SUMMARY_CONTRACT_VERSION}
+      : stage);
+    const migrated=migratePipelineConfig(source,[]);
+    const actual=Object.fromEntries(migrated.filter(stage=>legacy[stage.outKey]).map(stage=>[stage.outKey,{version:stage.promptVersion,prompt:stage.prompt,promptSource:stage.promptSource,promptEdited:stage.promptEdited,settingsEdited:stage.settingsEdited,model:stage.model,provider:stage.provider,temperature:stage.temperature,maxTokens:stage.maxTokens}]));
+    const customSource=defaults.map(stage=>stage.outKey==='needs'
+      ? {...stage,promptVersion:5,prompt:'МОЙ НАСТОЯЩИЙ CUSTOM PROMPT',promptSource:'user_override',userEdited:true,contractVersion:TRANSCRIPTION_SUMMARY_CONTRACT_VERSION}
+      : stage);
+    const custom=migratePipelineConfig(customSource,[]).find(stage=>stage.outKey==='needs');
+    return {expected,actual,custom:{prompt:custom.prompt,promptVersion:custom.promptVersion,promptSource:custom.promptSource}};
+  })()`));
+
+  for (const [outKey, expected] of Object.entries(result.expected) as Array<[string, any]>) {
+    expect(result.actual[outKey]).toMatchObject({
+      version: expected.version,
+      prompt: expected.prompt,
+      promptSource: "migrated_legacy",
+      promptEdited: false,
+      settingsEdited: true,
+      model: "gpt-5-mini",
+      provider: "ai-tunnel",
+      temperature: 0.7,
+      maxTokens: outKey === "fact_check" ? 12000 : 10000,
+    });
+  }
+  expect(result.custom).toEqual({ prompt: "МОЙ НАСТОЯЩИЙ CUSTOM PROMPT", promptVersion: 5, promptSource: "user_override" });
+});
+
+test("production report 98 migrates exact legacy system prompt hashes but preserves custom prompt", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const def=defaultPipeline().find(item=>item.outKey==='critical_completeness_check');
+    const originalHash=stableHash;
+    stableHash=value=>value==='SYSTEM REPORT 98 PROMPT'?'b48d82f9':originalHash(value);
+    const legacy={outKey:'critical_completeness_check',prompt:'SYSTEM REPORT 98 PROMPT',promptVersion:4,promptSource:'user_override',userEdited:true,provider:'ai-tunnel',model:'gpt-5-mini',temperature:0,maxTokens:3000,contractVersion:TRANSCRIPTION_SUMMARY_CONTRACT_VERSION};
+    const custom={...legacy,prompt:'МОЙ CUSTOM PROMPT'};
+    const migrated=migratePipelineConfig([legacy]).find(item=>item.outKey==='critical_completeness_check');
+    const preserved=migratePipelineConfig([custom]).find(item=>item.outKey==='critical_completeness_check');
+    stableHash=originalHash;
+    return {migrated:{prompt:migrated.prompt,promptVersion:migrated.promptVersion,promptSource:migrated.promptSource,maxTokens:migrated.maxTokens},preserved:{prompt:preserved.prompt,promptVersion:preserved.promptVersion,promptSource:preserved.promptSource},def:{prompt:def.prompt,promptVersion:def.promptVersion}};
+  })()`));
+  expect(result.migrated).toEqual({ prompt: result.def.prompt, promptVersion: result.def.promptVersion, promptSource: "migrated_legacy", maxTokens: 8000 });
+  expect(result.preserved).toEqual({ prompt: "МОЙ CUSTOM PROMPT", promptVersion: 4, promptSource: "user_override" });
+});
+
+test("системный Summary получает достаточный output budget без изменения userEdited", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const makePipeline=userEdited=>defaultPipeline().map(stage=>stage.outKey==='summary'
+      ? {...stage,maxTokens:2500,userEdited}
+      : stage);
+    const system=migratePipelineConfig(makePipeline(false),[]).find(stage=>stage.outKey==='summary');
+    const custom=migratePipelineConfig(makePipeline(true),[]).find(stage=>stage.outKey==='summary');
+    return {system:system.maxTokens,custom:custom.maxTokens};
+  })()`));
+  expect(result).toEqual({ system: 8000, custom: 2500 });
+});
+
+test("Fact Check reserves enough output for verdicts and requires concise reasons", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const stage = await page.evaluate(() => eval(`(() => {
+    const saved={...defaultPipeline().find(item=>item.outKey==='fact_check'),promptVersion:7,maxTokens:4000,userEdited:true,settingsEdited:true,promptEdited:false};
+    const migrated=migratePipelineConfig([saved],[])[0];
+    const input={facts:[{id:'fact_1',category:'client_constraint'}],quotes:[]};
+    let invalidCategory='';
+    try{validateFactJudgeOutput({items:[{id:'fact_1',verdict:'needs_correction',reason:'неверная категория',confidence:.9,corrections:{category:'hard_constraint'}}],overall_confidence:.9,warnings:[]},input)}catch(error){invalidCategory=error.message}
+    return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.category};
+  })()`));
+
+  expect(stage).toMatchObject({ promptVersion: 9, maxTokens: 12000 });
+  expect(stage.prompt).toContain("reason — не более 6 слов");
+  expect(stage.prompt).toContain("hard_constraint, main_objection и budget_max не являются допустимыми category");
+  expect(stage.invalidCategory).toContain('unknown fact category');
+  expect(stage.runtime).toContain('Math.max(Number(stage.maxTokens)||0,12000)');
+  expect(stage.runtime).toContain("parseErr==='TRUNCATED_JSON'");
+  expect(stage.schemaCategory.enum).toContain("client_constraint");
+  expect(stage.schemaCategory.enum).not.toContain("hard_constraint");
+});
+
+test("все verdict-only Judge получают безопасный output budget даже из старых snapshots", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const keys=['fact_check','need_check','outcome_check'];
+    const saved=defaultPipeline().filter(stage=>keys.includes(stage.outKey)).map(stage=>({...stage,maxTokens:stage.outKey==='fact_check'?4000:3000,userEdited:true,settingsEdited:true,promptEdited:false}));
+    const migrated=migratePipelineConfig(saved,[]);
+    return {budgets:Object.fromEntries(migrated.filter(stage=>keys.includes(stage.outKey)).map(stage=>[stage.outKey,stage.maxTokens])),runtime:runStage.toString()};
+  })()`));
+
+  expect(result.budgets).toEqual({ fact_check: 12000, need_check: 8000, outcome_check: 8000 });
+  expect(result.runtime).toContain("Math.max(Number(stage.maxTokens)||0,8000)");
+});
+
+test("summary Judges reserve output for reasoning responses", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const stages = await page.evaluate(() => eval(`(() => {
+    const keys=['truth_check','critical_completeness_check','agent_utility_check','action_check','presentation_check'];
+    const saved=defaultPipeline().filter(stage=>keys.includes(stage.outKey)).map(stage=>({...stage,maxTokens:2500}));
+    return migratePipelineConfig(saved,[]).filter(stage=>keys.includes(stage.outKey)).map(stage=>({outKey:stage.outKey,maxTokens:stage.maxTokens,provider:stage.provider}));
+  })()`));
+
+  expect(stages).toEqual([
+    { outKey: "truth_check", maxTokens: 8000, provider: "ai-tunnel" },
+    { outKey: "critical_completeness_check", maxTokens: 8000, provider: "ai-tunnel" },
+    { outKey: "agent_utility_check", maxTokens: 8000, provider: "ai-tunnel" },
+    { outKey: "action_check", maxTokens: 8000, provider: "ai-tunnel" },
+    { outKey: "presentation_check", maxTokens: 8000, provider: "ai-tunnel" },
+  ]);
+});
+
 test("регрессия звонка по участку отклоняет Telegram, телефон и вопрос вместо имени", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
@@ -368,6 +538,32 @@ test("регрессия звонка по участку отклоняет Tel
   expect(result.html).not.toContain("[object Object]");
 });
 
+test("verdict-only Fact Judge не может подтвердить факт о номере для связи", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const input={facts:[{id:'fact_phone_confirmation',category:'communication_context',name:'подтверждение номера для связи',value:true,normalized_value:true,speaker:'Клиент',evidence:'Совершенно верно.',confidence:.9,verification_status:'pending'}],quotes:[{id:'quote_phone_confirmation',text:'Совершенно верно.',speaker:'Клиент',supports_fact_ids:['fact_phone_confirmation'],confidence:.9,verification_status:'pending'}],extraction_meta:{fact_count:1,quote_count:1,decision:'EXTRACTED'}};
+    const judge=validateFactJudgeOutput({items:[{id:'fact_phone_confirmation',verdict:'verified',reason:'подтверждено',confidence:.9,corrections:{}},{id:'quote_phone_confirmation',verdict:'verified',reason:'дословно',confidence:.9,corrections:{}}],overall_confidence:.9,warnings:[]},input);
+    return mergeFactCheck({hardFail:false,criteria:[]},judge,null,input,{});
+  })()`));
+  expect(result.verified_facts).toEqual([]);
+  expect(result.rejected_facts).toEqual(expect.arrayContaining([expect.objectContaining({ id: "fact_phone_confirmation", error_type: "pii_phone" })]));
+  expect(result.verified_quotes).toEqual([]);
+  expect(result.rejected_quotes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "quote_phone_confirmation", error_type: "quote_supports_rejected_fact" })]));
+});
+
+test("verdict-only Fact Judge отклоняет correction с null value", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const input={facts:[{id:'fact_criteria',category:'search_criteria',name:'предпочтительное назначение участка',value:'ИЖС',normalized_value:'ИЖС',speaker:'Клиент',evidence:'Да, да, конечно, я понял.',confidence:.9,verification_status:'pending'}],quotes:[{id:'quote_criteria',text:'Да, да, конечно, я понял.',speaker:'Клиент',supports_fact_ids:['fact_criteria'],confidence:.9,verification_status:'pending'}],extraction_meta:{fact_count:1,quote_count:1,decision:'EXTRACTED'}};
+    const judge=validateFactJudgeOutput({items:[{id:'fact_criteria',verdict:'needs_correction',reason:'нет явного упоминания ИЖС клиентом',confidence:.4,corrections:{value:null,normalized_value:null}},{id:'quote_criteria',verdict:'verified',reason:'дословно',confidence:.9,corrections:{}}],overall_confidence:.8,warnings:[]},input);
+    return mergeFactCheck({hardFail:false,criteria:[]},judge,null,input,{});
+  })()`));
+  expect(result.verified_facts).toEqual([]);
+  expect(result.rejected_facts).toEqual(expect.arrayContaining([expect.objectContaining({ id: "fact_criteria", error_type: "unsupported_interpretation" })]));
+  expect(result.verified_quotes).toEqual([]);
+  expect(result.rejected_quotes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "quote_criteria", error_type: "quote_supports_rejected_fact" })]));
+});
+
 test("неподтверждённая ипотека переводит Gate в REVIEW_REQUIRED и блокирует CRM", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate((fixture) => eval(`(() => {
@@ -389,11 +585,37 @@ test("неподтверждённая ипотека переводит Gate в
   expect(result.apiCalls).toBe(0);
 });
 
+test("Summary синхронизирует пустой primary_next_step с обязательной формулировкой", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const stage=defaultPipeline().find(item=>item.outKey==='summary');
+    const value={status:'GENERATED',conversation_result:'Клиент интересуется участком.',key_facts:[],quotes:[],next_step:'Агент отправит видео.',error:''};
+    const store={conversation:{primary_next_step:{action:'',owner:'',deadline:'не определено',channel:'',status:'not_defined',agreement_ids:[]}}};
+    const repaired=moduleSummaryApplyStorePolicy(value,store);
+    return {stage:{promptVersion:stage.promptVersion,prompt:stage.prompt},repaired,errors:moduleSummaryGrounding(repaired.value,store)};
+  })()`));
+
+  expect(result.stage.promptVersion).toBe(6);
+  expect(result.stage.prompt).toContain('next_step должен быть ровно "Следующий шаг не согласован."');
+  expect(result.repaired).toMatchObject({ count: 1, value: { next_step: "Следующий шаг не согласован." } });
+  expect(result.errors).toEqual(expect.not.arrayContaining([expect.objectContaining({ path: "next_step" })]));
+});
+
+test("Summary не принимает цену объекта под меткой бюджета", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const errors = await page.evaluate(() => eval(`(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент интересуется участком.',key_facts:[{label:'Бюджет',value:'4 650 000'}],quotes:[],next_step:'Следующий шаг не согласован.',error:''};
+    const store={conversation:{facts:[{id:'f1',category:'object_information',name:'цена в объявлении',value:'Четыре 650',normalized_value:4650000,evidence:'Четыре 650.'}],requirements:[],attributes:{},quotes:[],agreements:[],primary_next_step:{status:'not_defined',agreement_ids:[]}}};
+    return moduleSummaryGrounding(summary,store);
+  })()`));
+  expect(errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: "key_facts[0]", message: "Цена объекта не является бюджетом клиента." })]));
+});
+
 test("этап №12 использует новый контракт полноты и заданную модель", async ({ page }) => {
   await page.goto(moduleUrl);
   const stage = await page.evaluate(() => eval(`(() => {
     const item=pipeline.find(stage=>stage.outKey==='critical_completeness_check');
-    return item&&{name:item.name,type:item.type,outKey:item.outKey,provider:item.provider,model:item.model,temperature:item.temperature,maxTokens:item.maxTokens,prompt:item.prompt};
+    return item&&{name:item.name,type:item.type,outKey:item.outKey,provider:item.provider,model:item.model,temperature:item.temperature,maxTokens:item.maxTokens,promptVersion:item.promptVersion,prompt:item.prompt};
   })()`));
   expect(stage).toMatchObject({
     name: "Проверка полноты критически важной информации",
@@ -402,10 +624,13 @@ test("этап №12 использует новый контракт полно
     provider: "ai-tunnel",
     model: "gpt-5-mini",
     temperature: 0,
-    maxTokens: 3000,
+    maxTokens: 8000,
+    promptVersion: 10,
   });
   expect(stage.prompt).toContain("critical_items_total");
   expect(stage.prompt).toContain("Не считай бюджетом цену объекта");
+  expect(stage.prompt).toContain("Обычный client_role/status");
+  expect(stage.prompt).toContain("без перефразирования");
 });
 
 test("код полноты сам пересчитывает весовой score, status и не штрафует semantic-дубли", async ({ page }) => {
@@ -494,6 +719,166 @@ test("неизвестные funding/term и пустой Store не созда�
   expect(result.output).toMatchObject({ status: "pass", score: 100, critical_items_total: 0, critical_items_missing: 0 });
 });
 
+test("production report 2026-07-23 восстанавливает явное возражение и не считает ожидание материалов целью клиента", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript='Клиент:\\n— Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.\\nАгент:\\n— Я отправлю видео.';
+    const extracted={facts:[{id:'fact_1',category:'client_intent',name:'ожидание видеообзора',value:'ожидает видеообзор',normalized_value:'ожидает видеообзор',speaker:'Клиент',evidence:'Я жду от вас видео.',confidence:.9,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
+    const policy=applyFactExtractionPolicies(extracted,{__transcript:transcript});
+    const required=[...criticalCompletenessRequiredCategories({conversation_store:{conversation:{facts:policy.value.facts,requirements:[],attributes:{},call_results:[]}}})];
+    return {policy,required};
+  })()`));
+  expect(result.policy.warnings).toContain("CLIENT_OBJECTION_POLICY_ADDED");
+  expect(result.policy.value.facts).toContainEqual(expect.objectContaining({
+    category: "client_objection",
+    name: "главное возражение",
+    evidence: "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.",
+    verification_status: "pending"
+  }));
+  expect(result.policy.value.quotes).toContainEqual(expect.objectContaining({
+    text: "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.",
+    speaker: "Клиент"
+  }));
+  expect(result.required).toContain("main_objection");
+  expect(result.required).not.toContain("client_goal");
+});
+
+test("production report 2026-07-24 сохраняет подтверждённое ИЖС как требование, а не interest", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript=[
+      'Агент:',
+      '— Ну, до пяти с половиной, ну, если это ИЖС, да?',
+      'Клиент:',
+      '— Да, да, конечно, я понял.'
+    ].join('\\n');
+    const extracted={facts:[],quotes:[],extraction_meta:{fact_count:0,quote_count:0,decision:'NO_FACTS'}};
+    const policy=applyFactExtractionPolicies(extracted,{__transcript:transcript});
+    const contextual=policy.value.facts.find(item=>item.category==='search_criteria'&&item.normalized_value==='ИЖС');
+    const verified={...contextual,verification_status:'verified',verified:true,source:'fact_check'};
+    const empty={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'};
+    const needs=normalizeNeedExtractionSemantics({attributes:{interest:[],funding_source:empty,purchase_term:empty},requirements:[],need_meta:{interest_count:0,requirements_count:0,decision:'NO_NEEDS'}},{facts:policy.value,fact_check:{verified_facts:[verified]}});
+    const recovered=conversationStoreRecoveredRequirements([verified],[]);
+    const required=[...criticalCompletenessRequiredCategories({conversation_store:{conversation:{facts:[verified],requirements:needs.requirements,attributes:{},call_results:[]}}})];
+    return {policy,contextual,needs,recovered,required};
+  })()`));
+
+  expect(result.policy.warnings).toContain("CONTEXTUAL_IZHS_CRITERION_ADDED");
+  expect(result.contextual).toMatchObject({
+    category: "search_criteria",
+    name: "назначение участка",
+    value: "ИЖС",
+    normalized_value: "ИЖС",
+    speaker: "Клиент",
+    evidence: "— Да, да, конечно, я понял.",
+    verification_status: "pending",
+  });
+  expect(result.needs.attributes.interest).toEqual([]);
+  expect(result.needs.requirements).toContainEqual(expect.objectContaining({
+    type: "property_type",
+    value: "ИЖС",
+    source_fact_ids: [result.contextual.id],
+  }));
+  expect(result.recovered).toContainEqual(expect.objectContaining({ type: "property_type", value: "ИЖС" }));
+  expect(result.required).toContain("required_criteria");
+});
+
+test("pipeline report 2026-07-24T062250 проходит deterministic regression без скрытых recovery", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate((fixture) => {
+    const seed={facts:[
+      {id:'fact_1',category:'client_intent',name:'цель обращения',value:'поиск участка',normalized_value:'поиск участка',speaker:'Клиент',evidence:'Слушайте, по поводу участка звоню вам.',confidence:.95,verification_status:'pending'},
+      {id:'fact_2',category:'search_location',name:'область поиска',value:'Деревня Мистолово',normalized_value:'Деревня Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',confidence:.95,verification_status:'pending'},
+      {id:'fact_3',category:'client_constraint',name:'минимальная площадь участка',value:'6 соток',normalized_value:6,speaker:'Клиент',evidence:'Ну, минимум шесть соток мне надо.',confidence:.95,verification_status:'pending'},
+      {id:'fact_4',category:'communication_channel',name:'канал',value:'MAX',normalized_value:'MAX',speaker:'Клиент',evidence:'Да, давайте в Макс лучше.',confidence:.95,verification_status:'pending'},
+      {id:'fact_5',category:'agent_commitment',name:'отправить видеообзор',value:'отправить видеообзор',normalized_value:'отправить видеообзор',speaker:'Агент',evidence:'Я могу скинуть вам подробный видеообзор.',confidence:.95,verification_status:'pending'},
+      {id:'fact_6',category:'agent_commitment',name:'отправить подборку',value:'отправить ссылку на подбор',normalized_value:'отправить ссылку на подбор',speaker:'Агент',evidence:'Скину видео и сейчас посмотрю, что у нас есть, скину ссылку на подбор.',confidence:.95,verification_status:'pending'}
+    ],quotes:[],extraction_meta:{fact_count:6,quote_count:0,decision:'EXTRACTED'}};
+    const policy=applyFactExtractionPolicies(seed,{__transcript:fixture.transcript});
+    const verifiedFacts=policy.value.facts.map((fact) => ({...fact,verified:true,verification_status:'verified'}));
+    const recovered=conversationStoreRecoveredRequirements(verifiedFacts,[]).map((item) => ({...item,verified:true}));
+    const deduplicated=deduplicateSearchLocationRequirements(recovered);
+    const repaired=moduleSummaryDeterministicRepair(structuredClone(fixture.failing_summary_raw));
+    const summary=validateModuleSummaryOutput(repaired.value);
+    const alternativeQuestion={category:'client_question',name:'другие варианты',value:'А больше ничего нет у вас в этой локации?',evidence:'А больше ничего нет у вас в этой локации?'};
+    const questionStatus=conversationStoreQuestionStatus(alternativeQuestion,{__transcript:fixture.transcript,outcome_check:{verified_agreements:[{action:'проверить дополнительные варианты и отправить подборку'}],verified_primary_next_step:{action:'отправить подборку альтернативных участков'}}});
+    return {policy,deduplicated,repaired,summary,questionStatus};
+  }, pipelineReportRegression);
+
+  expect(result.policy.audit).toMatchObject({
+    model_output_fact_count: 6,
+    final_fact_count: expect.any(Number),
+    recovered_fact_count: expect.any(Number),
+    model_output_quote_count: 0,
+    final_quote_count: expect.any(Number),
+    recovered_quote_count: expect.any(Number),
+  });
+  expect(result.policy.audit.recovered_fact_count).toBeGreaterThanOrEqual(5);
+  expect(result.policy.warnings).toEqual(expect.arrayContaining([
+    "CLIENT_OBJECTION_POLICY_ADDED",
+    "SEARCH_LOCATION_RANGE_POLICY_ADDED",
+    "CONTEXTUAL_IZHS_CRITERION_ADDED",
+    "CLIENT_BUDGET_POLICY_ADDED",
+    "AGENT_INSPECTION_COMMITMENT_ADDED",
+  ]));
+  expect(result.deduplicated.requirements).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: "property_type", value: "ИЖС" }),
+    expect.objectContaining({ type: "minimum_land_area", normalized_value: 6 }),
+    expect.objectContaining({ type: "price_limit", normalized_value: 5500000 }),
+    expect.objectContaining({ type: "search_location", value: ["Мистолово", "Капитолово", "Лаврики"] }),
+  ]));
+  expect(result.deduplicated.requirements.filter((item: any) => item.type === "search_location")).toHaveLength(1);
+  expect(result.repaired).toMatchObject({ repair_attempted: true, contract_status: "RECOVERED_WITH_WARNING", removed_items: ["key_facts[1]"] });
+  expect(result.summary.key_facts).toEqual([{ label: "Районы поиска", value: "Мистолово, Капитолова, Лаврики" }]);
+  expect(result.questionStatus).toBe("converted_to_action");
+});
+
+test("first-pass scoring не превращает пять corrections из восьми в 100", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const quality = await page.evaluate(() => reconciliationQuality({
+    corrected: Array.from({ length: 5 }, (_, index) => ({ id: "corrected_" + index })),
+    rejected: [],
+  }, 8, 8, 0));
+
+  expect(quality).toMatchObject({
+    semantic_accuracy_score: 1,
+    first_pass_accuracy_score: 0.375,
+    reconciliation_success_score: 1,
+    final_output_validity_score: 1,
+    correction_ratio: 0.625,
+    decision: "PASS_WITH_CORRECTIONS",
+    score: 38,
+  });
+  expect(quality.score).toBeLessThan(100);
+});
+
+test("fault injection каждого из 16 этапов останавливает pipeline и помечает downstream NOT_RUN", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const cases = await page.evaluate(() => {
+    const stages=defaultPipeline().filter((stage) => stage.outKey !== 'stt');
+    return stages.map((failedStage,index)=>{
+      const reports=stages.map((stage,reportIndex)=>({
+        stage,
+        report:reportIndex<index?{status:'ok'}:reportIndex===index?{status:'bad',output:{status:'technical_error',error_code:'FAULT_INJECTION'}}:{status:'not_run',execution_status:'NOT_RUN'}
+      }));
+      return buildPipelineExecutionSummary(stages,reports,index);
+    });
+  });
+
+  expect(cases).toHaveLength(16);
+  cases.forEach((execution: any, index: number) => {
+    expect(execution).toMatchObject({
+      pipeline_status: "TECHNICAL_ERROR",
+      steps_total: 16,
+      steps_executed: index + 1,
+      steps_successful: index,
+    });
+    expect(execution.stages[index].status).toBe("FAILED");
+    expect(execution.stages.slice(index + 1).every((stage: any) => stage.status === "NOT_RUN")).toBe(true);
+    expect(execution.stages.at(-1).status).toBe(index === 15 ? "FAILED" : "NOT_RUN");
+  });
+});
+
 test("текущий звонок по участку покрывает цель, бюджет, ИЖС, площадь, локации и сомнение", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
@@ -527,8 +912,19 @@ test("этап полноты блокируется по dependency и дела
     const ctx={summary,conversation_store:{status:'READY',conversation,provenance:{run_id:run,transcript_hash:transcriptHash,pipeline_configuration_hash:pipelineHash},store_meta:{conversation_store_hash:storeHash}},__run_id:run,__transcript_hash:transcriptHash,__pipeline_configuration_hash:pipelineHash,__summary_provenance:{run_id:run,transcript_hash:transcriptHash,pipeline_configuration_hash:pipelineHash,conversation_store_hash:storeHash},__transcript:'Клиент: Клиент хочет купить квартиру'};
     const valid={status:'fail',score:0,critical_items_total:0,critical_items_present:0,critical_items_missing:0,critical_items:[{id:'goal',category:'client_goal',expected:'Купить квартиру',present:true,summary_field:'conversation_result',summary_fragment:'купить квартиру',evidence:'Клиент хочет купить квартиру'}],missing_items:[],warnings:[],explanation:'Цель отражена.'};
     let retryCalls=0;callModelWithTransientRetry=async()=>{retryCalls++;return {text:retryCalls===1?'{broken':JSON.stringify(valid),tokens:5,actualModel:'deepseek-v3.2-exp',actualProvider:'ai-tunnel'}};
-    const repaired=await runStage(stage,ctx);callModelWithTransientRetry=original;
-    return {dependencyCalls,blocked,retryCalls,repaired};
+    const repaired=await runStage(stage,ctx);
+    const orphan={...valid,critical_items:[],missing_items:[{id:'goal',type:'client_goal',category:'client_goal',expected:'Купить квартиру',importance:'critical',reason:'Нужно для продолжения работы',evidence:'Клиент хочет купить квартиру'}]};
+    callModelWithTransientRetry=async()=>({text:JSON.stringify(orphan),tokens:5,actualModel:'deepseek-v3.2-exp',actualProvider:'ai-tunnel'});
+    const referenceRepaired=await runStage(stage,ctx);
+    const outOfScopeRepair=repairCriticalCompletenessReferences({critical_items:[
+      {id:'channel',category:'critical_context',expected:'Канал связи MAX',present:true,summary_field:'next_step',summary_fragment:'MAX',evidence:'Да, давайте в Макс лучше.'},
+      {id:'seller',category:'critical_context',expected:'Тип продавца — физлицо',present:false,summary_field:'',summary_fragment:'',evidence:'Физлицо.'}
+    ],missing_items:[{id:'seller',type:'seller_type',category:'critical_context',expected:'Тип продавца — физлицо',importance:'critical',reason:'Данные карточки',evidence:'Физлицо.'}]});
+    const serializedRepair=repairCriticalCompletenessReferences({critical_items:[{id:'budget',category:'budget',expected:'До 5 500 000',present:true,summary_field:'key_facts',summary_fragment:'{\"label\":\"Бюджет\",\"value\":\"5 500 000\"}',evidence:'до пяти с половиной'}],missing_items:[{id:'question',type:'critical_question',category:'critical_question',expected:'Кто продаёт?',importance:'critical',reason:'Информация о продавце влияет на сделку',evidence:'А кто продаёт?'}]});
+    const objectPriceRepair=repairCriticalCompletenessReferences({critical_items:[{id:'object-price',category:'budget',expected:'Цена в объявлении/бюджет: 4 650 000',present:true,summary_field:'key_facts',summary_fragment:'4 650 000',evidence:'Четыре 650.'}],missing_items:[]});
+    const paraphrasedMissingRepair=repairCriticalCompletenessReferences({critical_items:[{id:'goal',category:'client_goal',expected:'назначение покупки (для себя / для сдачи и т.п.)',present:false,summary_field:'',summary_fragment:'',evidence:'Для себя. Жить.'}],missing_items:[{id:'goal',type:'client_goal',category:'client_goal',expected:'назначение покупки для себя (жить)',importance:'critical',reason:'Нужно понять цель покупки.',evidence:'Для себя. Жить.'}]});
+    callModelWithTransientRetry=original;
+    return {dependencyCalls,blocked,retryCalls,repaired,referenceRepaired,outOfScopeRepair,serializedRepair,objectPriceRepair,paraphrasedMissingRepair};
   })()`));
   expect(result.dependencyCalls).toBe(0);
   expect(result.blocked.output).toMatchObject({ status: "error", score: 0 });
@@ -536,6 +932,11 @@ test("этап полноты блокируется по dependency и дела
   expect(result.repaired).toMatchObject({ retry_count: 1, parseErr: null });
   expect(result.repaired.output).toMatchObject({ status: "pass", score: 100, critical_items_total: 1, critical_items_present: 1 });
   expect(result.repaired.prompt_audit).toMatchObject({ transcript_present: true, transcript_injected: true });
+  expect(result.referenceRepaired).toMatchObject({ parseErr: null, reference_repair_count: 1, output: { status: "fail", critical_items_total: 1, critical_items_missing: 1 } });
+  expect(result.outOfScopeRepair).toMatchObject({ count: 3, value: { critical_items: [], missing_items: [] } });
+  expect(result.serializedRepair).toMatchObject({ count: 2, value: { critical_items: [{ summary_fragment: "5 500 000" }], missing_items: [] } });
+  expect(result.objectPriceRepair).toMatchObject({ count: 1, value: { critical_items: [], missing_items: [] } });
+  expect(result.paraphrasedMissingRepair).toMatchObject({ count: 1, value: { missing_items: [{ expected: "назначение покупки (для себя / для сдачи и т.п.)" }] } });
 });
 
 test("этап №13 использует новый контракт полезности и заданную модель", async ({ page }) => {
@@ -544,9 +945,22 @@ test("этап №13 использует новый контракт полез
     const item=pipeline.find(stage=>stage.outKey==='agent_utility_check');
     return item&&{name:item.name,type:item.type,outKey:item.outKey,provider:item.provider,model:item.model,temperature:item.temperature,maxTokens:item.maxTokens,prompt:item.prompt};
   })()`));
-  expect(stage).toMatchObject({ name: "Проверка полезности для агента", type: "check", outKey: "agent_utility_check", provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 2500 });
+  expect(stage).toMatchObject({ name: "Проверка полезности для агента", type: "check", outKey: "agent_utility_check", provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 8000 });
   expect(stage.prompt).toContain("actionability");
   expect(stage.prompt).toContain("за 5–10 секунд");
+});
+
+test("Utility parser отбрасывает составной summary_fragment без technical error", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент ищет участок.',key_facts:[{label:'Бюджет',value:'5 500 000'},{label:'Площадь',value:'6 соток'}],quotes:[],next_step:'Агент отправит подборку.',error:''};
+    const ctx={summary,critical_completeness_check:{missing_items:[]}};
+    const judge={status:'pass',score:100,can_continue_without_recording:true,context_clarity:100,actionability:100,scanability:100,recording_independence:100,missing_for_next_agent:[],useful_summary_elements:[{type:'client_situation',description:'Ограничения понятны.',summary_fragment:'Максимальная цена 5 500 000, ... Минимальная площадь 6 соток'}],problems:[],explanation:'Полезно.'};
+    const validated=validateAgentUtilityJudgeOutput(judge,ctx);return {validated,output:agentUtilityRecalculate(validated,ctx),version:defaultPipeline().find(item=>item.outKey==='agent_utility_check').promptVersion};
+  })()`));
+  expect(result.validated.useful_summary_elements).toEqual([]);
+  expect(result.output).toMatchObject({ status: "pass", score: 100 });
+  expect(result.version).toBe(5);
 });
 
 test("идеальное и эталонное summary по участку получают 100/pass без требований данных карточки", async ({ page }) => {
@@ -657,7 +1071,7 @@ test("этап полезности блокируется по dependency и с
 test("этап №14 использует новый action contract и заданную модель", async ({ page }) => {
   await page.goto(moduleUrl);
   const stage = await page.evaluate(() => eval(`(() => {const item=pipeline.find(stage=>stage.outKey==='action_check');return item&&{name:item.name,type:item.type,outKey:item.outKey,provider:item.provider,model:item.model,temperature:item.temperature,maxTokens:item.maxTokens,prompt:item.prompt};})()`));
-  expect(stage).toMatchObject({ name: "Проверка договорённостей и следующего шага", type: "check", outKey: "action_check", provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 2500 });
+  expect(stage).toMatchObject({ name: "Проверка договорённостей и следующего шага", type: "check", outKey: "action_check", provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 8000 });
   expect(stage.prompt).toContain("checked_components");
   expect(stage.prompt).toContain("proposal_as_agreement");
 });
@@ -756,10 +1170,11 @@ test("эталонный next_step с видео и подборкой в MAX п
 test("owner, channel и deadline сверяются со Store", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
-    const run=next=>{const summary={status:'GENERATED',conversation_result:'Итог.',key_facts:[],quotes:[],next_step:next,error:''};const agreement={id:'a1',action:'отправить видео',owner:'агент',recipient:'клиент',deadline:'',channel:'MAX',status:'promised',evidence:'Агент отправит видео в MAX'};const ctx={summary,conversation_store:{conversation:{call_results:[],agreements:[agreement],primary_next_step:{action:'отправить видео',owner:'агент',deadline:'',channel:'MAX',status:'promised',agreement_ids:['a1']}}}};const judge={status:'pass',score:100,next_step_verified:true,agreements_checked:0,agreements_verified:0,agreements_rejected:0,checked_components:{action:true,owner:true,recipient:true,deadline:true,channel:true,status:true,sequence:true},errors:[],warnings:[],explanation:'ok'};return actionCheckRecalculate(validateActionCheckJudgeOutput(judge,ctx),ctx)};
-    return {correct:run('Агент отправит видео в MAX'),owner:run('Клиент отправит видео в MAX'),channel:run('Агент отправит видео в WhatsApp'),deadline:run('Агент отправит видео в MAX завтра')};
+    const run=(next,storeChannel='MAX')=>{const summary={status:'GENERATED',conversation_result:'Итог.',key_facts:[],quotes:[],next_step:next,error:''};const agreement={id:'a1',action:'отправить видео',owner:'агент',recipient:'клиент',deadline:'',channel:storeChannel,status:'promised',evidence:'Агент отправит видео в '+storeChannel};const ctx={summary,conversation_store:{conversation:{call_results:[],agreements:[agreement],primary_next_step:{action:'отправить видео',owner:'агент',deadline:'',channel:storeChannel,status:'promised',agreement_ids:['a1']}}}};const judge={status:'pass',score:100,next_step_verified:true,agreements_checked:0,agreements_verified:0,agreements_rejected:0,checked_components:{action:true,owner:true,recipient:true,deadline:true,channel:true,status:true,sequence:true},errors:[],warnings:[],explanation:'ok'};return actionCheckRecalculate(validateActionCheckJudgeOutput(judge,ctx),ctx)};
+    return {correct:run('Агент отправит видео в MAX'),alias:run('Агент отправит видео в MAX','Макс'),owner:run('Клиент отправит видео в MAX'),channel:run('Агент отправит видео в WhatsApp'),deadline:run('Агент отправит видео в MAX завтра')};
   })()`));
   expect(result.correct).toMatchObject({ status: "pass", score: 100, next_step_verified: true });
+  expect(result.alias).toMatchObject({ status: "pass", score: 100, next_step_verified: true });
   expect(result.owner).toMatchObject({ status: "fail", next_step_verified: false });
   expect(result.owner.errors).toContainEqual(expect.objectContaining({ type: "wrong_owner" }));
   expect(result.channel.errors).toContainEqual(expect.objectContaining({ type: "invented_channel" }));
@@ -800,6 +1215,22 @@ test("secondary agreement вне primary_next_step не снижает action sc
   expect(result.output).toMatchObject({ status: "pass", score: 100, agreements_checked: 1, agreements_verified: 1, agreements_rejected: 0 });
 });
 
+test("канонический primary action не требует повторять детализацию связанных agreements", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const next='отправить видео и скинуть ссылку на подбор (агент)';
+    const agreements=[
+      {id:'a1',action:'отправить видео',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:'Скину видео'},
+      {id:'a2',action:'подготовить подборку вариантов',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:'Посмотрю, что есть'},
+      {id:'a3',action:'скинуть ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:'Скину ссылку на подбор'}
+    ];
+    const ctx={summary:{status:'GENERATED',conversation_result:'Итог.',key_facts:[],quotes:[],next_step:next,error:''},conversation_store:{conversation:{call_results:[],agreements,primary_next_step:{action:next,owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['a1','a2','a3']}}}};
+    return {issues:actionCheckCodeIssues(ctx),version:defaultPipeline().find(item=>item.outKey==='action_check').promptVersion};
+  })()`));
+  expect(result.version).toBe(6);
+  expect(result.issues).toEqual([]);
+});
+
 test("общая фраза, missing next_step и not_defined обрабатываются кодом", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
@@ -813,6 +1244,21 @@ test("общая фраза, missing next_step и not_defined обрабатыв
   expect(result.notDefined).toMatchObject({ status: "pass", score: 100, next_step_verified: true, agreements_checked: 0 });
 });
 
+test("пустой primary_next_step из Conversation Store нормализуется и не останавливает Action Check", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const run='report-97',tr='transcript-97',pipe='pipeline-97',storeHash='store-97';
+    const summary={status:'GENERATED',conversation_result:'Итог.',key_facts:[],quotes:[],next_step:'Следующий шаг не согласован.',error:''};
+    const conversation={call_results:[],agreements:[],primary_next_step:{}};
+    const ctx={summary,conversation_store:{status:'MANUAL_REVIEW',conversation,provenance:{run_id:run,transcript_hash:tr,pipeline_configuration_hash:pipe},store_meta:{conversation_store_hash:storeHash,status:'MANUAL_REVIEW'}},__run_id:run,__transcript_hash:tr,__pipeline_configuration_hash:pipe,__summary_provenance:{run_id:run,transcript_hash:tr,pipeline_configuration_hash:pipe,conversation_store_hash:storeHash}};
+    const malformed={...ctx,conversation_store:{...ctx.conversation_store,conversation:{...conversation,primary_next_step:{status:'promised'}}}};
+    return {selected:actionCheckStore(ctx),dependency:actionCheckDependency(ctx),malformedDependency:actionCheckDependency(malformed)};
+  })()`));
+  expect(result.selected.primary_next_step).toEqual({ action: "", owner: "", deadline: "не определено", channel: "", status: "not_defined", agreement_ids: [] });
+  expect(result.dependency).toBe("");
+  expect(result.malformedDependency).toContain("agreement_ids: expected array");
+});
+
 test("action score/status/counts пересчитываются, semantic duplicate штрафуется один раз", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
@@ -823,6 +1269,77 @@ test("action score/status/counts пересчитываются, semantic duplic
   })()`));
   expect(result).toMatchObject({ status: "warning", score: 85, next_step_verified: true, agreements_checked: 1, agreements_verified: 0, agreements_rejected: 1 });
   expect(result.warnings).toHaveLength(1);
+});
+
+test("Action Check принимает канонический составной шаг и восстанавливает связанные agreements", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const summary = {
+      status: "GENERATED",
+      conversation_result: "Итог.",
+      key_facts: [],
+      quotes: [],
+      next_step: "агент отправит видео и подборку; клиент изучит присланные материалы; канал: MAX; дедлайн: после звонка; статус: preliminary",
+      error: "",
+    };
+    const agreements = [
+      { id: "agreement_1", action: "отправить видеообзор", owner: "агент", recipient: "клиент", deadline: "после звонка", channel: "MAX", status: "confirmed", evidence: "Скину вам видео в MAX." },
+      { id: "agreement_2", action: "агент подготовит подборку", owner: "агент", recipient: "клиент", deadline: "после звонка", channel: "MAX", status: "confirmed", evidence: "Скину ссылку на подбор." },
+      { id: "agreement_3", action: "агент отправит материалы", owner: "агент", recipient: "клиент", deadline: "после звонка", channel: "MAX", status: "confirmed", evidence: "Скину видео и ссылку." },
+      { id: "agreement_4", action: "клиент изучит информацию", owner: "клиент", recipient: "агент", deadline: "не определено", channel: "", status: "promised", evidence: "Скиньте видео, я посмотрю." },
+    ];
+    const ctx = {
+      summary,
+      conversation_store: {
+        conversation: {
+          call_results: [],
+          agreements,
+          primary_next_step: {
+            action: "агент отправит видео и подборку; клиент изучит присланные материалы",
+            owner: "оба",
+            deadline: "после звонка",
+            channel: "MAX",
+            status: "preliminary",
+            agreement_ids: [],
+          },
+        },
+      },
+    };
+    const recipientIssue = {
+      type: "wrong_recipient",
+      field: "recipient",
+      summary_fragment: "агент отправит видео и подборку; клиент изучит присланные материалы",
+      problem: "Получатели не указаны.",
+      expected: "агент -> клиент; клиент -> агент",
+      evidence: JSON.stringify(agreements[0]),
+    };
+    const judge = {
+      status: "fail",
+      score: 60,
+      next_step_verified: false,
+      agreements_checked: 4,
+      agreements_verified: 3,
+      agreements_rejected: 1,
+      checked_components: { action: true, owner: true, recipient: false, deadline: true, channel: true, status: true, sequence: true },
+      errors: [recipientIssue],
+      warnings: [],
+      explanation: "Ложная ошибка recipient.",
+    };
+    const validated = validateActionCheckJudgeOutput(judge, ctx);
+    return { linked: actionCheckLinkedAgreements(actionCheckStore(ctx), ctx), output: actionCheckRecalculate(validated, ctx) };
+  });
+
+  expect(result.linked.map((item: any) => item.id)).toEqual(["agreement_1", "agreement_2", "agreement_3", "agreement_4"]);
+  expect(result.output).toMatchObject({
+    status: "pass",
+    score: 100,
+    next_step_verified: true,
+    agreements_checked: 4,
+    agreements_verified: 4,
+    agreements_rejected: 0,
+    checked_components: { recipient: true },
+    errors: [],
+  });
 });
 
 test("action schema проверяет fragment/evidence, удаляет out-of-scope и dependency ловит hash mismatch", async ({ page }) => {
@@ -861,7 +1378,7 @@ test("этап №15 мигрирует из Code в Checker без дублей
     const migrated=migratePipelineConfig(source,[]),target=migrated.find(item=>item.outKey==='presentation_check');
     return {stage,target,count:migrated.filter(item=>item.outKey==='presentation_check').length,before:migrated.find(item=>item.id==='before'),after:migrated.find(item=>item.id==='after')};
   })()`));
-  expect(result.stage).toMatchObject({ name: "Проверка формата, структуры и краткости", type: "check", outKey: "presentation_check", provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 2500 });
+  expect(result.stage).toMatchObject({ name: "Проверка формата, структуры и краткости", type: "check", outKey: "presentation_check", provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 8000 });
   expect(result.stage.codeFn).toBeUndefined();
   expect(result.target).toMatchObject({ id: "presentation", enabled: false, name: "Проверка формата, структуры и краткости", type: "check", outKey: "presentation_check" });
   expect(result.target.codeFn).toBeUndefined();
@@ -960,6 +1477,36 @@ test("Judge оценивает перегруженность и связнос�
   expect(result.outscope).toMatchObject({ status: "pass", score: 100, errors: [], warnings: [] });
 });
 
+test("Presentation отбрасывает JSON-сериализацию вместо точного summary_fragment", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент выбирает участок.',key_facts:[{label:'Площадь',value:'6'}],quotes:[],next_step:'Агент отправит материалы.',error:''};
+    const judge={status:'warning',score:90,structure_score:100,brevity_score:100,readability_score:100,repetition_score:100,limits_score:100,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:true},metrics:{total_characters:0,conversation_result_characters:0,key_facts_count:0,quotes_count:0,next_step_characters:0,sentence_count:0},errors:[{type:'unclear_wording',field:'key_facts',summary_fragment:'\\"Площадь\\",\\"value\\":\\"6\\"',problem:'Сериализованный фрагмент.'}],warnings:[],explanation:'ok'};
+    const validated=validatePresentationJudgeOutput(judge,{summary});
+    return {validated,output:presentationCheckRecalculate(validated,{summary}),stage:defaultPipeline().find(item=>item.outKey==='presentation_check')};
+  })()`));
+  expect(result.validated.errors).toEqual([]);
+  expect(result.output).toMatchObject({ status: "pass", score: 100 });
+  expect(result.stage).toMatchObject({ promptVersion: 6 });
+});
+
+test("Presentation Judge не может объявить подтверждённый канал MAX запрещённым значением", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент выбирает участок.',key_facts:[{label:'Предпочитаемый канал связи',value:'MAX'}],quotes:[],next_step:'Агент отправит материалы в MAX.',error:''};
+    const issue={type:'forbidden_value',field:'key_facts',summary_fragment:'MAX',problem:'Неоднозначное значение канала.'};
+    const judge={status:'fail',score:0,structure_score:100,brevity_score:100,readability_score:85,repetition_score:100,limits_score:100,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:true},metrics:{total_characters:0,conversation_result_characters:0,key_facts_count:0,quotes_count:0,next_step_characters:0,sentence_count:0},errors:[issue],warnings:[],explanation:'MAX ошибочно признан запрещённым.'};
+    const validated=validatePresentationJudgeOutput(judge,{summary});
+    const output=presentationCheckRecalculate(validated,{summary});
+    const stage=defaultPipeline().find(item=>item.outKey==='presentation_check');
+    return {validated,output,stage:{promptVersion:stage.promptVersion,prompt:stage.prompt}};
+  })()`));
+  expect(result.validated.errors).toEqual([]);
+  expect(result.output).toMatchObject({ status: "pass", score: 100, errors: [] });
+  expect(result.stage.promptVersion).toBe(6);
+  expect(result.stage.prompt).toContain("канал MAX, не являются запрещёнными");
+});
+
 test("schema и run/hash mismatch блокируют Presentation LLM", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(async () => {
@@ -983,10 +1530,11 @@ test("Presentation Judge принимает только разрешённые 
     const summary={status:'GENERATED',conversation_result:'Клиент выбирает участок.',key_facts:[],quotes:[],next_step:'Агент отправит материалы.',error:''};
     const base={status:'pass',score:100,structure_score:100,brevity_score:100,readability_score:100,repetition_score:100,limits_score:100,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:true},metrics:{total_characters:0,conversation_result_characters:0,key_facts_count:0,quotes_count:0,next_step_characters:0,sentence_count:0},errors:[],warnings:[],explanation:'ok'};
     const check=(issue)=>{try{return{value:validatePresentationJudgeOutput({...base,warnings:[issue]},{summary}),error:''}}catch(error){return{error:error.message}}};
-    return {unknown:check({type:'hallucination',field:'conversation_result',summary_fragment:'Клиент выбирает участок.',problem:'Неизвестный тип.'}),fragment:check({type:'unclear_wording',field:'conversation_result',summary_fragment:'нет такого текста',problem:'Фраза неясна.'}),valid:check({type:'unclear_wording',field:'conversation_result',summary_fragment:'Клиент выбирает участок.',problem:'Фраза неясна.'})};
+    return {unknown:check({type:'hallucination',field:'conversation_result',summary_fragment:'Клиент выбирает участок.',problem:'Неизвестный тип.'}),fragment:check({type:'unclear_wording',field:'conversation_result',summary_fragment:'нет такого текста',problem:'Фраза неясна.'}),serialized:check({type:'unclear_wording',field:'conversation_result',summary_fragment:'{"conversation_result":"Клиент выбирает участок."}',problem:'Модель вернула JSON-фрагмент.'}),valid:check({type:'unclear_wording',field:'conversation_result',summary_fragment:'Клиент выбирает участок.',problem:'Фраза неясна.'})};
   })()`));
   expect(result.unknown.error).toContain("unknown presentation issue type");
   expect(result.fragment.error).toContain("fragment is absent from summary");
+  expect(result.serialized.value.warnings).toEqual([]);
   expect(result.valid.value.warnings).toEqual([expect.objectContaining({ type: "unclear_wording" })]);
 });
 
@@ -1111,7 +1659,7 @@ test("Quality Gate разделяет политику Summary и провере
   expect(result.summaryManual.hard_stops.map((item: any) => item.code)).toContain("SUMMARY_MANUAL_REVIEW");
   expect(result.low.crm_write_policy).toMatchObject({ summary: "AUTO_SAVE", attributes: { funding_source: "DO_NOT_SAVE", purchase_term: "SAVE" } });
   expect(result.disputed.crm_write_policy.attributes.funding_source).toBe("REVIEW_REQUIRED");
-  expect(result.empty.crm_write_policy.attributes.interest).toBe("SAVE");
+  expect(result.empty.crm_write_policy.attributes.interest).toBe("DO_NOT_SAVE");
   expect(result.perfect.crm_write_policy.attributes.purchase_term).toBe("SAVE");
   expect(result.rootKeys).toEqual(["status", "summary_quality_score", "decision", "criteria", "thresholds", "hard_stops", "warnings", "technical_errors", "can_save_to_crm", "requires_manual_review", "summary_status", "store_status", "explanation", "crm_write_policy", "metadata"]);
   expect(result.hasNull).toBe(false);
@@ -1224,7 +1772,7 @@ test("CRM v1 независимо применяет attribute policies и за�
   })()`), crmFixture);
   expect(result.multiple.attribute_writes.interest).toMatchObject({ attempted: true, saved: true, value: ["Строительство", "Ипотека"] });
   expect(result.payloads.multiple.attributes.interest).toEqual(["Строительство", "Ипотека"]);
-  expect(result.empty).toMatchObject({ status: "SAVED", attribute_writes: { interest: { policy: "SAVE", attempted: false, saved: false, value: [] } } });
+  expect(result.empty).toMatchObject({ status: "SAVED", attribute_writes: { interest: { policy: "DO_NOT_SAVE", attempted: false, saved: false, value: [] } } });
   expect(result.payloads.empty.attributes).not.toHaveProperty("interest");
   expect(result.disputed.attribute_writes.funding_source).toMatchObject({ policy: "REVIEW_REQUIRED", attempted: false, saved: false });
   expect(result.payloads.disputed.attributes).not.toHaveProperty("funding_source");
@@ -1268,8 +1816,9 @@ test("CRM v1 возвращает строгий audit-контракт и ра�
   await page.goto(moduleUrl);
   const result = await page.evaluate((fixture) => eval(`(() => {
     ${fixture}
-    CRM_IDEMPOTENCY_RESULTS.clear();const ctx=crmContext('crm-ui');ctx.__crm_stage_execution_id='qg-run:17:crm';ctx.__crm_adapter={write(payload){return{id:payload.crm_record_id,request_id:'crm-request-ui'}}};const report=CODE_FUNCS.crm({codeFn:'crm',outKey:'crm',name:'Сохранение в CRM'},ctx),output=report.output,html=renderReport({codeFn:'crm',outKey:'crm',name:'Сохранение в CRM'},report,17).outerHTML;
-    return {output,html,rootKeys:Object.keys(output),auditKeys:Object.keys(output.audit),hasNull:JSON.stringify(output).includes(':null')};
+    CRM_IDEMPOTENCY_RESULTS.clear();const ctx=crmContext('crm-ui');ctx.__crm_stage_execution_id='qg-run:17:crm';ctx.__crm_adapter={write(payload){return{id:payload.crm_record_id,request_id:'crm-request-ui'}}};const stage={codeFn:'crm',outKey:'crm',name:'Сохранение в CRM'},report=CODE_FUNCS.crm(stage,ctx),output=report.output,html=renderReport(stage,report,17).outerHTML;
+    const stoppedHtml=renderReport(stage,{output:{status:'NOT_RUN',decision:'NOT_RUN'},metrics:[],checks:[]},17).outerHTML;
+    return {output,html,stoppedHtml,rootKeys:Object.keys(output),auditKeys:Object.keys(output.audit),hasNull:JSON.stringify(output).includes(':null')};
   })()`), crmFixture);
   expect(result.output).toMatchObject({ status: "SAVED", crm_record_id: "crm-ui", quality: { summary_quality_score: 100, quality_gate_decision: "AUTO_SAVE", warning_count: 0, hard_stop_count: 0 }, audit: { run_id: "qg-run", stage_execution_id: "qg-run:17:crm", call_id: "call-1", transcript_hash: "qg-transcript", conversation_store_hash: expect.any(String), pipeline_configuration_hash: "qg-pipeline", crm_request_id: "crm-request-ui", saved_at: "2026-07-21T10:00:00.000Z", actor: "AI_PIPELINE" }, errors: [], warnings: [] });
   expect(result.rootKeys).toEqual(["status", "decision", "crm_record_id", "summary_write", "attribute_writes", "quality", "audit", "errors", "warnings"]);
@@ -1277,6 +1826,9 @@ test("CRM v1 возвращает строгий audit-контракт и ра�
   expect(result.hasNull).toBe(false);
   for (const text of ["Status", "CRM record", "Summary saved", "Save mode", "Warning flag", "Interest policy/result", "Funding source policy/result", "Purchase term policy/result", "Summary Quality Score", "Quality Gate decision", "Idempotency", "CRM request ID", "Saved at", "Errors", "Warnings"]) expect(result.html).toContain(text);
   expect(result.html).not.toContain("Карточка создана");
+  expect(result.stoppedHtml).toContain("NOT_RUN");
+  expect(result.stoppedHtml).toContain("Summary saved");
+  expect(result.stoppedHtml).not.toContain("JSON получен");
 });
 
 test("pipeline восстанавливает JSON Judge и не принимает неподтверждённые наличные", async ({ page }) => {
@@ -1393,7 +1945,7 @@ test("семантическое сокращение сохраняет фин�
   expect(result.summaryPrompt).toContain("ОБЯЗАТЕЛЬНЫЕ ФАКТЫ ПОСЛЕ ПРОВЕРКИ КАЧЕСТВА");
   expect(result.summaryPrompt).toContain("Есть основная сумма");
   expect(result.factPrompt).not.toContain("при малейшем сомнении снижать оценку");
-  expect(result.factPrompt).toContain("ОБЯЗАТЕЛЬНОЕ ПРАВИЛО КОНТЕКСТНОЙ ПРОВЕРКИ");
+  expect(result.factPrompt).toContain("АКТИВНЫЙ КОНТРАКТ FACT JUDGE ИМЕЕТ ПРИОРИТЕТ");
   expect(result.crm.saved).toBe(false);
 });
 
@@ -1421,7 +1973,7 @@ test("решение RETRY действительно повторно запу�
     };
     const retry=await retrySummaryQualityFlow(active,reports);
     runStage=originalRunStage;
-    return {retry,calls,summary:ctx.summary,gate:ctx.quality_gate,publish:ctx.publish_result,reports:reports.map(item=>({key:item.stage.outKey,retry:item.report.retry_attempt}))};
+    return {retry,calls,summary:ctx.summary,gate:ctx.quality_gate,publish:ctx.publish_result,reports:reports.map(item=>({key:item.stage.outKey,retry:item.report.retry_attempt,outputRetry:item.report.output&&item.report.output.retry_attempt}))};
   })()`));
 
   expect(result.retry.attempted).toBe(true);
@@ -1430,6 +1982,30 @@ test("решение RETRY действительно повторно запу�
   expect(result.gate.decision).toBe("AUTO_SAVE");
   expect(result.publish.saved).toBe(true);
   expect(result.reports.every((report: { retry?: number }) => report.retry === 1)).toBe(true);
+  expect(result.reports.every((report: { outputRetry?: number }) => report.outputRetry === undefined)).toBe(true);
+});
+
+test("технически невалидный quality-retry сохраняет последнюю валидную версию", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(async () => {
+    localStorage.setItem('pipelineLabV3.openaiApiKey','test-key');
+    const validSummary={status:'GENERATED',conversation_result:'Клиент ищет участок.',key_facts:[],quotes:[],next_step:'Агент отправит подборку.',error:''};
+    const originalGate={decision:'REVIEW_REQUIRED',store_status:'READY_WITH_WARNINGS',summary_status:'GENERATED',technical_errors:[],hard_stops:[],warnings:[{message:'Стилистическое замечание'}]};
+    ctx={summary:validSummary,summary_quality_gate:originalGate,__latest_summary_quality_gate:originalGate};
+    const active=[{outKey:'summary',type:'llm',name:'Summary'},{outKey:'truth_check',type:'check',name:'Truth'},{outKey:'summary_quality_gate',type:'code',name:'Gate'},{outKey:'publish_result',type:'code',codeFn:'crm',name:'CRM'}];
+    const reports=active.map(stage=>({stage,report:{output:stage.outKey==='summary'?validSummary:stage.outKey==='summary_quality_gate'?originalGate:{status:'pass'},status:'ok',meta:{score:95}}}));
+    const originalRunStage=runStage;const calls=[];
+    runStage=async stage=>{calls.push(stage.outKey);if(stage.outKey==='summary')return {output:{status:'technical_error',error_code:'SUMMARY_INVALID_OUTPUT'},status:'bad',parseErr:'TRUNCATED_JSON',tokens:10,cost:.01};if(stage.outKey==='publish_result')return {output:{status:'QUEUED_FOR_REVIEW'},status:'attn'};throw new Error('downstream retry must not run');};
+    const retry=await retrySummaryQualityFlow(active,reports);runStage=originalRunStage;
+    return {retry,calls,summary:ctx.summary,gate:ctx.summary_quality_gate,summaryReport:reports.find(item=>item.stage.outKey==='summary').report,publishReport:reports.find(item=>item.stage.outKey==='publish_result').report};
+  })()`));
+  expect(result.retry).toMatchObject({ attempted: true });
+  expect(result.retry.reason).toContain("RETRY_TECHNICAL_ROLLBACK");
+  expect(result.calls).toEqual(["summary", "publish_result"]);
+  expect(result.summary).toMatchObject({ status: "GENERATED", conversation_result: "Клиент ищет участок." });
+  expect(result.gate).toMatchObject({ decision: "REVIEW_REQUIRED" });
+  expect(result.summaryReport).toMatchObject({ status: "ok", output: { status: "GENERATED" } });
+  expect(result.publishReport).toMatchObject({ status: "attn", output: { status: "QUEUED_FOR_REVIEW" } });
 });
 
 test("Conversation Store отклоняет legacy-входы без обязательных verified-блоков", async ({ page }) => {
@@ -1539,16 +2115,18 @@ test("контракты Judge не используют generic score и нор
   expect(result.fact.score).toBeGreaterThanOrEqual(95);
   expect(result.broken).toMatchObject({ status: "technical_error", score: null, decision: "ERROR", error_code: "JUDGE_RESULT_UNAVAILABLE" });
   expect(result.emptyOutcome).toMatchObject({ status: "technical_error", decision: "ERROR", error_code: "PASS_WITH_EMPTY_VERIFIED_OUTCOME" });
-  expect(result.meta).toMatchObject({ score: 100, confidence: 0.97 });
+  expect(result.meta).toMatchObject({ score: null, confidence: 0.97 });
 });
 
-test("каждый шаг Pipeline Lab получает Оценку и Confidence в итоговом отчёте", async ({ page }) => {
+test("LLM-извлечение не получает искусственную оценку до независимой проверки", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
     const reports=[
       {stage:{type:'code',outKey:'validation',codeFn:'validate',name:'Валидация'},report:{status:'ok',output:{score:.99,decision:'PASS'}}},
       {stage:{type:'llm',outKey:'facts',name:'Факты'},report:{status:'ok',output:{facts:[{confidence:.97}]}}},
       {stage:{type:'hybrid',outKey:'fact_judge',name:'Проверка фактов'},report:{status:'ok',output:{score:94,decision:'PASS',verified_facts:[{confidence:.96}]}}},
+      {stage:{type:'llm',outKey:'needs',name:'Потребности'},report:{status:'ok',output:{requirements:[{confidence:.95}]}}},
+      {stage:{type:'hybrid',outKey:'need_judge',name:'Проверка потребностей'},report:{status:'ok',output:{score:96,decision:'PASS',verified_requirements:[{confidence:.94}]}}},
       {stage:{type:'code',outKey:'conversation',codeFn:'conversationStore',name:'Store'},report:{status:'ok',output:{quality:{store_score:.925},facts:[{confidence:.95}]}}},
       {stage:{type:'llm',outKey:'summary',name:'Summary'},report:{status:'ok',output:{summary:'Готово',semantic_coverage_preserved:true}}},
       {stage:{type:'check',outKey:'truth_check',name:'Truth'},report:{status:'ok',output:{score:91,decision:'PASS'}}},
@@ -1559,15 +2137,27 @@ test("каждый шаг Pipeline Lab получает Оценку и Confiden
     reports.forEach(item=>{ item.report.meta=buildStageMeta(item.stage,item.report); });
     const immediate=reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence}));
     attachReviewerScores(reports);
-    return {immediate,final:reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence}))};
+    return {immediate,final:reports.map(item=>({outKey:item.stage.outKey,score:item.report.meta.score,confidence:item.report.meta.confidence,evaluation:item.report.evaluation,metrics:item.report.metrics}))};
   })()`));
-  expect(result.immediate.every((item: any) => item.score != null && item.confidence != null)).toBe(true);
-  expect(result.immediate.find((item: any) => item.outKey === "facts")).toMatchObject({ score: 100, confidence: 0.97 });
+  expect(result.immediate.filter((item: any) => !["conversation", "failed_step", "facts", "needs"].includes(item.outKey)).every((item: any) => item.score != null && item.confidence != null)).toBe(true);
+  expect(result.immediate.find((item: any) => item.outKey === "conversation")).toMatchObject({ confidence: null });
+  expect(result.immediate.find((item: any) => item.outKey === "facts")).toMatchObject({ score: null, confidence: 0.97 });
+  expect(result.immediate.find((item: any) => item.outKey === "needs")).toMatchObject({ score: null, confidence: null });
   expect(result.immediate.find((item: any) => item.outKey === "summary")).toMatchObject({ score: 35, confidence: 0.35 });
-  expect(result.final.every((item: any) => item.score != null && item.confidence != null)).toBe(true);
+  expect(result.final.filter((item: any) => !["conversation", "failed_step"].includes(item.outKey)).every((item: any) => item.score != null && item.confidence != null)).toBe(true);
   expect(result.final.find((item: any) => item.outKey === "facts")).toMatchObject({ score: 94, confidence: 0.97 });
+  expect(result.final.find((item: any) => item.outKey === "facts")).toMatchObject({
+    evaluation: { status: "pass", score: 94, decision: "PASS", source_stage: "fact_judge", source_stage_name: "Проверка фактов" },
+    metrics: expect.arrayContaining([["Итоговая оценка", 94], ["Источник оценки", "Проверка фактов"]]),
+  });
+  expect(result.final.find((item: any) => item.outKey === "needs")).toMatchObject({
+    score: 96,
+    confidence: 0.96,
+    evaluation: { status: "pass", score: 96, decision: "PASS", source_stage: "need_judge", source_stage_name: "Проверка потребностей" },
+    metrics: expect.arrayContaining([["Итоговая оценка", 96], ["Источник оценки", "Проверка потребностей"]]),
+  });
   expect(result.final.find((item: any) => item.outKey === "summary")).toMatchObject({ score: 84, confidence: 0.84 });
-  expect(result.final.find((item: any) => item.outKey === "failed_step")).toMatchObject({ score: 0, confidence: 0 });
+  expect(result.final.find((item: any) => item.outKey === "failed_step")).toMatchObject({ score: null, confidence: null });
 });
 
 test("итоговое Summary разделяет текст, факты с цитатами и следующий шаг, а потребности читает из справочника", async ({ page }) => {
@@ -1819,7 +2409,7 @@ test("production regression 48 восстанавливает Judge, Store и Su
     return {validation,sourceOutcome,outcomeJudge,summary,presentation,critical,prompt,attempts,retried,gate};
   })()`));
 
-  expect(result.validation).toMatchObject({ decision: "PASS_WITH_WARNINGS", score: 1 });
+  expect(result.validation).toMatchObject({ decision: "PASS", score: 1 });
   expect(result.validation.issues.some((item: any) => item.type === "excessive_noise")).toBe(false);
   expect(result.sourceOutcome.agreements).toHaveLength(1);
   expect(result.outcomeJudge.verified_outcome).toMatchObject({ call_result: { value: "просмотр назначен" }, next_step: { value: "провести просмотр" } });
@@ -1827,7 +2417,7 @@ test("production regression 48 восстанавливает Judge, Store и Su
   expect(result.summary.summary).not.toMatch(/показать (?:её|вторую квартиру) позже|вторую квартиру покажут позже/i);
   expect(result.presentation).toMatchObject({ has_duplicate_information: false, score: 100 });
   expect(result.critical).toMatchObject({ missed_critical_facts: [], score: 100, status: "pass" });
-  expect(result.prompt).toContain("Каждый исходный элемент needs обязан попасть ровно в один массив");
+  expect(result.prompt).toContain("Каждый элемент классифицируй ровно один раз");
   expect(result.attempts).toBe(2);
   expect(result.retried.networkRetryCount).toBe(1);
   expect(result.gate).toMatchObject({ decision: "SAVE_WITH_WARNING", summary_quality_score: 98 });
@@ -2003,8 +2593,8 @@ test("Валидация транскрипции соблюдает контр�
   expect(result.withoutBudget.decision).toBe("PASS");
   expect(result.withoutTimeline.decision).toBe("PASS");
   expect(result.viewingDate.decision).toBe("PASS");
-  expect(result.fallback).toMatchObject({ input_source: "raw_transcript_fallback", decision: "PASS_WITH_WARNINGS" });
-  expect(result.fallback.issues).toEqual(expect.arrayContaining([expect.objectContaining({ type: "fallback_input", severity: "warning" })]));
+  expect(result.fallback).toMatchObject({ input_source: "raw_transcript_fallback", decision: "PASS" });
+  expect(result.fallback.issues).toEqual(expect.arrayContaining([expect.objectContaining({ type: "raw_transcript_input", severity: "info" })]));
   expect(result.full.score).toBeCloseTo(result.formula, 3);
   expect(result.lowConfidence.confidence).toBeLessThanOrEqual(0.61);
   expect(result.empty.downstream_policy).toMatchObject({ allow_fact_extraction: false, allow_need_extraction: false, allow_outcome_extraction: false });
@@ -2040,6 +2630,7 @@ test("Fact Agent использует новый root schema, точные ош�
     const missingReference=JSON.parse(JSON.stringify(valid));missingReference.quotes[0].supports_fact_ids=['fact_missing'];
     const countMismatch=JSON.parse(JSON.stringify(valid));countMismatch.extraction_meta.fact_count=2;
     const oldRoot={client_name:{value:'Анна'},intent:{value:'купить'},budget:{value:10000000}};
+    const legacyArray=[{id:'f1',category:'client_intent',value:'интересуется участком',normalized_value:null,speaker:'client',evidence:'интересуется участком',source_turn_ids:[1],confidence:.95}];
     const stage={type:'llm',name:'Извлечение фактов и цитат',outKey:'facts',model:'gpt-5-mini',prompt:'Верни JSON. Транскрипция: {{transcript}}'};
     const transcript='Клиент: Хочу купить квартиру, бюджет до десяти миллионов.\\nАгент: Подготовлю варианты.';
     const original=callModelWithTransientRetry;
@@ -2072,6 +2663,9 @@ test("Fact Agent использует новый root schema, точные ош�
     const oldRaw=JSON.stringify(oldRoot);
     callModelWithTransientRetry=async()=>{oldRootCalls++;return {text:oldRaw,tokens:8,actualModel:'gpt-5-mini',actualProvider:'test',finishReason:'stop'}};
     const oldRootReport=await runStage(stage,{__transcript:transcript});
+    let legacyArrayCalls=0;
+    callModelWithTransientRetry=async()=>{legacyArrayCalls++;return {text:JSON.stringify(legacyArray),tokens:8,actualModel:'gpt-5-mini',actualProvider:'AI Tunnel',finishReason:'stop'}};
+    const legacyArrayReport=await runStage(stage,{__transcript:'Клиент: интересуется участком'});
     let downstreamRan=false;
     CODE_FUNCS.factSchemaPrecheck=()=>({output:{decision:'PASS'},status:'ok',metrics:[],checks:[]});
     CODE_FUNCS.factSchemaMarker=()=>{downstreamRan=true;return {output:{ran:true},status:'ok',metrics:[],checks:[]}};
@@ -2089,7 +2683,7 @@ test("Fact Agent использует новый root schema, точные ош�
     callModelWithTransientRetry=original;
     return {
       valid:validate(valid),identity,role,allCategories:validate(allCategories),report60:validate(report60),empty:validate(empty),nullValue:validate(nullValue),nullNormalized:validate(nullNormalized),unknownCategory:validate(unknownCategory),duplicate:validate(duplicate),missingReference:validate(missingReference),countMismatch:validate(countMismatch),oldRoot:validate(oldRoot),
-      markdownCalls,markdown,truncatedCalls,truncated,schemaCalls,schemaMismatch,categoryRepairCalls,categoryRepair,categoryRepairPrompts,repeatedUnknownCalls,repeatedUnknown,contractCalls,contractMismatch,appendix:factExtractionContractAppendix(),schemaEnum:FACT_EXTRACTION_JSON_SCHEMA.properties.facts.items.properties.category.enum,uiCategories:document.querySelector('[data-fact-category-contract]')?.textContent||'',oldRootCalls,oldRootReport,pipelineStop
+      markdownCalls,markdown,truncatedCalls,truncated,schemaCalls,schemaMismatch,categoryRepairCalls,categoryRepair,categoryRepairPrompts,repeatedUnknownCalls,repeatedUnknown,contractCalls,contractMismatch,appendix:factExtractionContractAppendix(),schemaEnum:FACT_EXTRACTION_JSON_SCHEMA.properties.facts.items.properties.category.enum,uiCategories:document.querySelector('[data-fact-category-contract]')?.textContent||'',oldRootCalls,oldRootReport,legacyArrayCalls,legacyArrayReport,pipelineStop
     };
   })()`));
 
@@ -2100,7 +2694,7 @@ test("Fact Agent использует новый root schema, точные ош�
   expect(result.report60).toMatchObject({ ok: true, value: { extraction_meta: { fact_count: 23, quote_count: 5 } } });
   expect(result.empty).toMatchObject({ ok: true, value: { facts: [], quotes: [], extraction_meta: { decision: "NO_FACTS" } } });
   expect(result.nullValue).toEqual({ ok: false, name: "FactSchemaError", error: "facts[0].value: expected string | number | boolean | string[] | number[], received null" });
-  expect(result.nullNormalized).toEqual({ ok: false, name: "FactSchemaError", error: "facts[0].normalized_value: expected string | number | boolean | string[] | number[], received null" });
+  expect(result.nullNormalized).toMatchObject({ ok: true, value: { facts: [expect.objectContaining({ normalized_value: null })] } });
   expect(result.unknownCategory.error).toBe('facts[0].category: unknown enum value "unknown_category"');
   expect(result.duplicate.error).toBe('facts[1].id: duplicate id "fact_1"');
   expect(result.missingReference.error).toBe('quotes[0].supports_fact_ids[0]: unknown fact id "fact_missing"');
@@ -2129,13 +2723,15 @@ test("Fact Agent использует новый root schema, точные ош�
   expect(result.contractCalls).toBe(0);
   expect(result.contractMismatch.output).toMatchObject({ status: "technical_error", error_code: "CONTRACT_CONFIGURATION_ERROR", retry_count: 0 });
   expect(result.schemaEnum).toEqual([
-    "client_identity", "client_role", "client_intent", "object_context", "object_information", "search_criteria", "client_finance", "client_question", "client_objection", "client_constraint", "client_preference", "client_motivation", "legal_context", "communication_context", "other_important",
+    "client_identity", "client_role", "client_intent", "object_context", "object_information", "search_location", "search_criteria", "client_finance", "client_question", "client_objection", "client_constraint", "client_preference", "client_motivation", "legal_context", "communication_channel", "agent_commitment", "communication_result", "communication_context", "other_important",
   ]);
   expect(result.uiCategories).toContain("client_identity");
   expect(result.uiCategories).toContain("other_important");
   expect(result.appendix).not.toMatch(/результат звонка|договор[её]нност|следующ(?:ий|его) шаг|ответственн|срок действия/i);
   expect(result.oldRootCalls).toBe(1);
   expect(result.oldRootReport.output).toMatchObject({ status: "technical_error", error_code: "SCHEMA_VALIDATION_FAILED", parse_error: "facts: expected defined, received undefined" });
+  expect(result.legacyArrayCalls).toBe(1);
+  expect(result.legacyArrayReport).toMatchObject({ status: "warn", parseErr: null, output: { facts: [expect.objectContaining({ id: "f1", normalized_value: null, speaker: "Клиент" })] }, contract_audit: { status: "RECOVERED_WITH_WARNING", structured_output_requested: true, structured_output_applied: true, response_schema_id: "facts_v2", parser_schema_id: "facts_v2", warnings: ["ROOT_ARRAY_AUTO_WRAPPED"] } });
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, facts: { status: "technical_error", error_code: "SCHEMA_VALIDATION_FAILED" } });
   expect(result.pipelineStop.execution).toMatchObject({ pipeline_status: "TECHNICAL_ERROR", steps_total: 16, steps_executed: 2, steps_successful: 1, stopped_at_stage: "facts" });
   expect(result.pipelineStop.execution.stages.slice(2).every((stage: { status: string }) => stage.status === "NOT_RUN")).toBe(true);
@@ -2191,8 +2787,20 @@ test("Проверка фактов валидирует вход, Judge и са
     const channelEvidence='Агент: вам в Телегу, в Макс? Клиент: Да, давайте в Макс лучше.';
     const wrongChannelInput=root([fact('fact_channel','communication_context',{name:'preferred_channel',value:'Телеграм (Макс)',normalized_value:'Телеграм (Макс)',evidence:channelEvidence})]);
     const correctChannelInput=root([fact('fact_channel','communication_context',{name:'preferred_channel',value:'MAX',normalized_value:'MAX',evidence:channelEvidence})]);
+    const cyrillicChannelInput=root([fact('fact_channel','communication_context',{name:'preferred_channel',value:'Макс',normalized_value:'Макс',evidence:channelEvidence})]);
     const wrongChannel=runMerge(wrongChannelInput,judge(wrongChannelInput));
     const correctChannel=runMerge(correctChannelInput,judge(correctChannelInput));
+    const cyrillicChannel=runMerge(cyrillicChannelInput,judge(cyrillicChannelInput));
+    const questionFact=fact('fact_question','client_intent',{name:'asserted_intent',value:'Сколько коммунальные платежи?',normalized_value:'Сколько коммунальные платежи?',evidence:'Сколько коммунальные платежи?'});
+    const questionQuote={id:'quote_question',text:'Сколько коммунальные платежи?',speaker:'Клиент',supports_fact_ids:['fact_question'],confidence:.98,verification_status:'pending'};
+    const questionRoot=root([questionFact],[questionQuote]);
+    const rejectedQuestionQuote=runMerge(questionRoot,judge(questionRoot));
+    const legitimateQuestionFact=fact('fact_client_question','client_question',{name:'client_question',value:'Сколько коммунальные платежи?',normalized_value:'Сколько коммунальные платежи?',evidence:'Сколько коммунальные платежи?'});
+    const legitimateQuestionQuote={...questionQuote,id:'quote_client_question',supports_fact_ids:['fact_client_question']};
+    const legitimateQuestionRoot=root([legitimateQuestionFact],[legitimateQuestionQuote]);
+    const legitimateQuestion=runMerge(legitimateQuestionRoot,judge(legitimateQuestionRoot));
+    const realReportMissing={category:'communication_context',name:'agent_follow_up_timing',reason:'Агент обещал связаться сегодня либо завтра; это следующий шаг.',critical:true};
+    const outcomeOwnedMissing=runMerge(validInput,judge(validInput,{missing:[realReportMissing]}));
     let unknownCalls=0;
     callModelWithTransientRetry=async()=>{unknownCalls++;return {text:JSON.stringify(judge(validInput,{unknownVerified:'fact_missing'})),tokens:10,actualModel:'test',actualProvider:'test',finishReason:'stop'}};
     const unknownJudge=await runStage(stage,{facts:validInput,__transcript:transcript});
@@ -2207,7 +2815,7 @@ test("Проверка фактов валидирует вход, Judge и са
     pipeline=originalPipeline;renderStages();delete CODE_FUNCS.factCheckDownstreamMarker;
     const store=CODE_FUNCS.conversationStore({}, {__transcript:transcript,validation:{score:1},fact_check:valid,need_check:{verified_needs:[{value:'купить',confidence:.96,evidence:'хочу купить',verified:true}],fact_check_quality:{score:1,decision:'PASS'},need_check_quality:{score:1,decision:'PASS'},decision:'PASS'},outcome_check:{verified_outcome:{next_step:{value:'перезвонить',confidence:.96,evidence:'перезвоню',verified:true}},outcome_check_quality:{score:1,decision:'PASS'},decision:'PASS'}}).output;
     callModelWithTransientRetry=original;
-    return {valid,invalidRootCalls,invalidRootReport,duplicate:codeError(duplicateInput),brokenReference:codeError(brokenReference),invalidCategory:codeError(invalidCategory),invalidSpeaker:codeError(invalidSpeaker),phone:codeError(phoneInput),objectPrice,questionAsFact,speakerMismatch,incorrectNormalization,duplicateSemantic,validQuote,distortedQuote,missingBudget,scoreSpoof,wrongChannel,correctChannel,unknownCalls,unknownJudge,pipelineStop,store};
+    return {valid,invalidRootCalls,invalidRootReport,duplicate:codeError(duplicateInput),brokenReference:codeError(brokenReference),invalidCategory:codeError(invalidCategory),invalidSpeaker:codeError(invalidSpeaker),phone:codeError(phoneInput),objectPrice,questionAsFact,speakerMismatch,incorrectNormalization,duplicateSemantic,validQuote,distortedQuote,missingBudget,scoreSpoof,wrongChannel,correctChannel,cyrillicChannel,rejectedQuestionQuote,legitimateQuestion,outcomeOwnedMissing,unknownCalls,unknownJudge,pipelineStop,store};
   })()`));
 
   expect(result.valid).toMatchObject({ decision: "PASS", fact_check_quality: { facts_checked: 1, facts_verified: 1, facts_rejected: 0, quotes_checked: 1, quotes_verified: 1, precision_score: 1, critical_recall_score: 1, quote_score: 1, overall_score: 1, decision: "PASS" } });
@@ -2229,6 +2837,10 @@ test("Проверка фактов валидирует вход, Judge и са
   expect(result.scoreSpoof.fact_check_quality).toMatchObject({ precision_score: 1, critical_recall_score: 1, quote_score: 1, overall_score: 1, decision: "PASS" });
   expect(result.wrongChannel.rejected_facts).toEqual([expect.objectContaining({ id: "fact_channel", error_type: "evidence_mismatch" })]);
   expect(result.correctChannel.verified_facts).toEqual([expect.objectContaining({ id: "fact_channel", value: "MAX", normalized_value: "MAX" })]);
+  expect(result.cyrillicChannel.verified_facts).toEqual([expect.objectContaining({ id: "fact_channel", value: "Макс", normalized_value: "Макс" })]);
+  expect(result.rejectedQuestionQuote).toMatchObject({ verified_facts: [], verified_quotes: [], rejected_facts: [expect.objectContaining({ id: "fact_question", error_type: "question_as_fact" })], rejected_quotes: [expect.objectContaining({ id: "quote_question", error_type: "quote_supports_rejected_fact" })] });
+  expect(result.legitimateQuestion).toMatchObject({ decision: "PASS", verified_facts: [expect.objectContaining({ id: "fact_client_question", category: "client_question" })], verified_quotes: [expect.objectContaining({ id: "quote_client_question", supports_fact_ids: ["fact_client_question"] })], rejected_facts: [], rejected_quotes: [] });
+  expect(result.outcomeOwnedMissing).toMatchObject({ decision: "PASS", missing_critical_facts: [], outcome_owned_missing_ignored: [expect.objectContaining({ name: "agent_follow_up_timing" })] });
   // 2026-07-22: schema-class errors on fact_check/need_check/outcome_check now get
   // one retry attempt (a real production run showed this recovers a dropped-id
   // formatting slip) -- this mock always returns the same broken "fact_missing"
@@ -2283,9 +2895,11 @@ test("Need Agent использует новый контракт, канони�
     const listingPriceResult=validate(root([],item('не определено'),item('не определено'),[requirement('req_price','price_limit',10000000,['fact_price'],listingPrice.evidence)]),ctxFor([listingPrice]));
     const budget=fact('fact_budget','client_finance','Мой бюджет до десяти миллионов',10000000,{name:'budget_max'});
     const budgetResult=validate(root(),ctxFor([budget]));
-    const reportBudget=fact('fact_report_budget','client_finance','у меня просто цена до пяти с половиной, вот так.','до пяти с половиной',{name:'budget_max',normalized_value:5500000});
+    const reportBudget=fact('fact_report_budget','client_finance','у меня просто цена до пяти с половиной, вот так.','до пяти с половиной',{name:'максимальная цена',normalized_value:5500000});
+    const reportLocation=fact('fact_report_location','search_location','Деревня Мистолово.','Деревня Мистолово',{name:'область поиска',normalized_value:'Деревня Мистолово'});
+    const reportObjectArea=fact('fact_report_object_area','object_information','Шесть соток? — Да.','6 соток',{name:'land_area',normalized_value:6});
     const reportArea=fact('fact_report_area','client_constraint','Минимум шесть соток мне надо.','минимум шесть соток',{name:'minimum_area',normalized_value:6});
-    const reportNeedsResult=validate(root(),ctxFor([reportBudget,reportArea]));
+    const reportNeedsResult=validate(root(),ctxFor([reportObjectArea,reportBudget,reportArea,reportLocation]));
     const badSource=validate(root([],item('не определено'),item('не определено'),[requirement('req_1','rooms','две комнаты',['fact_missing'],'Нужно две комнаты')]),baseCtx);
     const mismatch=root([item('Новостройки',['fact_newbuild'],newbuild.evidence)]);mismatch.need_meta.interest_count=2;
     const countMismatch=validate(mismatch,multiCtx);
@@ -2324,12 +2938,16 @@ test("Need Agent использует новый контракт, канони�
   expect(result.listingPriceResult.value.requirements).toEqual([]);
   expect(result.budgetResult.value.requirements).toEqual([expect.objectContaining({ type: "price_limit", value: 10000000, source_fact_ids: ["fact_budget"] })]);
   expect(result.reportNeedsResult.value).toMatchObject({
-    need_meta: { decision: "EXTRACTED", requirements_count: 2 },
+    need_meta: { decision: "EXTRACTED", requirements_count: 3 },
     requirements: expect.arrayContaining([
       expect.objectContaining({ type: "price_limit", value: 5500000, source_fact_ids: ["fact_report_budget"] }),
-      expect.objectContaining({ type: "area", value: 6, source_fact_ids: ["fact_report_area"] }),
+      expect.objectContaining({ type: "minimum_land_area", value: 6, source_fact_ids: ["fact_report_area"] }),
+      expect.objectContaining({ type: "search_location", value: "Деревня Мистолово", source_fact_ids: ["fact_report_location"] }),
     ]),
   });
+  expect(result.reportNeedsResult.value.requirements).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ source_fact_ids: ["fact_report_object_area"] }),
+  ]));
   expect(result.badSource.error).toBe('requirements[0].source_fact_ids[0]: unknown verified fact id "fact_missing"');
   expect(result.countMismatch.error).toBe("need_meta.interest_count: expected 1, received 2");
   expect(result.blockedCalls).toBe(0);
@@ -2371,6 +2989,12 @@ test("Outcome Agent использует новый строгий контра�
     const countMismatch=check(root([], [videoAgreement],primary(),{agreement_count:2}));
     const empty=check(root());
     const current=check(root([], [videoAgreement,selectionAgreement],primary(['agr_video'],{action:'Агент отправит видео',channel:'видео'})));
+    const deadlineCtx={...ctx,__transcript:'Агент:\\n— Сегодня уточню всю информацию и либо сегодня, либо завтра свяжусь с вами.\\nКлиент:\\n— Хорошо.'};
+    const deadlineAgreement=agreement('agr_deadline','уточнить расходы и сообщить клиенту','Если вам нужны точные цифры, я уточню их у собственника и сообщу.');
+    const recoveredDeadline=validateOutcomeExtractionRoot(root([], [deadlineAgreement],primary(['agr_deadline'],{action:'уточнить расходы и сообщить клиенту'})),deadlineCtx);
+    const immediateCtx={...ctx,__transcript:'Агент:\\n— Я сейчас скину вам видео.\\nКлиент:\\n— Хорошо, жду.'};
+    const immediateAgreement=agreement('agr_immediate','отправить видео клиенту','Агент: Я сейчас скину вам видео.');
+    const recoveredImmediateDeadline=validateOutcomeExtractionRoot(root([], [immediateAgreement],primary(['agr_immediate'],{action:'отправить видео клиенту'})),immediateCtx);
     const oldRoot=check({call_result:{value:'назначен показ'},next_step:{},agreements:{value:[]}});
     const stage={type:'llm',name:'Результат звонка и следующий шаг',outKey:'outcome',model:'gpt-5-mini',provider:'mock',prompt:'{{transcript}}'};
     const original=callModelWithTransientRetry;
@@ -2388,13 +3012,17 @@ test("Outcome Agent использует новый строгий контра�
     renderStages();document.getElementById('transcript').value='Клиент: Да';await runPipeline();
     const pipelineStop={downstreamRan,marker:ctx.marker,outcome:ctx.outcome};
     pipeline=originalPipeline;renderStages();hasProviderCredentials=originalCredentials;delete CODE_FUNCS.outcomeDownstreamMarker;callModelWithTransientRetry=original;
-    return {video,selection,proposed,preliminary,confirmed,vague,clarify,objectFact,mortgageFact,agentRefusal,viewingDateAsTerm,unknownResult,invented,duplicate,badReference,proposedPrimary,countMismatch,empty,current,oldRoot,dependencyCalls,dependency,schemaCalls,schemaFailure,pipelineStop};
+    return {video,selection,proposed,preliminary,confirmed,vague,clarify,objectFact,mortgageFact,agentRefusal,viewingDateAsTerm,unknownResult,invented,duplicate,badReference,proposedPrimary,countMismatch,empty,current,recoveredDeadline,recoveredImmediateDeadline,oldRoot,dependencyCalls,dependency,schemaCalls,schemaFailure,pipelineStop};
   })()`));
 
   expect(result.video.value.call_results.map((item: any) => item.value)).toContain("агент отправит материалы");
   expect(result.video.value.primary_next_step.action).toBe("Агент отправит видео");
   expect(result.selection.value.call_results.map((item: any) => item.value)).toContain("агент подготовит подборку");
   expect(result.selection.value.primary_next_step.action).toBe("Агент подготовит подборку");
+  expect(result.recoveredDeadline.agreements[0]).toMatchObject({ deadline: "сегодня либо завтра", evidence: expect.stringContaining("Сегодня уточню всю информацию") });
+  expect(result.recoveredDeadline.primary_next_step.deadline).toBe("сегодня либо завтра");
+  expect(result.recoveredImmediateDeadline.agreements[0].deadline).toBe("после звонка");
+  expect(result.recoveredImmediateDeadline.primary_next_step.deadline).toBe("после звонка");
   expect(result.proposed.value.call_results).toEqual([]);
   expect(result.proposed.value.primary_next_step).toMatchObject({ status: "not_defined", owner: "", agreement_ids: [] });
   expect(result.preliminary.value.call_results.map((item: any) => item.value)).toContain("показ предварительно согласован");
@@ -2409,8 +3037,8 @@ test("Outcome Agent использует новый строгий контра�
   expect(result.agentRefusal.value.call_results).toEqual([]);
   expect(result.viewingDateAsTerm.error).toBe("purchase_term: unexpected field");
   expect(result.unknownResult.error).toBe('call_results[0].value: expected canonical enum, received "недостаточно информации"');
-  expect(result.invented.value.agreements[0]).toMatchObject({ deadline: "", channel: "" });
-  expect(result.invented.value.primary_next_step).toMatchObject({ deadline: "", channel: "" });
+  expect(result.invented.value.agreements[0]).toMatchObject({ deadline: "не определено", channel: "" });
+  expect(result.invented.value.primary_next_step).toMatchObject({ deadline: "не определено", channel: "" });
   expect(result.duplicate.error).toBe('agreements[1].id: duplicate id "agr_video"');
   expect(result.badReference.error).toBe('primary_next_step.agreement_ids[0]: unknown agreement id "agr_missing"');
   expect(result.proposedPrimary.value.primary_next_step).toMatchObject({ status: "not_defined", agreement_ids: [] });
@@ -2437,12 +3065,14 @@ test("Проверка результата валидирует Judge, semantic
     const ctxFor=(outcome,transcript)=>({__transcript:transcript,...deps,outcome});
     const quality={results_checked:999,results_verified:0,results_rejected:999,agreements_checked:999,agreements_verified:0,agreements_rejected:999,primary_next_step_verified:0,critical_outcomes_missing:999,result_accuracy_score:0,agreement_precision_score:0,next_step_accuracy_score:0,critical_recall_score:0,overall_score:0,decision:'FAIL'};
     const criterion={name:'Outcome semantics',status:'pass',score:100,explanation:'Проверено'};
-    const judge=(input,{rejectResults=[],rejectAgreements=[],rejectPrimary=false,missing=[],decision='FAIL',mutateAgreement=null}={})=>{
+    const judge=(input,{rejectResults=[],rejectAgreements=[],rejectPrimary=false,missing=[],decision='FAIL',mutateAgreement=null,mutatePrimary=null}={})=>{
       const rejectedResultIds=new Set(rejectResults.map(item=>item.id)),rejectedAgreementIds=new Set(rejectAgreements.map(item=>item.id));
       const verified_call_results=input.call_results.filter(item=>!rejectedResultIds.has(item.id)).map(item=>({...item,verified:true,reason:'подтверждено'}));
       const verified_agreements=input.agreements.filter(item=>!rejectedAgreementIds.has(item.id)).map(item=>({...item,verified:true,reason:'подтверждено'}));
       if(mutateAgreement&&verified_agreements[0]) Object.assign(verified_agreements[0],mutateAgreement);
-      return {verified_call_results,rejected_call_results:rejectResults,verified_agreements,rejected_agreements:rejectAgreements,verified_primary_next_step:rejectPrimary?{action:'',owner:'',deadline:'',channel:'',status:'not_defined',agreement_ids:[],confidence:0,verification_status:'pending',verified:false,reason:'отклонено'}:{...input.primary_next_step,verified:true,reason:'подтверждено'},rejected_primary_next_step:rejectPrimary?{rejected:true,action:input.primary_next_step.action,error_type:'unsupported_primary',reason:'не подтверждено',evidence:'нет подтверждения'}:{rejected:false,action:'',error_type:'',reason:'',evidence:''},missing_critical_outcomes:missing,outcome_check_quality:{...quality,decision},criteria:[criterion]};
+      const verifiedPrimary=rejectPrimary?{action:'',owner:'',deadline:'',channel:'',status:'not_defined',agreement_ids:[],confidence:0,verification_status:'pending',verified:false,reason:'отклонено'}:{...input.primary_next_step,verified:true,reason:'подтверждено'};
+      if(mutatePrimary&&!rejectPrimary) Object.assign(verifiedPrimary,mutatePrimary);
+      return {verified_call_results,rejected_call_results:rejectResults,verified_agreements,rejected_agreements:rejectAgreements,verified_primary_next_step:verifiedPrimary,rejected_primary_next_step:rejectPrimary?{rejected:true,action:input.primary_next_step.action,error_type:'unsupported_primary',reason:'не подтверждено',evidence:'нет подтверждения'}:{rejected:false,action:'',error_type:'',reason:'',evidence:''},missing_critical_outcomes:missing,outcome_check_quality:{...quality,decision},criteria:[criterion]};
     };
     const run=(input,transcript,options={})=>{
       const ctx=ctxFor(input,transcript),code=CODE_FUNCS.outcomeCheckCode({},ctx);
@@ -2482,6 +3112,9 @@ test("Проверка результата валидирует Judge, semantic
     const primaryRejected=run(videoInput,'Агент: Я отправлю видео клиенту',{rejectPrimary:true,decision:'PASS'});
     const spoof=run(videoInput,'Агент: Я отправлю видео клиенту',{decision:'FAIL'});
     const changed=run(videoInput,'Агент: Я отправлю видео клиенту',{mutateAgreement:{owner:'клиент'}});
+    const immediateAgr=agreement('agr_immediate','Агент отправит видео','Агент: Я сейчас скину вам видео в MAX','confirmed',{channel:'MAX'});
+    const immediateInput=root([resultItem('res_immediate','агент отправит материалы','Агент: Я сейчас скину вам видео в MAX')],[immediateAgr],primary(['agr_immediate'],{action:'Агент отправит видео',status:'confirmed',channel:'MAX'}));
+    const equivalentDeadline=run(immediateInput,'Агент: Я сейчас скину вам видео в MAX',{mutateAgreement:{deadline:'после звонка'},mutatePrimary:{deadline:'после звонка'},decision:'PASS'});
     const rejectedExtra=rejectAgreement('agr_selection','unsupported_agreement');
     const partialInput=root([resultItem('res_video','агент отправит материалы','Агент: Я отправлю видео клиенту')],[videoAgr,selectionAgr],primary(['agr_video'],{action:'Агент отправит видео',channel:'видео'}));
     const partial=run(partialInput,'Агент: Я отправлю видео клиенту. Агент: Я подготовлю подборку.',{rejectAgreements:[rejectedExtra]});
@@ -2493,7 +3126,7 @@ test("Проверка результата валидирует Judge, semantic
     let downstreamRan=false;CODE_FUNCS.outcomeCheckMarker=()=>{downstreamRan=true;return {output:{ran:true},status:'ok',metrics:[],checks:[]}};
     const originalPipeline=pipeline;pipeline=[{...stage,id:'outcome-check-stage',enabled:true},{id:'outcome-check-marker',enabled:true,type:'code',name:'Маркер downstream',codeFn:'outcomeCheckMarker',outKey:'marker'}];renderStages();document.getElementById('transcript').value='Клиент: Хорошо';await runPipeline();
     const pipelineStop={downstreamRan,marker:ctx.marker,outcome_check:ctx.outcome_check};pipeline=originalPipeline;renderStages();delete CODE_FUNCS.outcomeCheckMarker;callModelWithTransientRetry=original;
-    return {video,selection,proposed,proposedPrimary,preliminary,confirmed,vague,clarify,objectFact,interest,refusal,deadline,channel,wrongOwner,completed,invalidReference,duplicate,resultCount,agreementCount,missing,primaryRejected,spoof,changed,partial,store,dependencyCalls,dependency,pipelineStop};
+    return {video,selection,proposed,proposedPrimary,preliminary,confirmed,vague,clarify,objectFact,interest,refusal,deadline,channel,wrongOwner,completed,invalidReference,duplicate,resultCount,agreementCount,missing,primaryRejected,spoof,changed,equivalentDeadline,partial,store,dependencyCalls,dependency,pipelineStop};
   })()`));
 
   expect(result.video.output).toMatchObject({ decision: "PASS", verified_call_results: [expect.objectContaining({ value: "агент отправит материалы" })], verified_agreements: [expect.objectContaining({ action: "Агент отправит видео", owner: "агент" })], verified_primary_next_step: expect.objectContaining({ action: "Агент отправит видео", verified: true }) });
@@ -2519,22 +3152,23 @@ test("Проверка результата валидирует Judge, semantic
   expect(result.primaryRejected.output).toMatchObject({ decision: "FAIL", outcome_check_quality: { primary_next_step_verified: 0, next_step_accuracy_score: 0 } });
   expect(result.spoof.output).toMatchObject({ decision: "PASS", outcome_check_quality: { result_accuracy_score: 1, agreement_precision_score: 1, next_step_accuracy_score: 1, critical_recall_score: 1, overall_score: 1, decision: "PASS" } });
   expect(result.changed.output).toMatchObject({ status: "technical_error", error_code: "INVALID_JUDGE_OUTPUT", schema_error: "verified_agreements[0].owner: Judge changed input value" });
+  expect(result.equivalentDeadline.output).toMatchObject({ decision: "PASS", verified_agreements: [expect.objectContaining({ id: "agr_immediate", deadline: "" })], verified_primary_next_step: expect.objectContaining({ deadline: "", verified: true }) });
   expect(result.partial.output.verified_agreements.map((item: any) => item.id)).toEqual(["agr_video"]);
   expect(result.dependencyCalls).toBe(0);
   expect(result.dependency.output).toMatchObject({ status: "dependency_error", error_code: "DEPENDENCY_ERROR" });
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined });
 });
 
-test("Судьи принимают синонимы статуса ('warn'/'ok'/'error' и т.п.) вместо строгого pass|warning|fail (реальный прогон 2026-07-22)", async ({ page }) => {
+test("Судьи принимают синонимы статуса ('partial_pass'/'warn'/'ok'/'error' и т.п.) вместо строгого pass|warning|fail (реальные прогоны 2026-07-22)", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
     return {
-      criteriaArray: normalizeCriteriaArray([{name:'x',status:'warn',score:90,explanation:'e'},{name:'y',status:'OK',score:100,explanation:'e'},{name:'z',status:'error',score:0,explanation:'e'},{name:'w',status:'unknown_value',score:50,explanation:'e'}]),
-      single: [normalizeCriteriaStatus('warn'), normalizeCriteriaStatus('Warning'), normalizeCriteriaStatus('ok'), normalizeCriteriaStatus('failed'), normalizeCriteriaStatus('critical'), normalizeCriteriaStatus('totally_unknown')]
+      criteriaArray: normalizeCriteriaArray([{name:'real-report',status:'partial_pass',score:93.75,explanation:'e'},{name:'x',status:'warn',score:90,explanation:'e'},{name:'y',status:'OK',score:100,explanation:'e'},{name:'z',status:'error',score:0,explanation:'e'},{name:'w',status:'unknown_value',score:50,explanation:'e'}]),
+      single: [normalizeCriteriaStatus('partial pass'), normalizeCriteriaStatus('pass-with-warnings'), normalizeCriteriaStatus('partially_passed'), normalizeCriteriaStatus('needs review'), normalizeCriteriaStatus('warn'), normalizeCriteriaStatus('Warning'), normalizeCriteriaStatus('ok'), normalizeCriteriaStatus('failed'), normalizeCriteriaStatus('critical'), normalizeCriteriaStatus('totally_unknown')]
     };
   })()`));
-  expect(result.criteriaArray.map((item: any) => item.status)).toEqual(["warning", "pass", "fail", "unknown_value"]);
-  expect(result.single).toEqual(["warning", "warning", "pass", "fail", "fail", "totally_unknown"]);
+  expect(result.criteriaArray.map((item: any) => item.status)).toEqual(["warning", "warning", "pass", "fail", "unknown_value"]);
+  expect(result.single).toEqual(["warning", "warning", "warning", "warning", "warning", "warning", "pass", "fail", "fail", "totally_unknown"]);
 });
 
 test("Проверка результата звонка восстанавливается после пропущенного id и переформулированного evidence в ответе Judge (реальный прогон 2026-07-21)", async ({ page }) => {
@@ -2576,6 +3210,40 @@ test("Проверка результата звонка восстанавли�
   expect(result.merged.verified_call_results).toEqual([expect.objectContaining({ id: "result_1", value: "агент отправит материалы", verified: true })]);
   expect(result.merged.verified_agreements).toEqual([expect.objectContaining({ id: "agreement_001", action: "отправить видеообзор объекта", verified: true })]);
   expect(result.merged.verified_primary_next_step).toMatchObject({ action: "отправить видеообзор объекта", verified: true });
+});
+
+test("Outcome Check принимает общий MAX из verified channel fact для связанных действий", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const input={call_results:[],agreements:[
+      {id:'agreement_1',action:'отправить видео',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:'сейчас скину видео и посмотрю варианты',confidence:.9,verification_status:'pending'},
+      {id:'agreement_2',action:'отправить ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:'сейчас скину ссылку на подбор',confidence:.9,verification_status:'pending'}
+    ],primary_next_step:{action:'отправить видео и ссылку',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['agreement_1','agreement_2'],confidence:.9,verification_status:'pending'}};
+    const factCtx={fact_check:{verified_facts:[{id:'fact_channel',category:'communication_channel',value:'Макс',normalized_value:'MAX',evidence:'Да, давайте в Макс лучше.',verification_status:'verified',verified:true}]}};
+    const transcriptCtx={fact_check:{verified_facts:[]},__transcript:'Агент: Вам в Телегу, в Макс?\\nКлиент: Да, давайте в Макс лучше.'};
+    const fromFact=outcomeSemanticGuards(input,factCtx),fromTranscript=outcomeSemanticGuards(input,transcriptCtx);
+    return {fromFact:{agreementIssues:[...fromFact.agreementIssues.entries()],primaryIssue:fromFact.primaryIssue},fromTranscript:{agreementIssues:[...fromTranscript.agreementIssues.entries()],primaryIssue:fromTranscript.primaryIssue}};
+  })()`));
+
+  expect(result).toEqual({
+    fromFact: { agreementIssues: [], primaryIssue: null },
+    fromTranscript: { agreementIssues: [], primaryIssue: null },
+  });
+});
+
+test("Outcome Check безопасно отклоняет пустой recipient вместо технической ошибки", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const input={call_results:[],agreements:[{id:'agreement_1',action:'изучить материалы',owner:'клиент',recipient:'агент',deadline:'',channel:'',status:'promised',evidence:'Я посмотрю.',confidence:.8,verification_status:'pending'}],primary_next_step:{action:'',owner:'',deadline:'',channel:'',status:'not_defined',agreement_ids:[],confidence:0,verification_status:'pending'}};
+    const verdict={items:[{id:'agreement_1',verdict:'needs_correction',reason:'получатель не подтверждён',confidence:.75,corrections:{recipient:'',confidence:.75}},{id:'primary_next_step',verdict:'verified',reason:'следующий шаг не определён',confidence:.9,corrections:{}}],overall_confidence:.8,warnings:[]};
+    const recipient=validateOutcomeJudgeOutput(verdict,input);
+    const pendingStatus={items:[{id:'agreement_1',verdict:'verified',reason:'обещание подтверждено',confidence:.8,corrections:{}},{id:'primary_next_step',verdict:'needs_correction',reason:'договорённость не окончательная',confidence:.8,corrections:{status:'pending'}}],overall_confidence:.8,warnings:[]};
+    return {recipient,pending:validateOutcomeJudgeOutput(pendingStatus,input),version:defaultPipeline().find(item=>item.outKey==='outcome_check').promptVersion};
+  })()`));
+
+  expect(result.recipient.items[0]).toMatchObject({ id: "agreement_1", verdict: "rejected", corrections: {} });
+  expect(result.pending.items[1]).toMatchObject({ id: "primary_next_step", verdict: "needs_correction", corrections: { status: "preliminary" } });
+  expect(result.version).toBe(8);
 });
 
 test("Conversation Store v1 собирает только verified данные и проверяет provenance, ссылки и PII", async ({ page }) => {
@@ -2622,6 +3290,12 @@ test("Conversation Store v1 собирает только verified данные 
     const pipelineMismatch=store(make({stagePipeline:'old_pipeline'}));
     const pii=store(make({quotes:[quote('fact_1','Позвоните +7 999 123-45-67 или client@example.com')]}));
     const noFundingEvidence=store(make({funding:{...attribute('ипотека в процессе'),evidence:''}}));
+    const nullableNormalized=store(make({facts:[{...fact(),normalized_value:null}]}));
+    const correctedQuestionRequirement=store(make({requirements:[
+      requirement('req_valid'),
+      {...requirement('req_question'),value:null,normalized_value:null,category:'client_question',verification_status:'corrected',applied_corrections:{value:{from:'Сколько получится соток?',to:null}}}
+    ]}));
+    const correctedFact=store(make({facts:[{...fact(),verification_status:'corrected',applied_corrections:{source_turn_ids:{from:null,to:['turn_1']}}}]}));
     const minimum=store(make({scores:[.92,.73,.88]}));
     const deterministicA=store(make()),deterministicB=store(make());
     const empty=store(make({interest:[],requirements:[],callResults:[],agreements:[],primary:next([])}));
@@ -2629,7 +3303,7 @@ test("Conversation Store v1 собирает только verified данные 
     let downstreamRan=false;CODE_FUNCS.storeDownstreamMarker=()=>{downstreamRan=true;return {output:{ran:true},status:'ok',metrics:[],checks:[]}};
     const originalPipeline=pipeline;pipeline=[{id:'store-stage',enabled:true,type:'code',name:'Conversation Store',codeFn:'conversationStore',outKey:'conversation_store'},{id:'store-marker',enabled:true,type:'code',name:'Маркер downstream',codeFn:'storeDownstreamMarker',outKey:'marker'}];renderStages();document.getElementById('transcript').value='Клиент: Тест';await runPipeline();
     const pipelineStop={downstreamRan,marker:ctx.marker,conversation_store:ctx.conversation_store};pipeline=originalPipeline;renderStages();delete CODE_FUNCS.storeDownstreamMarker;
-    return {ready,warnings,manual,failedDecision,missingFact,failed,filtered,brokenQuote,brokenRequirement,brokenPrimary,duplicate,stale,transcriptMismatch,pipelineMismatch,pii,noFundingEvidence,minimum,hashA:deterministicA.output.store_meta.conversation_store_hash,hashB:deterministicB.output.store_meta.conversation_store_hash,inputUnchanged:before===after,frozen:Object.isFrozen(ready.output)&&Object.isFrozen(ready.output.conversation.facts[0]),frozenValue,storedAfterMutation:ready.output.conversation.facts[0].value,empty,pipelineStop};
+    return {ready,warnings,manual,failedDecision,missingFact,failed,filtered,brokenQuote,brokenRequirement,brokenPrimary,duplicate,stale,transcriptMismatch,pipelineMismatch,pii,noFundingEvidence,nullableNormalized,correctedQuestionRequirement,correctedFact,minimum,hashA:deterministicA.output.store_meta.conversation_store_hash,hashB:deterministicB.output.store_meta.conversation_store_hash,inputUnchanged:before===after,frozen:Object.isFrozen(ready.output)&&Object.isFrozen(ready.output.conversation.facts[0]),frozenValue,storedAfterMutation:ready.output.conversation.facts[0].value,empty,pipelineStop};
   })()`));
 
   expect(result.ready.output).toMatchObject({ quality: { decision: "READY", overall_confidence: 0.91 }, store_meta: { schema_version: "conversation_store_v1", status: "READY" }, provenance: { run_id: "run_1", transcript_hash: "transcript_hash", pipeline_configuration_hash: "pipeline_hash", source_stage_ids: { fact_check: "run_1:01:stage", need_check: "run_1:02:stage", outcome_check: "run_1:03:stage" } } });
@@ -2652,6 +3326,12 @@ test("Conversation Store v1 собирает только verified данные 
   expect(result.pipelineMismatch.output.errors[0].code).toBe("STALE_OR_FOREIGN_STAGE_OUTPUT");
   expect(result.pii.output.errors[0]).toMatchObject({ code: "PII_IN_VERIFIED_DATA", path: "conversation.quotes[0]" });
   expect(result.noFundingEvidence.output.errors[0]).toMatchObject({ code: "UNVERIFIED_ATTRIBUTE", path: "conversation.attributes.funding_source.evidence" });
+  expect(result.nullableNormalized.output.quality.decision).toBe("READY");
+  expect(result.nullableNormalized.output.conversation.facts[0].normalized_value).toBeUndefined();
+  expect(result.correctedQuestionRequirement.output.quality.decision).toBe("READY");
+  expect(result.correctedQuestionRequirement.output.conversation.requirements.map((item: any) => item.id)).toEqual(["req_valid"]);
+  expect(result.correctedFact.output).toMatchObject({ quality: { decision: "READY" }, conversation: { facts: [{ id: "fact_1", verification_status: "corrected" }], quotes: [{ supports_fact_ids: ["fact_1"] }] } });
+  expect(result.correctedFact.output.conversation.facts[0].applied_corrections).toBeUndefined();
   expect(result.minimum.output.quality.overall_confidence).toBe(0.73);
   expect(result.hashA).toBe(result.hashB);
   expect(result.inputUnchanged).toBe(true);
@@ -2685,10 +3365,10 @@ test("Генерация саммари использует только Conver
     const stage=defaultPipeline().find(item=>item.outKey==='summary');
     const original=callModelWithTransientRetry;
     const run=async(responses,status='READY')=>{
-      let calls=0;
-      callModelWithTransientRetry=async()=>{const response=responses[Math.min(calls,responses.length-1)];calls++;return {text:response,tokens:10,actualModel:'gpt-5-mini',actualProvider:'ai-tunnel',finishReason:null}};
+      let calls=0,requestedFormat=null;
+      callModelWithTransientRetry=async(...args)=>{requestedFormat=args[5];const response=responses[Math.min(calls,responses.length-1)];calls++;return {text:response,tokens:10,actualModel:'gpt-5-mini',actualProvider:'ai-tunnel',finishReason:null}};
       const report=await runStage(stage,{conversation_store:store(status),__transcript:'Клиент: Бюджет до 12 миллионов. Агент: Я отправлю видео и подборку.'});
-      return {calls,report};
+      return {calls,report,requestedFormat};
     };
     const success=await run([JSON.stringify(valid)]);
     const warning=await run([JSON.stringify(empty)],'READY_WITH_WARNINGS');
@@ -2706,8 +3386,10 @@ test("Генерация саммари использует только Conver
     const phone=await run([JSON.stringify({...empty,conversation_result:'Клиент ищет квартиру, телефон +7 999 123-45-67.'})]);
     const unknownValue=await run([JSON.stringify({...empty,key_facts:[{label:'Финансирование',value:'не определено'}]})]);
     const unknownTerm=await run([JSON.stringify({...empty,key_facts:[{label:'Срок покупки',value:'не определено'}]})]);
+    const unknownComposite=await run([JSON.stringify({...empty,key_facts:[{label:'Финансирование и срок покупки',value:'финансирование: не определено; срок покупки: не определено'}]})]);
     const tooLong=await run([JSON.stringify({...empty,conversation_result:'Квартира '.repeat(140)})]);
     const badFact=await run([JSON.stringify({...empty,key_facts:[{label:'Комнаты',value:'пять комнат'}]})]);
+    const groundingRetry=await run([JSON.stringify({...empty,key_facts:[{label:'Комнаты',value:'пять комнат'}]}),JSON.stringify(valid)]);
     const badQuote=await run([JSON.stringify({...empty,quotes:['Бюджет примерно 20 миллионов']})]);
     const badNext=await run([JSON.stringify({...empty,next_step:'Клиент подпишет договор.'})]);
     const badDeadline=await run([JSON.stringify({...empty,next_step:'Агент отправит видео завтра.'})]);
@@ -2731,7 +3413,7 @@ test("Генерация саммари использует только Conver
       agreements:[{id:'a1',action:'Агент отправит в MAX видеообзор объекта и подборку альтернативных участков под требования клиента',owner:'агент',recipient:'клиент',deadline:'',channel:'MAX',status:'promised',evidence:'Агент предложил отправить видеообзор и подобрать альтернативные участки в MAX'}],
       primary_next_step:{action:'Агент отправит в MAX видеообзор объекта и подборку альтернативных участков под требования клиента',owner:'агент',deadline:'',channel:'MAX',status:'promised',agreement_ids:['a1']}
     };
-    const target={status:'GENERATED',conversation_result:'Клиент Николай рассматривает покупку участка ИЖС от 6 соток в районе Мистолово с бюджетом до 5,5 млн ₽. Обсудили участок 6 соток в КП „Охтинское Раздолье“ за 4,65 млн ₽; клиента смущает ежемесячный взнос 9 600 ₽. Агент предложил отправить видеообзор и подобрать альтернативные участки.',key_facts:[{label:'Бюджет',value:'до 5,5 млн ₽'},{label:'Требования',value:'ИЖС, площадь от 6 соток'},{label:'Локации',value:'Мистолово, Капитолово, Лаврики'},{label:'Основное сомнение',value:'ежемесячный взнос 9 600 ₽'}],quotes:['Вот этот побор 9 600 мне прямо не это'],next_step:'Агент отправит в MAX видеообзор объекта и подборку альтернативных участков под требования клиента',error:''};
+    const target={status:'GENERATED',conversation_result:'Клиент Николай рассматривает покупку участка ИЖС от 6 соток в районе Мистолово с бюджетом до 5,5 млн ₽. Обсудили участок 6 соток в КП „Охтинское Раздолье“ за 4,65 млн ₽; клиента смущает ежемесячный взнос 9 600 ₽. Агент предложил отправить видеообзор и подобрать альтернативные участки.',key_facts:[{label:'Бюджет',value:'до 5,5 млн ₽'},{label:'Требования',value:'ИЖС, площадь от 6 соток'},{label:'Локации',value:'Мистолово, Капитолово, Лаврики'},{label:'Основное сомнение',value:'ежемесячный взнос 9 600 ₽'}],quotes:['Вот этот побор 9 600 мне прямо не это'],next_step:'Агент отправит в Макс видеообзор объекта и подборку альтернативных участков под требования клиента',error:''};
     let targetCalls=0;callModelWithTransientRetry=async()=>{targetCalls++;return {text:JSON.stringify(target),tokens:20,actualModel:'gpt-5-mini',actualProvider:'ai-tunnel'}};
     const targetReport=await runStage(stage,{conversation_store:targetStore,__transcript:'Вот этот побор 9 600 мне прямо не это. Агент предложил отправить видеообзор и подборку в MAX.'});
     let downstreamRan=false;CODE_FUNCS.summaryStoreSeed=()=>({output:store('TECHNICAL_ERROR'),status:'ok',metrics:[],checks:[]});CODE_FUNCS.summaryMarker=()=>{downstreamRan=true;return {output:{ran:true},status:'ok',metrics:[],checks:[]}};
@@ -2740,15 +3422,17 @@ test("Генерация саммари использует только Conver
     callModelWithTransientRetry=original;
     const validator=value=>{try{return {ok:true,value:validateModuleSummaryOutput(value)}}catch(error){return {ok:false,error:error.message}}};
     const uiWith=renderModuleSummaryResult(valid),uiEmpty=renderModuleSummaryResult(empty);
-    return {settings:{provider:stage.provider,model:stage.model,temperature:stage.temperature,maxTokens:stage.maxTokens,outKey:stage.outKey},success,warning,manual,markdown,extraText,syntaxRetry,countRetry,quoteCountRetry,missingRetry,nullValue,unknown,phone,unknownValue,unknownTerm,tooLong,badFact,badQuote,badNext,badDeadline,badChannel,preliminary,preliminaryCalls,dependencyCalls,missingStore,technicalStore,dependencyStore,targetCalls,targetReport,pipelineStop,uiWith,uiEmpty,directEmpty:validator(empty)};
+    return {settings:{provider:stage.provider,model:stage.model,temperature:stage.temperature,maxTokens:stage.maxTokens,outKey:stage.outKey},success,warning,manual,markdown,extraText,syntaxRetry,countRetry,quoteCountRetry,missingRetry,nullValue,unknown,phone,unknownValue,unknownTerm,unknownComposite,tooLong,badFact,groundingRetry,badQuote,badNext,badDeadline,badChannel,preliminary,preliminaryCalls,dependencyCalls,missingStore,technicalStore,dependencyStore,targetCalls,targetReport,pipelineStop,uiWith,uiEmpty,directEmpty:validator(empty)};
   })()`));
 
-  expect(result.settings).toEqual({ provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 2500, outKey: "summary" });
+  expect(result.settings).toEqual({ provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 8000, outKey: "summary" });
   expect(result.success.calls).toBe(1);
-  expect(result.success.report.output).toEqual(expect.objectContaining({ status: "GENERATED", conversation_result: "Клиент ищет квартиру в Центральном районе.", key_facts: expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 12 млн ₽" })]), quotes: ["Бюджет до 12 миллионов"], next_step: "Агент отправит видео и подборку.", error: "" }));
+  expect(result.success.report.output).toEqual(expect.objectContaining({ status: "GENERATED", conversation_result: "Клиент ищет квартиру в Центральном районе.", key_facts: expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 12 млн ₽" })]), quotes: ["Бюджет до 12 миллионов"], next_step: "Агент отправит клиенту видеообзор и ссылку на подборку.", error: "" }));
   expect(result.success.report.output).not.toHaveProperty("score");
   expect(result.success.report.summary_metrics).toMatchObject({ json_valid: true, grounded_key_facts: "4/4", grounded_quotes: "1/1", next_step_match: true, pii_absent: true, generation_status: "GENERATED", store_status: "READY", next_step_source: "primary_next_step", retry_count: 0, model: "gpt-5-mini", tokens: 10 });
-  expect(result.success.report.prompt_audit).toMatchObject({ transcript_present: true, transcript_injected: true, resolved_prompt_contains_transcript: true });
+  expect(result.success.report.prompt_audit).toMatchObject({ transcript_present: true, transcript_injected: false, resolved_prompt_contains_transcript: false, card_metadata_omitted: 0, verified_quote_count: 1 });
+  expect(result.success.requestedFormat).toMatchObject({ type: "json_schema", json_schema: { name: "module_summary_v1", strict: true, schema: { additionalProperties: false } } });
+  expect(result.success.report.contract_audit).toMatchObject({ prompt_schema_id: "module_summary_v1", response_schema_id: "module_summary_v1", parser_schema_id: "module_summary_v1", runtime_schema_id: "module_summary_v1", contract_status: "VALID" });
   expect(result.warning.report.output.status).toBe("GENERATED");
   expect(result.manual.report.output.status).toBe("MANUAL_REVIEW");
   expect(result.directEmpty.ok).toBe(true);
@@ -2761,22 +3445,27 @@ test("Генерация саммари использует только Conver
   expect(result.nullValue.calls).toBe(1);
   expect(result.nullValue.report.output).toMatchObject({ status: "technical_error", error_code: "SUMMARY_INVALID_OUTPUT", errors: [{ path: "root", message: "key_facts[0].value: expected string, received null" }] });
   expect(result.unknown.calls).toBe(1);
-  expect(result.unknown.report.output.errors[0].message).toContain("unexpected field");
+  expect(result.unknown.report).toMatchObject({ output: { status: "GENERATED" }, contract_audit: { repair_attempted: true, removed_fields: ["unexpected"], contract_status: "RECOVERED_WITH_WARNING" } });
   expect(result.phone.report.output).toMatchObject({ status: "technical_error", error_code: "SUMMARY_INVALID_OUTPUT" });
-  expect(result.unknownValue.report.output.errors[0].message).toContain("unknown values must be omitted");
-  expect(result.unknownTerm.report.output.errors[0].message).toContain("unknown values must be omitted");
+  expect(result.unknownValue).toMatchObject({ calls: 1, report: { output: { status: "GENERATED", key_facts: [] }, retry_count: 0 } });
+  expect(result.unknownValue.report.policy_repair_count).toBeGreaterThanOrEqual(1);
+  expect(result.unknownTerm).toMatchObject({ calls: 1, report: { output: { status: "GENERATED", key_facts: [] }, retry_count: 0 } });
+  expect(result.unknownTerm.report.policy_repair_count).toBeGreaterThanOrEqual(1);
+  expect(result.unknownComposite).toMatchObject({ calls: 1, report: { output: { status: "GENERATED", key_facts: [] }, retry_count: 0, contract_audit: { repair_attempted: true, removed_items: ["key_facts[0]"], contract_status: "RECOVERED_WITH_WARNING" } } });
   expect(result.tooLong.report.output.errors[0].message).toContain("1200");
-  expect(result.badFact).toMatchObject({ calls: 1, report: { output: { status: "technical_error", error_code: "SUMMARY_UNGROUNDED_CONTENT", errors: [expect.objectContaining({ path: "key_facts[0]", message: "Факт отсутствует в Conversation Store." })] }, retry_count: 0 } });
+  expect(result.badFact).toMatchObject({ calls: 2, report: { output: { status: "technical_error", error_code: "SUMMARY_UNGROUNDED_CONTENT", errors: [expect.objectContaining({ path: "key_facts[0]", message: "Факт отсутствует в Conversation Store." })] }, retry_count: 1 } });
+  expect(result.groundingRetry).toMatchObject({ calls: 2, report: { output: { status: "GENERATED" }, retry_count: 1 } });
   expect(result.badQuote.report.output.errors).toEqual([expect.objectContaining({ path: "quotes[0]" })]);
-  expect(result.badNext.report.output.errors).toEqual([expect.objectContaining({ path: "next_step" })]);
+  expect(result.badNext.report).toMatchObject({ output: { status: "GENERATED", next_step: "Агент отправит клиенту видеообзор и ссылку на подборку." } });
+  expect(result.badNext.report.policy_repair_count).toBeGreaterThan(0);
   expect(result.badDeadline.report.output.errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: "next_step", message: expect.stringContaining("Срок") })]));
   expect(result.badChannel.report.output.errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: "next_step", message: expect.stringContaining("Канал") })]));
   expect(result.preliminaryCalls).toBe(1);
-  expect(result.preliminary.output).toMatchObject({ status: "technical_error", error_code: "SUMMARY_UNGROUNDED_CONTENT" });
+  expect(result.preliminary.output).toMatchObject({ status: "GENERATED", next_step: "Агент: Посмотреть квартиру." });
   expect(result.dependencyCalls).toBe(0);
   for (const blocked of [result.missingStore, result.technicalStore, result.dependencyStore]) expect(blocked.output).toEqual({ status: "ERROR", conversation_result: "", key_facts: [], quotes: [], next_step: "", error: "Conversation Store не готов к генерации саммари." });
   expect(result.targetCalls).toBe(1);
-  expect(result.targetReport.output).toMatchObject({ status: "GENERATED", conversation_result: expect.stringContaining("Клиент Николай"), key_facts: [expect.objectContaining({ label: "Бюджет", value: "до 5,5 млн ₽" }), expect.objectContaining({ label: "Требования" }), expect.objectContaining({ label: "Локации" }), expect.objectContaining({ label: "Основное сомнение" })], quotes: ["Вот этот побор 9 600 мне прямо не это"], next_step: "Агент отправит в MAX видеообзор объекта и подборку альтернативных участков под требования клиента" });
+  expect(result.targetReport.output).toMatchObject({ status: "GENERATED", conversation_result: expect.stringContaining("Клиент Николай"), key_facts: [expect.objectContaining({ label: "Бюджет", value: "до 5,5 млн ₽" }), expect.objectContaining({ label: "Требования" }), expect.objectContaining({ label: "Локации" }), expect.objectContaining({ label: "Основное сомнение" })], quotes: ["Вот этот побор 9 600 мне прямо не это"], next_step: "Агент отправит клиенту в MAX видеообзор и ссылку на подборку." });
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, summary: { status: "ERROR" } });
   expect(result.uiWith).toContain("Итог разговора");
   expect(result.uiWith).toContain("Ключевые факты");
@@ -2784,6 +3473,19 @@ test("Генерация саммари использует только Conver
   expect(result.uiWith).toContain("Договорённости и следующий шаг");
   expect(result.uiEmpty).not.toContain("Ключевые факты");
   expect(result.uiEmpty).not.toContain("Важные цитаты");
+});
+
+test("Truth parser восстанавливает поля issue и уважает пустой verified primary", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const summary={status:'MANUAL_REVIEW',conversation_result:'Клиент ищет участок.',key_facts:[],quotes:['Не, ну у меня просто цена до пяти с половиной, вот так.'],next_step:'Следующий шаг не согласован.',error:''};
+    const ctx={summary,conversation_store:{conversation:{facts:[],requirements:[],attributes:{},quotes:[{text:'Не, ну у меня просто цена до пяти с половиной, вот так.',speaker:'Клиент'}],call_results:[{value:'агент отправит материалы'}],agreements:[],primary_next_step:{}}},__transcript:'Клиент: Не, ну у меня просто цена до пяти с половиной, вот так.\\nАгент: Я отправлю видео.'};
+    const judge={status:'fail',score:90,has_hallucinations:false,has_fact_distortions:false,has_role_confusion:false,has_money_or_number_errors:false,has_agreement_errors:true,has_quote_errors:true,has_pii:false,critical_errors:[{type:'next_step_error',summary_fragment:'Следующий шаг не согласован.',evidence:'Агент: Я отправлю видео.'},{type:'quote_distortion',field:'quotes',summary_fragment:'Не, ну у меня просто цена до пяти с половина, вот так.',problem:'Judge исказил правильную цитату.',evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.'}],warnings:[],checked_fields:{conversation_result:true,key_facts:true,quotes:true,next_step:true},explanation:'Judge попытался восстановить отклонённый шаг и исказил цитату.'};
+    const validated=validateTruthJudgeOutput(judge,ctx);return {validated,output:truthRecalculate(validated,truthGroundingIssues(ctx)),version:defaultPipeline().find(item=>item.outKey==='truth_check').promptVersion};
+  })()`));
+  expect(result.validated.critical_errors).toEqual([]);
+  expect(result.output).toMatchObject({ status: "pass", score: 100, has_agreement_errors: false, has_quote_errors: false });
+  expect(result.version).toBe(6);
 });
 
 test("Проверка достоверности валидирует зависимости, grounding и сама пересчитывает score", async ({ page }) => {
@@ -2837,6 +3539,7 @@ test("Проверка достоверности валидирует зави�
     const wrongOwner=await nextCase('promised','Клиент отправит видео и подборку в MAX.');
     const deadline=await nextCase('promised','Агент отправит видео и подборку в MAX завтра.');
     const channel=await nextCase('promised','Агент отправит видео и подборку в WhatsApp.');
+    const aliasStore=store();aliasStore.conversation.primary_next_step.channel='Макс';aliasStore.conversation.agreements[0].channel='Макс';const channelAlias=await run(context(target,aliasStore));
     const verifiedQuote=await run(context({...target,key_facts:[]}));
     const changedQuote=await run(context({...target,key_facts:[],quotes:['Вот этот взнос 9 600 мне не нравится']}));
     const agentQuote=await run(context({...target,key_facts:[],quotes:['Я отправлю видео и подборку в MAX']}));
@@ -2854,10 +3557,10 @@ test("Проверка достоверности валидирует зави�
     const omittedCrm=await run(context(questionSummary),[{...cleanJudge,warnings:[issue('fact_not_in_store','conversation_result',questionSummary.conversation_result,'В саммари не указан этаж из карточки CRM.','Клиент: Это предложение агента?')]},cleanJudge]);
     callModelWithTransientRetry=original;
     const html=renderReport(stage,perfect.report,1).outerHTML;
-    return {perfect,transcriptOnly,hallucination,objectPrice,wrongMoney,normalization,role,question,proposed,preliminary,completed,wrongOwner,deadline,channel,verifiedQuote,changedQuote,agentQuote,pii,dependencyCalls,empty,stale,spoof,spoofStatus,repair,badEvidence,styleAsHallucination,omittedCrm,target:perfect,html,promptVersion:stage.promptVersion};
+    return {perfect,transcriptOnly,hallucination,objectPrice,wrongMoney,normalization,role,question,proposed,preliminary,completed,wrongOwner,deadline,channel,channelAlias,verifiedQuote,changedQuote,agentQuote,pii,dependencyCalls,empty,stale,spoof,spoofStatus,repair,badEvidence,styleAsHallucination,omittedCrm,target:perfect,html,promptVersion:stage.promptVersion};
   })()`));
 
-  expect(result.promptVersion).toBe(4);
+  expect(result.promptVersion).toBe(6);
   expect(result.perfect).toMatchObject({ calls: 1, report: { output: { status: "pass", score: 100, has_hallucinations: false, has_fact_distortions: false, has_role_confusion: false, has_money_or_number_errors: false, has_agreement_errors: false, has_quote_errors: false, has_pii: false, critical_errors: [], warnings: [], checked_fields: { conversation_result: true, key_facts: true, quotes: true, next_step: true } } } });
   expect(result.transcriptOnly.report.output).toMatchObject({ score: 95, warnings: [expect.objectContaining({ type: "fact_not_in_store" })] });
   expect(result.hallucination.report.output).toMatchObject({ status: "fail", score: 65, has_hallucinations: true, critical_errors: [expect.objectContaining({ type: "hallucination" })] });
@@ -2872,6 +3575,7 @@ test("Проверка достоверности валидирует зави�
   expect(result.wrongOwner.report.output.critical_errors).toEqual(expect.arrayContaining([expect.objectContaining({ type: "wrong_owner" })]));
   expect(result.deadline.report.output.critical_errors).toEqual(expect.arrayContaining([expect.objectContaining({ type: "invented_deadline" })]));
   expect(result.channel.report.output.critical_errors).toEqual(expect.arrayContaining([expect.objectContaining({ type: "invented_channel" })]));
+  expect(result.channelAlias.report.output).toMatchObject({ status: "pass", score: 100, has_agreement_errors: false });
   expect(result.verifiedQuote.report.output).toMatchObject({ status: "pass", score: 100, has_quote_errors: false });
   expect(result.changedQuote.report.output).toMatchObject({ status: "fail", score: 85, has_quote_errors: true, critical_errors: [expect.objectContaining({ type: "quote_distortion" })] });
   expect(result.agentQuote.report.output).toMatchObject({ status: "fail", score: 75, has_role_confusion: true });
@@ -2892,6 +3596,229 @@ test("Проверка достоверности валидирует зави�
   expect(result.html).toContain("Warnings");
   expect(result.html).toContain("explanation");
   expect(result.html).not.toContain("Confidence</div>");
+});
+
+test("production report 2026-07-23 распознаёт client_finance как бюджет и сохраняет главное возражение в Summary", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const budgetFact={id:'fact_7',category:'client_finance',name:'максимальная цена',value:'до пяти с половиной',normalized_value:5500000,evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.',verification_status:'verified'};
+    const objectPrice={id:'fact_3',category:'object_information',name:'цена в объявлении',value:'Четыре 650',normalized_value:4650000,evidence:'Четыре 650.',verification_status:'verified'};
+    const objection={id:'fact_10',category:'client_objection',name:'возражение против ежемесячных взносов',value:'не устраивает взнос 9600',evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',verification_status:'verified'};
+    const summary={status:'GENERATED',conversation_result:'Николай интересуется участком, бюджет до 5 500 000. Агент отправит материалы.',key_facts:[{label:'Бюджет',value:'5 500 000'},{label:'Локация',value:'Мистолово'},{label:'Цена в объявлении',value:'4 650 000'},{label:'Минимальный размер участка',value:'минимум 6 соток'}],quotes:[objection.evidence,'Да, давайте в Макс лучше.'],next_step:'Агент отправит материалы.',error:''};
+    const store={conversation:{facts:[budgetFact,objectPrice,objection],requirements:[],attributes:{},primary_next_step:{action:'отправить материалы',status:'confirmed'}}};
+    const budgetIssues=truthGroundingIssues({summary,conversation_store:store,__transcript:[budgetFact.evidence,objectPrice.evidence,objection.evidence].join('\\n')});
+    const policy=moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+    const presentationCtx={summary:policy.value};
+    const base={status:'fail',score:0,structure_score:0,brevity_score:0,readability_score:0,repetition_score:0,limits_score:0,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:false},metrics:{total_characters:0,conversation_result_characters:0,key_facts_count:4,quotes_count:1,next_step_characters:25,sentence_count:8},errors:[{type:'fragmented_text',field:'key_facts',summary_fragment:'минимум 6 соток',problem:'Избыточное слово «минимум», лучше коротко «6 соток».'}],warnings:[{type:'next_step_not_concise',field:'next_step',summary_fragment:'Агент отправит материалы.',problem:'Дублирует conversation_result.'}],explanation:'Проверка'};
+    const presentation=validatePresentationJudgeOutput(base,presentationCtx);
+    return {budgetIssues,policy,presentation};
+  });
+
+  expect(result.budgetIssues).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "money_or_number_error", field: "key_facts[0]" })]));
+  expect(result.policy.count).toBe(2);
+  expect(result.policy.value.key_facts).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 5 500 000 ₽" })]));
+  expect(result.policy.value.key_facts).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Главное возражение", value: "не устраивает взнос 9600" })]));
+  expect(result.policy.value.key_facts).not.toEqual(expect.arrayContaining([expect.objectContaining({ label: "Цена в объявлении" })]));
+  expect(result.policy.value.quotes).toEqual(["Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.", "Да, давайте в Макс лучше."]);
+  expect(result.presentation.errors).toEqual([]);
+  expect(result.presentation.warnings).toEqual([]);
+});
+
+test("новый production report 2026-07-23 нормализует единицы, локацию и повтор следующего шага", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const budget={id:'fact_10',category:'client_finance',name:'максимальная цена',value:'до пяти с половиной',normalized_value:5500000,evidence:'у меня просто цена до пяти с половиной, вот так.',verification_status:'verified'};
+    const objection={id:'fact_14',category:'client_objection',name:'возражение по ежемесячным взносам',value:'против ежемесячных взносов 9600',normalized_value:9600,evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',verification_status:'verified'};
+    const summary={status:'GENERATED',conversation_result:'Клиент Николай звонит по участку в Деревня Мистолово и ищет минимум шесть соток. Разговор закончился договорённостью, что агент после звонка пришлёт подробный видеообзор и ссылку на подборку в канал Макс; предложение организовать просмотр было озвучено, но не согласовано.',key_facts:[{label:'Локация',value:'Деревня Мистолово'},{label:'Бюджет',value:'до пяти с половиной'},{label:'Минимальный размер участка',value:'минимум шесть соток'},{label:'Главное возражение',value:'против ежемесячных взносов 9600'}],quotes:['у меня просто цена до пяти с половиной, вот так.'],next_step:'отправить видео и скинуть ссылку на подбор; подготовить подборку вариантов',error:''};
+    const store={conversation:{facts:[budget,objection],requirements:[],attributes:{},primary_next_step:{action:summary.next_step,status:'confirmed'}}};
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+  });
+
+  expect(result.value.conversation_result).toContain("в Мистолово");
+  expect(result.value.conversation_result).not.toContain("в Деревня");
+  expect(result.value.conversation_result).not.toContain(";");
+  expect(result.value.key_facts).toContainEqual({ label: "Бюджет", value: "до 5 500 000 ₽" });
+  expect(result.value.next_step).toBe("подготовить подборку вариантов и отправить видеообзор со ссылкой");
+});
+
+test("production report после деплоя нормализует падеж, сотки и разговорное возражение", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const landArea={id:'fact_7',category:'search_criteria',name:'минимальная площадь',value:6,normalized_value:6,evidence:'Ну, минимум шесть соток мне надо.',verification_status:'verified'};
+    const objection={id:'fact_11',category:'client_objection',name:'главное возражение',value:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',normalized_value:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',verification_status:'verified'};
+    const summary={status:'GENERATED',conversation_result:'Николай запросил получить видеообзор и подборку по Деревня Мистолово.',key_facts:[{label:'Местоположение',value:'Деревня Мистолово'},{label:'Минимальная площадь',value:'6'},{label:'Главное возражение',value:objection.value}],quotes:[],next_step:'Следующий шаг не согласован.',error:''};
+    const store={conversation:{facts:[landArea,objection],requirements:[],attributes:{},primary_next_step:{action:'',status:'not_defined'}}};
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+  });
+
+  expect(result.value.conversation_result).toContain("по Мистолово");
+  expect(result.value.conversation_result).not.toContain("по Деревня");
+  expect(result.value.key_facts).toContainEqual({ label: "Минимальная площадь", value: "6 соток" });
+  expect(result.value.key_facts).toContainEqual({ label: "Главное возражение", value: "побор 9 600" });
+});
+
+test("production report явно отражает получателя next step без повтора в итоге разговора", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const summary={status:'GENERATED',conversation_result:'Николай ищет участок в Деревне Мистолово минимум 6 соток. Агент отправит видео и ссылку на подбор в Макс после звонка.',key_facts:[],quotes:[],next_step:'отправить видео и ссылку на подбор; посмотреть варианты (агент, канал Макс, после звонка)',error:''};
+    const store={conversation:{facts:[],requirements:[],attributes:{},agreements:[{id:'agreement_1',action:'отправить видеообзор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'Макс',status:'confirmed'},{id:'agreement_2',action:'скинуть ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'Макс',status:'confirmed'}],primary_next_step:{action:'отправить видео и ссылку на подбор; посмотреть дополнительные варианты',owner:'агент',deadline:'после звонка',channel:'Макс',status:'confirmed',agreement_ids:['agreement_1','agreement_2']}}};
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+  });
+
+  expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в Макс видеообзор и ссылку на подборку, затем посмотрит дополнительные варианты.");
+  expect(result.value.conversation_result).toBe("Николай ищет участок в Деревне Мистолово минимум 6 соток.");
+});
+
+test("Summary сохраняет подбор вариантов из связанной договорённости", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент ищет участок. Агент отправит видео и ссылку на подборку.',key_facts:[],quotes:[],next_step:'Агент после звонка отправит клиенту в MAX видеообзор и ссылку на подборку.',error:''};
+    const store={conversation:{facts:[],requirements:[{id:'requirement_1',type:'price_limit',value:5500000}],attributes:{},agreements:[
+      {id:'agreement_1',action:'отправить видеообзор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'},
+      {id:'agreement_2',action:'отправить ссылку на подбор',evidence:'скину видео и сейчас посмотрю, что у нас есть, скину ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'},
+      {id:'agreement_3',action:'подобрать другие варианты',evidence:'сейчас посмотрю, что у нас есть',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'}
+    ],primary_next_step:{action:'отправить видеообзор, отправить ссылку на подбор и подготовить подборку вариантов',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['agreement_1','agreement_2','agreement_3']}}};
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+  });
+
+  expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в MAX видеообзор, затем посмотрит дополнительные варианты и отправит ссылку на подборку.");
+  expect(result.value.conversation_result).toBe("Клиент ищет участок.");
+});
+
+test("Summary заменяет короткий повтор отправки видео на рабочий итог", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const summary={status:'GENERATED',conversation_result:'ожидает видео.',key_facts:[],quotes:[],next_step:'Агент после звонка отправит клиенту в MAX видеообзор и ссылку на подборку.',error:''};
+    const store={conversation:{facts:[],requirements:[{id:'requirement_1',type:'price_limit',value:5500000}],attributes:{},agreements:[
+      {id:'agreement_1',action:'отправить видеообзор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'},
+      {id:'agreement_2',action:'отправить ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'}
+    ],primary_next_step:{action:'отправить видеообзор; отправить ссылку на подбор',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['agreement_1','agreement_2']}}};
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+  });
+
+  expect(result.value.conversation_result).toBe("Клиент ищет участок по указанным параметрам.");
+  expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в MAX видеообзор и ссылку на подборку.");
+});
+
+test("детерминированные проверки не создают ложные warnings из подтверждённого контекста", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const offer={id:'fact_1',category:'agent_commitment',name:'агент отправит видео',value:'агент отправит видеообзор',normalized_value:null,speaker:'Агент',evidence:'Хорошо, я тогда сейчас скину вам видео, вам в Телегу, в Макс?',confidence:.9,verification_status:'pending'};
+    const factRejection=factCodeSemanticRejection(offer,new Set());
+    const needWarnings=relevantNeedJudgeWarnings(['Пропущена потребность interest: клиент явно интересуется участком (fact_1).'],{fact_check:{verified_facts:[{id:'fact_1',category:'client_intent',name:'цель обращения',value:'интересуется участком',evidence:'по поводу участка звоню'}]}});
+    const evidence='Э-э, скину видео и сейчас посмотрю, че у нас есть, скину ссылку на подбор.';
+    const actionCtx={summary:{next_step:'Агент после звонка отправит клиенту в Макс видеообзор, затем посмотрит дополнительные варианты и отправит ссылку на подборку.'},conversation_store:{store_meta:{status:'READY'},conversation:{call_results:[],agreements:[
+      {id:'agreement_1',action:'отправить видеообзор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'Макс',status:'confirmed',evidence},
+      {id:'agreement_2',action:'отправить ссылку на подбор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'Макс',status:'confirmed',evidence},
+      {id:'agreement_3',action:'посмотреть имеющиеся варианты и подобрать подходящие',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'Макс',status:'confirmed',evidence}
+    ],primary_next_step:{action:'отправить видеообзор; отправить ссылку на подбор; посмотреть имеющиеся варианты и подобрать подходящие',owner:'агент',deadline:'после звонка',channel:'Макс',status:'confirmed',agreement_ids:['agreement_1','agreement_2','agreement_3']}}}};
+    const actionIssues=actionCheckCodeIssues(actionCtx);
+    const agreementEvidence='Агент: "скину видео и сейчас посмотрю, что есть, скину ссылку на подбор." Клиент: "Да, давайте в Макс лучше."';
+    const outcomeInput={call_results:[],agreements:[{id:'agreement_1',action:'скинуть подбор и ссылку на подборку',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:agreementEvidence,confidence:.9,verification_status:'pending'}],primary_next_step:{action:'скинуть подбор и ссылку на подборку',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['agreement_1'],confidence:.9,verification_status:'pending'}};
+    const outcomeIssues=outcomeSemanticGuards(outcomeInput,{__transcript:'Клиент: Да, давайте в Макс лучше.',fact_check:{verified_facts:[{category:'communication_channel',value:'MAX',normalized_value:'MAX',evidence:'Да, давайте в Макс лучше.',verified:true,verification_status:'verified'}]}});
+    return {factRejection,needWarnings,actionIssues,outcomeAgreementIssues:[...outcomeIssues.agreementIssues.entries()]};
+  });
+
+  expect(result.factRejection).toBeNull();
+  expect(result.needWarnings).toEqual([]);
+  expect(result.actionIssues).not.toEqual(expect.arrayContaining([expect.objectContaining({type:"sequence_distortion"})]));
+  expect(result.actionIssues).not.toEqual(expect.arrayContaining([expect.objectContaining({type:"wrong_owner"})]));
+  expect(result.outcomeAgreementIssues).toEqual([]);
+});
+
+test("Summary сохраняет просмотр вариантов перед отправкой подборки", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент ищет участок.',key_facts:[],quotes:[],next_step:'отправить видео, посмотреть варианты и направить подборку',error:''};
+    const store={conversation:{facts:[],requirements:[],attributes:{},agreements:[
+      {id:'agreement_1',action:'отправить видеообзор',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'},
+      {id:'agreement_2',action:'посмотреть варианты и направить подборку',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed'}
+    ],primary_next_step:{action:'отправить видео, посмотреть доступные варианты и направить подборку',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['agreement_1','agreement_2']}}};
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
+  });
+
+  expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в MAX видеообзор, затем посмотрит дополнительные варианты и отправит ссылку на подборку.");
+});
+
+test("Summary выбирает доказательные цитаты и сохраняет альтернативную географию", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const facts=[
+      {id:'fact_1',category:'client_intent',name:'цель обращения',value:'звонок по поводу участка',evidence:'Слушайте, по поводу участка звоню вам.'},
+      {id:'fact_2',category:'search_location',name:'место поиска',value:'Деревня Мистолово',evidence:'Деревня Мистолово.'},
+      {id:'fact_8',category:'client_finance',name:'максимальный бюджет',value:'до пяти с половиной',normalized_value:5500000,evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.'},
+      {id:'fact_9',category:'client_objection',name:'возражение',value:'не устраивают взносы',normalized_value:9600,evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'}
+    ];
+    const quotes=[
+      {id:'quote_1',text:facts[0].evidence,speaker:'Клиент',supports_fact_ids:['fact_1']},
+      {id:'quote_5',text:facts[2].evidence,speaker:'Клиент',supports_fact_ids:['fact_8']},
+      {id:'quote_6',text:facts[3].evidence,speaker:'Клиент',supports_fact_ids:['fact_9']}
+    ];
+    const summary={status:'GENERATED',conversation_result:'Клиент ищет участок.',key_facts:[{label:'Область поиска',value:'деревня Мистолово'}],quotes:[facts[0].evidence],next_step:'Следующий шаг не согласован.',error:''};
+    const store={conversation:{facts,quotes,requirements:[],attributes:{},primary_next_step:{action:'',status:'not_defined'}}};
+    const transcript='Клиент: — Блин, в Мистолово ничего. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.';
+    return moduleSummaryApplyStorePolicy(structuredClone(summary),store,transcript);
+  });
+
+  expect(result.value.key_facts).toContainEqual({label:"Районы поиска",value:"Мистолово, Капитолова, Лаврики"});
+  expect(result.value.quotes).toEqual([
+    "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.",
+    "Не, ну у меня просто цена до пяти с половиной, вот так."
+  ]);
+  expect(result.value.quotes).not.toContain("Слушайте, по поводу участка звоню вам.");
+});
+
+test("Fact policy добавляет перечисленные клиентом районы в проверяемый контракт", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript='Клиент:\n— Деревня Мистолово.\nКлиент:\n— Блин, в Мистолово ничего. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.';
+    const evidence='Деревня Мистолово.';
+    const value={facts:[{id:'fact_1',category:'search_location',name:'область поиска',value:'Мистолово',normalized_value:'Мистолово',speaker:'Клиент',evidence,confidence:.9,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
+    return applyFactExtractionPolicies(value,{__transcript:transcript});
+  });
+
+  expect(result.warnings).toContain("SEARCH_LOCATION_RANGE_POLICY_ADDED");
+  expect(result.value.facts).toContainEqual(expect.objectContaining({
+    category: "search_location",
+    name: "районы поиска",
+    value: ["Мистолово", "Капитолова", "Лаврики"],
+    normalized_value: ["Мистолово", "Капитолова", "Лаврики"],
+    verification_status: "pending"
+  }));
+  expect(result.value.extraction_meta.fact_count).toBe(2);
+});
+
+test("проверки качества не штрафуют общий client goal, дословную цитату и принадлежащий агенту файл", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент ищет участок по указанным параметрам.',key_facts:[{label:'Бюджет',value:'до 5 500 000 ₽'}],quotes:['Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'],next_step:'Агент отправит видеообзор и ссылку на подборку.',error:''};
+    const conversation_store={conversation:{facts:[{id:'f1',category:'client_goal',name:'цель обращения',value:'узнать про участок',evidence:'Слушайте, по поводу участка звоню вам.'}],requirements:[{id:'r1',type:'price_limit',value:5500000,evidence:'до пяти с половиной'}],attributes:{},call_results:[],agreements:[],primary_next_step:{}}};
+    const completeness=criticalCompletenessRecalculate({critical_items:[{id:'c1',category:'client_goal',expected:'цель обращения — узнать про участок',present:false,summary_field:'',summary_fragment:'',evidence:'Слушайте, по поводу участка звоню вам.'},{id:'c2',category:'budget',expected:'бюджет до 5,5 млн',present:true,summary_field:'key_facts',summary_fragment:'до 5 500 000 ₽',evidence:'до пяти с половиной'}],missing_items:[{id:'c1',type:'client_goal',category:'client_goal',expected:'цель обращения — узнать про участок',importance:'critical',reason:'общий контекст',evidence:'Слушайте, по поводу участка звоню вам.'}],warnings:[],explanation:'Проверка'}, {summary,conversation_store});
+    const presentation=validatePresentationJudgeOutput({status:'fail',score:60,structure_score:100,brevity_score:100,readability_score:60,repetition_score:100,limits_score:100,checks:{required_fields_present:true,conversation_result_valid:true,key_facts_valid:true,quotes_valid:true,next_step_valid:true,character_limit_valid:true,no_excessive_repetition:true,easy_to_scan:false},metrics:{total_characters:200,conversation_result_characters:45,key_facts_count:1,quotes_count:1,next_step_characters:48,sentence_count:4},errors:[{type:'difficult_to_scan',field:'quotes[0]',summary_fragment:summary.quotes[0],problem:'разговорная фраза'},{type:'difficult_to_scan',field:'conversation_result',summary_fragment:'Мистолово, Капитолова, Лаврики',problem:'перечисление районов'}],warnings:[],explanation:'Проверка'}, {summary:{...summary,conversation_result:'Клиент ищет в Мистолово, Капитолова, Лаврики.'}});
+    const utility=validateAgentUtilityJudgeOutput({status:'warning',score:95,can_continue_without_recording:true,context_clarity:100,actionability:90,scanability:100,recording_independence:100,missing_for_next_agent:[{type:'action_context',description:'не указан точный URL видеофайла'}],useful_summary_elements:[],problems:[{type:'ambiguous_wording',field:'next_step',summary_fragment:summary.next_step,problem:'неясно, какой конкретно видеофайл или URL отправлять'}],explanation:'Проверка'}, {summary,conversation_store,critical_completeness_check:{missing_items:[]}});
+    return {completeness,presentation,utility};
+  });
+
+  expect(result.completeness).toMatchObject({status:"pass",score:100,critical_items_total:1,critical_items_missing:0});
+  expect(result.presentation.errors).toEqual([]);
+  expect(result.utility.problems).toEqual([]);
+  expect(result.utility.missing_for_next_agent).toEqual([]);
+});
+
+test("результаты этапов по умолчанию свернуты и раскрываются по клику", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const state = await page.evaluate(() => {
+    const stage={type:'code',name:'Тестовый этап',codeFn:'validate',outKey:'validation'};
+    const report=renderReport(stage,{status:'ok',ms:4,metrics:[['Score',100]],output:{status:'pass'}},1);
+    document.body.appendChild(report);
+    const header=report.querySelector('.rep-h');
+    const before={collapsed:report.classList.contains('collapsed'),expanded:header.getAttribute('aria-expanded')};
+    header.click();
+    return {before,after:{collapsed:report.classList.contains('collapsed'),expanded:header.getAttribute('aria-expanded')}};
+  });
+
+  expect(state.before).toEqual({collapsed:true,expanded:"false"});
+  expect(state.after).toEqual({collapsed:false,expanded:"true"});
 });
 
 test("Проверка потребностей валидирует Judge и сама рассчитывает quality", async ({ page }) => {
@@ -3058,4 +3985,345 @@ test("подробные контракты настроенных Judge сов�
   expect(result.outcome).toMatchObject({ decision: "PASS", verified_primary_next_step: { verified: true } });
   expect(result.resultId).toBe("result_1");
   expect(result.normalizedValue).toBe(6);
+});
+
+test("verdict-only Judge применяет corrections кодом и не превращает semantic rejection в technical error", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(async () => {
+    const factInput = {
+      facts: [
+        { id: "fact_1", category: "client_preference", name: "локация", value: "Мистолово", normalized_value: "Мистолово", speaker: "Клиент", evidence: "Посмотрите Мистолово", confidence: 0.96, verification_status: "pending" },
+        { id: "fact_2", category: "client_preference", name: "ипотека", value: "ипотека одобрена", normalized_value: "ипотека одобрена", speaker: "Клиент", evidence: "Ипотека мне не нужна", confidence: 0.75, verification_status: "pending" },
+      ], quotes: [], extraction_meta: { fact_count: 2, quote_count: 0, decision: "EXTRACTED" },
+    };
+    const factVerdict = validateFactJudgeOutput({
+      items: [
+        { id: "fact_1", verdict: "needs_correction", reason: "Уточнена категория", confidence: 0.97, corrections: { category: "search_criteria" } },
+        { id: "fact_2", verdict: "rejected", reason: "Отказ от ипотеки не означает одобрение", confidence: 0.99, corrections: {} },
+      ], overall_confidence: 0.98, warnings: [],
+    }, factInput);
+    const fact = mergeFactCheck({ criteria: [] }, factVerdict, null, factInput, { __transcript: "Клиент: Посмотрите Мистолово. Ипотека мне не нужна." });
+    const invalidEvidence = (() => { try { validateFactJudgeOutput({ items: [
+      { id: "fact_1", verdict: "needs_correction", reason: "Подмена", confidence: 0.9, corrections: { evidence: "другой текст" } },
+      { id: "fact_2", verdict: "rejected", reason: "Нет подтверждения", confidence: 0.9, corrections: {} },
+    ], overall_confidence: 0.9, warnings: [] }, factInput); return ""; } catch (error) { return error.message; } })();
+    const unknownId = (() => { try { validateFactJudgeOutput({ items: [
+      { id: "unknown", verdict: "verified", reason: "ok", confidence: 0.9, corrections: {} },
+      { id: "fact_2", verdict: "rejected", reason: "нет", confidence: 0.9, corrections: {} },
+    ], overall_confidence: 0.9, warnings: [] }, factInput); return ""; } catch (error) { return error.message; } })();
+    const missingId = (() => { try { validateFactJudgeOutput({ items: [
+      { id: "fact_1", verdict: "verified", reason: "ok", confidence: 0.9, corrections: {} },
+    ], overall_confidence: 0.9, warnings: [] }, factInput); return ""; } catch (error) { return error.message; } })();
+
+    const transcript = "Агент: Я сейчас отправлю вам видео и затем направлю подборку в MAX.";
+    const outcomeInput = validateOutcomeExtractionRoot({
+      call_results: [{ id: "result_1", value: "агент отправит материалы", evidence: "Я сейчас отправлю вам видео", confidence: 0.95, verification_status: "pending" }],
+      agreements: [{ id: "agreement_1", action: "отправить видео и направить подборку", owner: "агент", recipient: "клиент", deadline: "", channel: "MAX", status: "promised", evidence: "Агент: Я сейчас отправлю вам видео и затем направлю подборку в MAX.", confidence: 0.95, verification_status: "pending" }],
+      primary_next_step: { action: "отправить видео и направить подборку", owner: "агент", deadline: "", channel: "MAX", status: "promised", agreement_ids: ["agreement_1"], confidence: 0.95, verification_status: "pending" },
+      outcome_meta: { result_count: 1, agreement_count: 1, decision: "EXTRACTED" },
+    }, { __transcript: transcript }, false);
+    const outcomeVerdict = validateOutcomeJudgeOutput({ items: [
+      { id: "result_1", verdict: "verified", reason: "Результат подтверждён", confidence: 0.98, corrections: {} },
+      { id: "agreement_1", verdict: "needs_correction", reason: "Сейчас означает после звонка", confidence: 0.99, corrections: { deadline: "после звонка" } },
+      { id: "primary_next_step", verdict: "needs_correction", reason: "Срок основного шага нормализован", confidence: 0.99, corrections: { deadline: "после звонка" } },
+    ], overall_confidence: 0.99, warnings: [] }, outcomeInput);
+    const outcome = mergeOutcomeCheck({ criteria: [] }, outcomeVerdict, null, outcomeInput, { __transcript: transcript, fact_check: { status: "ok", decision: "PASS" }, need_check: { status: "ok", decision: "PASS" } });
+    const store = {
+      conversation: {
+        facts: fact.verified_facts,
+        quotes: [],
+        attributes: { interest: [], funding_source: { value: "не определено" }, purchase_term: { value: "не определено" } },
+        requirements: [],
+        call_results: outcome.verified_call_results,
+        agreements: outcome.verified_agreements,
+        primary_next_step: outcome.verified_primary_next_step,
+      },
+      quality: { decision: "READY", overall_confidence: 0.98 },
+      store_meta: { status: "READY", conversation_store_hash: "verdict_only_acceptance" },
+    };
+    const summaryStage = defaultPipeline().find((item) => item.outKey === "summary");
+    const originalCall = callModelWithTransientRetry;
+    callModelWithTransientRetry = async () => ({
+      text: JSON.stringify({ status: "GENERATED", conversation_result: "Клиент рассматривает Мистолово.", key_facts: [{ label: "Локация", value: "Мистолово" }], quotes: [], next_step: "Агент отправит видео и направит подборку после звонка в MAX.", error: "" }),
+      tokens: 20,
+      actualModel: "gpt-5-mini",
+      actualProvider: "ai-tunnel",
+      finishReason: null,
+    });
+    const summary = await runStage(summaryStage, { conversation_store: store, __transcript: transcript });
+    callModelWithTransientRetry = originalCall;
+    const pass = { score: 100, status: "pass", decision: "PASS", explanation: "Проверка пройдена" };
+    const presentation = CODE_FUNCS.presentationCheck({}, { summary: summary.output }).output;
+    const gate = CODE_FUNCS.summaryQualityGate({}, {
+      conversation_store: store,
+      summary: summary.output,
+      truth_check: { ...pass, critical_errors: [] },
+      critical_facts_check: { ...pass, missed_critical_facts: [] },
+      context_utility_check: { ...pass, missing_for_next_agent: [], can_continue_without_recording: true },
+      action_check: { ...pass, action_errors: [], is_result_reflected: true, is_agreement_reflected: true, is_next_step_reflected: true },
+      presentation_check: presentation,
+    }).output;
+    return { fact, invalidEvidence, unknownId, missingId, outcome, summary, gate };
+  });
+
+  expect(result.fact).toMatchObject({ status: "warn", decision: "REVIEW_REQUIRED", confidence: 0.98, reconciliation: { verified_count: 0, corrected_count: 1, rejected_count: 1 } });
+  expect(result.fact.score).toBeLessThan(100);
+  expect(result.fact.verified_facts[0]).toMatchObject({ category: "search_criteria", evidence: "Посмотрите Мистолово", verification_status: "corrected", applied_corrections: { category: { from: "client_preference", to: "search_criteria" } } });
+  expect(result.invalidEvidence).toContain("invalid correction");
+  expect(result.unknownId).toContain("unknown_id");
+  expect(result.missingId).toContain("missing_id");
+  expect(result.outcome).toMatchObject({ decision: "PASS_WITH_CORRECTIONS", confidence: 0.99, verified_agreements: [expect.objectContaining({ deadline: "после звонка", evidence: expect.stringContaining("сейчас"), verification_status: "corrected" })], verified_primary_next_step: { deadline: "после звонка", verification_status: "corrected" }, reconciliation: { corrected_count: 2, rejected_count: 0 } });
+  expect(result.summary.output).toMatchObject({ status: "GENERATED", next_step: expect.stringContaining("после звонка") });
+  expect(result.gate.decision).toMatch(/AUTO_SAVE|SAVE_WITH_WARNING/);
+});
+
+test("Need Judge не может заменить канонический interest произвольным CRM-значением", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const interest = { value: "Новостройки", confidence: 0.95, evidence: "Клиент: Звоню по апартаментам в ЖК.", source_fact_ids: ["fact_1"], verification_status: "pending" };
+    const empty = { value: "не определено", confidence: 0.95, evidence: "", source_fact_ids: [], verification_status: "pending" };
+    const input = { attributes: { interest: [interest], funding_source: empty, purchase_term: empty }, requirements: [], need_meta: { interest_count: 1, requirements_count: 0, decision: "EXTRACTED" } };
+    const baseItems = [
+      { id: "funding_source", verdict: "verified", reason: "Не определено корректно", confidence: 0.95, corrections: {} },
+      { id: "purchase_term", verdict: "verified", reason: "Не определено корректно", confidence: 0.95, corrections: {} },
+    ];
+    const invalid = { items: [
+      { id: "interest:0", verdict: "needs_correction", reason: "Заменить на свободный текст", confidence: 0.95, corrections: { value: "консультация по апартаментам", category: "client_intent" } },
+      ...baseItems,
+    ], overall_confidence: 0.95, warnings: [] };
+    const rejected = { items: [
+      { id: "interest:0", verdict: "rejected", reason: "Категория Новостройки не подтверждена", confidence: 0.95, corrections: {} },
+      ...baseItems,
+    ], overall_confidence: 0.95, warnings: [] };
+    let invalidError = "";
+    try { validateNeedJudgeOutput(invalid, input); } catch (error) { invalidError = error.message; }
+    const parsed = validateNeedJudgeOutput(rejected, input);
+    const merged = mergeNeedCheckV2({ criteria: [] }, parsed, null, input, { __transcript: "Клиент: Звоню по апартаментам в ЖК." });
+    const schemaProperties = Object.keys(NEED_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties);
+    return { invalidError, merged, schemaProperties, prompt: defaultPipeline().find(stage => stage.outKey === "need_check") };
+  });
+
+  expect(result.invalidError).toContain("corrections.value: invalid correction");
+  expect(result.merged).toMatchObject({ decision: "REVIEW_REQUIRED", verified_attributes: { interest: [] }, rejected_attributes: [expect.objectContaining({ value: "Новостройки", verification_status: "rejected" })] });
+  expect(result.schemaProperties.sort()).toEqual(["confidence", "source_fact_ids", "source_turn_ids"]);
+  expect(result.prompt).toMatchObject({ promptVersion: 8 });
+  expect(result.prompt.prompt).toContain('value, normalized_value, category, id и evidence исправлять запрещено');
+});
+
+test("production report 2026-07-23 сохраняет подтверждённый follow-up без ложных warning", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript = [
+      "Клиент: Я звоню по поводу апартаментов. Можете меня проконсультировать?",
+      "Клиент: Хотел бы узнать по управляющей компании в доме.",
+      "Клиент: Если удобно, можете написать мне в WhatsApp.",
+      "Агент: Сегодня уточню всю информацию и либо сегодня, либо завтра свяжусь с вами.",
+    ].join("\n");
+    const validation = evaluateTranscriptValidation({ __transcript: transcript });
+    const intent = { id: "fact_1", category: "client_intent", name: "цель обращения", value: "консультация по апартаментам", normalized_value: "консультация по апартаментам", speaker: "Клиент", evidence: "Я звоню по поводу апартаментов. Можете меня проконсультировать?", confidence: 0.95, verification_status: "pending" };
+    const constraint = { id: "fact_2", category: "client_constraint", name: "готовность к просмотру", value: "пока не готов ехать", normalized_value: "временно не готов ехать", speaker: "Клиент", evidence: "Пока не готов ехать на просмотр.", confidence: 0.95, verification_status: "verified", verified: true };
+    const empty = { value: "не определено", confidence: 0.95, evidence: "", source_fact_ids: [], verification_status: "pending" };
+    const needs = normalizeNeedExtractionSemantics({ attributes: { interest: [], funding_source: empty, purchase_term: empty }, requirements: [], need_meta: { interest_count: 0, requirements_count: 0, decision: "NO_NEEDS" } }, { fact_check: { verified_facts: [constraint] } });
+    const warnings = relevantNeedJudgeWarnings(["search_location"], { fact_check: { verified_facts: [{ category: "search_location", name: "адрес объекта", value: "проспект Андропова, 10", evidence: "Адрес объекта: проспект Андропова, 10.", verified: true }] } });
+    const agreement = { id: "agreement_1", action: "уточнить информацию и связаться с клиентом", owner: "агент", recipient: "клиент", deadline: "сегодня или завтра", channel: "WhatsApp", status: "confirmed", evidence: "Сегодня уточню всю информацию и либо сегодня, либо завтра свяжусь с вами.", confidence: 0.9, verification_status: "pending" };
+    const outcomeInput = { call_results: [{ id: "result_1", value: "агент уточнит информацию", evidence: agreement.evidence, confidence: 0.9, verification_status: "pending" }], agreements: [agreement], primary_next_step: { action: agreement.action, owner: "агент", deadline: "сегодня или завтра", channel: "WhatsApp", status: "confirmed", agreement_ids: ["agreement_1"], confidence: 0.9, verification_status: "pending" }, outcome_meta: { result_count: 1, agreement_count: 1, decision: "EXTRACTED" } };
+    const guards = outcomeSemanticGuards(outcomeInput, { __transcript: transcript, fact_check: { verified_facts: [{ category: "communication_channel", value: "WhatsApp", normalized_value: "WhatsApp", evidence: "Если удобно, можете написать мне в WhatsApp.", verified: true, verification_status: "verified" }] } });
+    const store = { conversation: { facts: [
+      { id: "fact_address", category: "search_location", name: "адрес объекта", evidence: "Адрес объекта: проспект Андропова, 10." },
+      { id: "fact_question", category: "client_question", name: "вопрос об управляющей компании", evidence: "Хотел бы узнать по управляющей компании в доме." },
+    ], quotes: [
+      { text: "Адрес объекта: проспект Андропова, 10.", speaker: "Клиент", supports_fact_ids: ["fact_address"] },
+      { text: "Хотел бы узнать по управляющей компании в доме.", speaker: "Клиент", supports_fact_ids: ["fact_question"] },
+    ], requirements: [], attributes: {}, agreements: [agreement], primary_next_step: { ...outcomeInput.primary_next_step, verification_status: "verified" } } };
+    const summary = moduleSummaryApplyStorePolicy({ status: "GENERATED", conversation_result: "Клиенту важно узнать размер эксплуатационных и коммунальных платежей, распределение расходов, а также информацию по парковке.", key_facts: [{ label: "Адрес объекта", value: "проспект Андропова, 10" }], quotes: ["Адрес объекта: проспект Андропова, 10."], next_step: "Следующий шаг не согласован.", error: "" }, store, transcript).value;
+    const needStage = { type: "llm", outKey: "needs" };
+    return {
+      validation: { decision: validation.decision, confidence: validation.confidence },
+      intentRejection: factCodeSemanticRejection(intent, new Set()),
+      requirements: needs.requirements,
+      warnings,
+      outcomeIssues: { agreements: guards.agreementIssues.size, primary: guards.primaryIssue },
+      summary,
+      needScore: stageScoreFromOutput(needStage, { output: needs, status: "ok" }),
+    };
+  });
+
+  expect(result.validation).toEqual({ decision: "PASS", confidence: 0.955 });
+  expect(result.intentRejection).toBeNull();
+  expect(result.requirements).toEqual([]);
+  expect(result.warnings).toEqual([]);
+  expect(result.outcomeIssues).toEqual({ agreements: 0, primary: null });
+  expect(result.summary.next_step).toBe("Агент: уточнить информацию и связаться с клиентом; срок — сегодня или завтра; канал — WhatsApp.");
+  expect(result.summary.conversation_result).toContain(". Распределение расходов.");
+  expect(result.summary.quotes).toEqual(["Хотел бы узнать по управляющей компании в доме."]);
+  expect(result.needScore).toBeNull();
+});
+
+test("Summary Agent не получает карточку объекта и UI отклоняет системный промт вместо транскрибации", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript = [
+      "Агент: Объект находится по адресу проспект Андропова, 10, цена 5 500 000 рублей.",
+      "Клиент: Хотел бы узнать по управляющей компании в доме.",
+      "Агент: Сегодня уточню информацию и свяжусь с вами.",
+    ].join("\n");
+    const agreement = { id: "agreement_1", action: "уточнить информацию и связаться с клиентом", owner: "агент", recipient: "клиент", deadline: "сегодня", channel: "", status: "confirmed", evidence: "Сегодня уточню информацию и свяжусь с вами." };
+    const store = {
+      conversation: {
+        facts: [
+          { id: "fact_address", category: "search_location", name: "адрес объекта", value: "проспект Андропова, 10", evidence: "Объект находится по адресу проспект Андропова, 10." },
+          { id: "fact_price", category: "object_information", name: "цена объекта", value: "5 500 000 рублей", evidence: "Цена 5 500 000 рублей." },
+          { id: "fact_question", category: "client_question", name: "вопрос об управляющей компании", value: "управляющая компания", evidence: "Хотел бы узнать по управляющей компании в доме." },
+        ],
+        quotes: [
+          { text: "Объект находится по адресу проспект Андропова, 10.", speaker: "Агент", supports_fact_ids: ["fact_address"] },
+          { text: "Цена 5 500 000 рублей.", speaker: "Агент", supports_fact_ids: ["fact_price"] },
+          { text: "Хотел бы узнать по управляющей компании в доме.", speaker: "Клиент", supports_fact_ids: ["fact_question"] },
+        ],
+        attributes: {},
+        requirements: [],
+        call_results: [],
+        agreements: [agreement],
+        primary_next_step: { ...agreement, agreement_ids: ["agreement_1"] },
+      },
+      quality: { decision: "PASS" },
+      store_meta: { status: "READY" },
+    };
+    const audit = moduleSummaryPrompt({ prompt: "Сформируй summary." }, { conversation_store: store, __transcript: transcript });
+    return {
+      promptLike: looksLikePipelinePrompt("Ты — Summary Agent. Используй Conversation Store. Верни строго JSON с primary_next_step и verification_status."),
+      dialogueLike: looksLikePipelinePrompt(transcript),
+      safeFactIds: audit.safeStore.conversation.facts.map(fact => fact.id),
+      safeQuotes: audit.safeStore.conversation.quotes.map(quote => quote.text),
+      containsAddress: audit.prompt.includes("проспект Андропова"),
+      containsPrice: audit.prompt.includes("5 500 000"),
+      containsFullTranscript: audit.prompt.includes(transcript),
+      promptAudit: { transcriptInjected: audit.transcriptInjected, omitted: audit.cardMetadataOmitted, quoteCount: audit.verifiedQuoteCount },
+      badge: badgeText("not_run"),
+    };
+  });
+
+  expect(result.promptLike).toBe(true);
+  expect(result.dialogueLike).toBe(false);
+  expect(result.safeFactIds).toEqual(["fact_question"]);
+  expect(result.safeQuotes).toEqual(["Хотел бы узнать по управляющей компании в доме."]);
+  expect(result.containsAddress).toBe(false);
+  expect(result.containsPrice).toBe(false);
+  expect(result.containsFullTranscript).toBe(false);
+  expect(result.promptAudit).toEqual({ transcriptInjected: false, omitted: 2, quoteCount: 1 });
+  expect(result.badge).toBe("Не запущен");
+});
+
+test("verdict-only Outcome reconciliation не переопределяет Judge семантическими guards", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript = "Агент: Я отправлю видео в MAX и проверю дополнительные варианты. Клиент: Да, давайте в MAX лучше.";
+    const input = validateOutcomeExtractionRoot({
+      call_results: [
+        { id: "result_1", value: "агент отправит материалы", evidence: "Агент: Я отправлю видео в MAX.", confidence: 0.98, verification_status: "pending" },
+        { id: "result_2", value: "агент подготовит подборку", evidence: "Агент: Я проверю дополнительные варианты.", confidence: 0.98, verification_status: "pending" },
+      ],
+      agreements: [
+        { id: "agreement_1", action: "отправить видео", owner: "агент", recipient: "клиент", deadline: "после звонка", channel: "MAX", status: "promised", evidence: "Агент: Я отправлю видео в MAX.", confidence: 0.98, verification_status: "pending" },
+        { id: "agreement_2", action: "проверить дополнительные варианты", owner: "агент", recipient: "none", deadline: "после звонка", channel: "", status: "promised", evidence: "Агент: Я проверю дополнительные варианты.", confidence: 0.98, verification_status: "pending" },
+      ],
+      primary_next_step: { action: "отправить видео и проверить дополнительные варианты", owner: "агент", deadline: "после звонка", channel: "MAX", status: "promised", agreement_ids: ["agreement_1", "agreement_2"], confidence: 0.98, verification_status: "pending" },
+      outcome_meta: { result_count: 2, agreement_count: 2, decision: "EXTRACTED" },
+    }, { __transcript: transcript }, false);
+    const verdict = validateOutcomeJudgeOutput({
+      items: [
+        { id: "result_1", verdict: "verified", reason: "Подтверждено", confidence: 0.99, corrections: {} },
+        { id: "result_2", verdict: "verified", reason: "Подтверждено", confidence: 0.99, corrections: {} },
+        { id: "agreement_1", verdict: "verified", reason: "MAX выбран клиентом", confidence: 0.99, corrections: {} },
+        { id: "agreement_2", verdict: "verified", reason: "Внутреннее действие без получателя", confidence: 0.99, corrections: {} },
+        { id: "primary_next_step", verdict: "verified", reason: "Основной шаг подтверждён", confidence: 0.99, corrections: {} },
+      ],
+      overall_confidence: 0.99,
+      warnings: [],
+    }, input);
+    const merged = mergeOutcomeCheck({ criteria: [] }, verdict, null, input, {
+      __transcript: transcript,
+      fact_check: { status: "ok", decision: "PASS", verified_facts: [] },
+      need_check: { status: "ok", decision: "PASS" },
+    });
+    let combinedChannelError = "";
+    try {
+      validateOutcomeJudgeOutput({
+        items: verdict.items.map((item) => item.id === "agreement_1"
+          ? { ...item, verdict: "needs_correction", corrections: { channel: "MAX (Telegram)" } }
+          : item),
+        overall_confidence: 0.99,
+        warnings: [],
+      }, input);
+    } catch (error) {
+      combinedChannelError = String(error.message);
+    }
+    return { merged, combinedChannelError };
+  });
+
+  expect(result.merged).toMatchObject({
+    decision: "PASS",
+    verified_agreements: [
+      expect.objectContaining({ id: "agreement_1", channel: "MAX" }),
+      expect.objectContaining({ id: "agreement_2", recipient: "none" }),
+    ],
+    rejected_agreements: [],
+    reconciliation: { input_items_count: 5, verified_count: 5, corrected_count: 0, rejected_count: 0 },
+  });
+  expect(result.combinedChannelError).toContain("combined channel values are forbidden");
+});
+
+test("Conversation Store восстанавливает критические requirements, вопросы, steps и structured issues", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const verified = (item, source) => ({ ...item, confidence: 0.98, verification_status: "verified", verified: true, source });
+    const facts = [
+      verified({ id: "fact_area", category: "client_constraint", name: "минимальная площадь", value: "минимум 6 соток", normalized_value: 6, speaker: "Клиент", evidence: "Минимум шесть соток мне надо." }, "fact_check"),
+      verified({ id: "fact_budget", category: "client_finance", name: "бюджет", value: "до 5 500 000", normalized_value: 5500000, speaker: "Клиент", evidence: "У меня цена до пяти с половиной." }, "fact_check"),
+      verified({ id: "fact_locations", category: "search_location", name: "районы поиска", value: ["Мистолово", "Капитолова", "Лаврики"], normalized_value: ["Мистолово", "Капитолова", "Лаврики"], speaker: "Клиент", evidence: "Мистолово, Капитолова, Лаврики." }, "fact_check"),
+      verified({ id: "fact_question", category: "client_question", name: "кто продаёт", value: "Кто продаёт?", speaker: "Клиент", evidence: "Кто продаёт?" }, "fact_check"),
+    ];
+    const agreement = (id, action, recipient, channel = "") => verified({ id, action, owner: "агент", recipient, deadline: "после звонка", channel, status: "promised", evidence: "Агент: " + action, }, "outcome_check");
+    const agreements = [agreement("agreement_video", "отправить видео", "клиент", "MAX"), agreement("agreement_check", "проверить дополнительные варианты", "none")];
+    const ctx = {
+      __run_id: "run_regression",
+      __transcript_hash: "bf1eeff3",
+      __pipeline_configuration_hash: "5a24b0b5",
+      __transcript: "Клиент: Кто продаёт?\nАгент: Продаёт физическое лицо.\nКлиент: Спасибо.",
+      fact_check: { status: "ok", decision: "PASS", verified_facts: facts, verified_quotes: [], fact_check_quality: { overall_score: 1, decision: "PASS" } },
+      need_check: { status: "ok", decision: "PASS", verified_attributes: { interest: [], funding_source: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check"), purchase_term: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check") }, verified_requirements: [], missing_critical_needs: [], need_check_quality: { overall_score: 1, decision: "PASS" } },
+      outcome_check: {
+        status: "ok", decision: "PASS",
+        verified_call_results: [verified({ id: "result_1", value: "агент отправит материалы", evidence: "Агент: отправить видео" }, "outcome_check")],
+        verified_agreements: agreements,
+        verified_primary_next_step: verified({ action: "отправить видео и проверить дополнительные варианты", owner: "агент", deadline: "после звонка", channel: "MAX", status: "promised", agreement_ids: agreements.map((item) => item.id) }, "outcome_check"),
+        missing_critical_outcomes: [],
+        outcome_check_quality: { overall_score: 1, decision: "PASS" },
+      },
+      __stage_provenance: {},
+    };
+    ["fact_check", "need_check", "outcome_check"].forEach((key, index) => {
+      ctx.__stage_provenance[key] = { run_id: ctx.__run_id, transcript_hash: ctx.__transcript_hash, pipeline_configuration_hash: ctx.__pipeline_configuration_hash, stage_execution_id: ctx.__run_id + ":0" + (index + 1) + ":stage" };
+    });
+    const ready = buildConversationStoreV1(ctx);
+    const broken = JSON.parse(JSON.stringify(ctx));
+    broken.outcome_check.verified_primary_next_step = verified({ action: "", owner: "", deadline: "", channel: "", status: "not_defined", agreement_ids: [] }, "outcome_check");
+    const critical = buildConversationStoreV1(broken);
+    return { ready, critical, snapshotA: buildPipelineSemanticSnapshot({ ...ctx, summary: { status: "GENERATED", conversation_result: "Итог", key_facts: [], quotes: [], next_step: "Шаг", error: "" }, __run_id: "one" }), snapshotB: buildPipelineSemanticSnapshot({ ...ctx, summary: { status: "GENERATED", conversation_result: "Итог", key_facts: [], quotes: [], next_step: "Шаг", error: "" }, __run_id: "two" }) };
+  });
+
+  expect(result.ready.conversation.requirements).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: "minimum_land_area", normalized_value: 6, source_fact_ids: ["fact_area"] }),
+    expect.objectContaining({ type: "price_limit", normalized_value: 5500000, source_fact_ids: ["fact_budget"] }),
+    expect.objectContaining({ type: "search_location", normalized_value: ["Мистолово", "Капитолова", "Лаврики"], source_fact_ids: ["fact_locations"] }),
+  ]));
+  expect(result.ready.conversation.facts.find((item) => item.id === "fact_question")?.question_status).toBe("answered");
+  expect(result.ready.conversation.primary_next_step.steps).toEqual([
+    { order: 1, action: "отправить видео", agreement_id: "agreement_video" },
+    { order: 2, action: "проверить дополнительные варианты", agreement_id: "agreement_check" },
+  ]);
+  expect(result.ready.store_issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "RECOVERED_CRITICAL_REQUIREMENT", severity: "info" })]));
+  expect(result.critical.quality.decision).toBe("MANUAL_REVIEW");
+  expect(result.critical.store_issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "PRIMARY_NEXT_STEP_MISSING", severity: "critical" })]));
+  expect(result.snapshotA.semantic_hash).toBe(result.snapshotB.semantic_hash);
 });

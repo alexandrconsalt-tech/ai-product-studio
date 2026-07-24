@@ -78,20 +78,15 @@ const GOLDEN_CASES: GoldenCase[] = [
     expectedDecision: "SAVE_WITH_WARNING",
   },
   {
-    // status:'pass' само по себе валидно только при score>=95 (см.
-    // summaryQualityGateCheckerConsistency) -- поэтому границу нового порога
-    // auto_save_min_criterion:85 демонстрируем не через 'pass' на низком
-    // score (это невозможная для реального судьи комбинация), а через
-    // 'warning' ровно на границе.
-    name: "non_truth_warning_exactly_at_new_floor_85",
-    rationale: "Presentation в статусе warning ровно на новой границе score 85 (был бы 90 в старой калибровке) — единственный warning, всё остальное чисто, попадает в допуск.",
-    build: `(() => { const ctx=qgContext(); qgWarning(ctx,'presentation_check',85,'Мелкая придирка ровно на границе допуска.'); return ctx; })()`,
+    name: "presentation_warning_exactly_at_required_floor_90",
+    rationale: "Presentation в статусе warning ровно на обязательной границе 90 — единственный некритичный warning, остальные критерии и общий score проходят пороги.",
+    build: `(() => { const ctx=qgContext(); qgWarning(ctx,'presentation_check',90,'Мелкая придирка ровно на границе допуска.'); return ctx; })()`,
     expectedDecision: "AUTO_SAVE",
   },
   {
-    name: "non_truth_warning_just_below_new_floor_84",
-    rationale: "Тот же единственный warning, но на 1 балл ниже новой границы (84<85) — уже не хватает для AUTO_SAVE, уходит в SAVE_WITH_WARNING, не в REVIEW_REQUIRED.",
-    build: `(() => { const ctx=qgContext(); qgWarning(ctx,'presentation_check',84,'Мелкая придирка чуть ниже границы допуска.'); return ctx; })()`,
+    name: "presentation_warning_just_below_required_floor_89",
+    rationale: "Тот же единственный warning, но на 1 балл ниже обязательной границы (89<90) — AUTO_SAVE запрещён, результат остаётся SAVE_WITH_WARNING.",
+    build: `(() => { const ctx=qgContext(); qgWarning(ctx,'presentation_check',89,'Мелкая придирка чуть ниже границы допуска.'); return ctx; })()`,
     expectedDecision: "SAVE_WITH_WARNING",
   },
   {
