@@ -602,7 +602,7 @@ test("Summary синхронизирует пустой primary_next_step с о�
     return {stage:{promptVersion:stage.promptVersion,prompt:stage.prompt},repaired,errors:moduleSummaryGrounding(repaired.value,store)};
   })()`));
 
-  expect(result.stage.promptVersion).toBe(6);
+  expect(result.stage.promptVersion).toBe(7);
   expect(result.stage.prompt).toContain('next_step должен быть ровно "Следующий шаг не согласован."');
   expect(result.repaired).toMatchObject({ count: 1, value: { next_step: "Следующий шаг не согласован." } });
   expect(result.errors).toEqual(expect.not.arrayContaining([expect.objectContaining({ path: "next_step" })]));
@@ -840,6 +840,53 @@ test("pipeline report 2026-07-24T062250 проходит deterministic regressio
   expect(result.questionStatus).toBe("converted_to_action");
 });
 
+test("отчёт 2026-07-24T075545 восстанавливает бюджет и не пропускает плохое рабочее summary", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const empty={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'};
+    const finance={id:'fact_11',category:'client_finance',name:'ценовой предел клиента',value:5500000,normalized_value:5500000,speaker:'Клиент',evidence:'у меня просто цена до пяти с половиной, вот так.',verification_status:'verified'};
+    const question={id:'fact_16',category:'client_question',name:'вопрос про цену и сотку',value:'А до пяти, а сотка сколько получится?',speaker:'Клиент',evidence:'А до пяти, а сотка сколько получится?',verification_status:'verified',question_status:'answered'};
+    const locationA={id:'fact_2',category:'search_location',name:'область поиска',value:'Мистолово',normalized_value:'Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',verification_status:'verified'};
+    const locationB={id:'fact_19',category:'search_location',name:'районы поиска',value:['Мистолово','Капитолово','Лаврики'],normalized_value:['Мистолово','Капитолово','Лаврики'],speaker:'Клиент',evidence:'Мистолово, Капитолово, Лаврики.',verification_status:'verified'};
+    const needs=normalizeNeedExtractionSemantics({attributes:{interest:[],funding_source:empty,purchase_term:empty},requirements:[
+      {id:'bad-price',type:'price_limit',value:question.value,normalized_value:question.value,source_fact_ids:['fact_16'],evidence:question.evidence,confidence:.9,verification_status:'pending'},
+      {id:'loc-a',type:'search_location',value:'Мистолово',normalized_value:'Мистолово',source_fact_ids:['fact_2'],evidence:locationA.evidence,confidence:.9,verification_status:'pending'},
+      {id:'loc-b',type:'search_location',value:['Мистолово','Капитолово','Лаврики'],normalized_value:['Мистолово','Капитолово','Лаврики'],source_fact_ids:['fact_19'],evidence:locationB.evidence,confidence:.9,verification_status:'pending'}
+    ],need_meta:{interest_count:0,requirements_count:3,decision:'NEEDS_FOUND'}},{fact_check:{verified_facts:[finance,question,locationA,locationB]}});
+    const objection={id:'fact_18',category:'client_objection',name:'главное возражение',value:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',normalized_value:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',speaker:'Клиент',evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',verification_status:'verified'};
+    const store={conversation:{facts:[finance,question,locationA,locationB,objection,{id:'fact_5',category:'client_identity',name:'имя клиента',value:'Николай',evidence:'Николай.'}],quotes:[
+      {id:'q-budget',text:finance.evidence,speaker:'Клиент',supports_fact_ids:['fact_11']},
+      {id:'q-objection',text:objection.evidence,speaker:'Клиент',supports_fact_ids:['fact_18']},
+      {id:'q-name',text:'Николай.',speaker:'Клиент',supports_fact_ids:['fact_5']}
+    ],requirements:needs.requirements,attributes:{},call_results:[],agreements:[{id:'a1',action:'отправить видеообзор и подборку альтернативных участков',owner:'агент',recipient:'клиент',deadline:'после звонка',channel:'MAX',status:'confirmed',evidence:'Скину видео и ссылку на подбор.'}],primary_next_step:{action:'отправить видеообзор и подборку альтернативных участков',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['a1']}}};
+    const safe=moduleSummaryStoreView(store);
+    const draft={status:'GENERATED',conversation_result:'Клиент ищет участок.',key_facts:[{label:'Клиент',value:'Николай, частное лицо'},{label:'Главное возражение',value:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.'}],quotes:[objection.evidence],next_step:'Агент отправит видеообзор и подборку альтернативных участков в MAX.',error:''};
+    const repaired=moduleSummaryApplyStorePolicy(draft,safe,'');
+    const badSummary={status:'GENERATED',conversation_result:'Клиент ищет участок.',key_facts:[{label:'Клиент',value:'Николай, частное лицо'},{label:'Главное возражение',value:'Побор 9 600 ₽ («мне прямо не это»)'}],quotes:['мне прямо не это'],next_step:'Агент: отправить видеообзор и подборку альтернативных участков.',error:''};
+    const utilityJudge={status:'pass',score:100,can_continue_without_recording:true,context_clarity:100,actionability:100,scanability:100,recording_independence:100,missing_for_next_agent:[],useful_summary_elements:[],problems:[],explanation:'ok'};
+    const utility=agentUtilityRecalculate(utilityJudge,{summary:badSummary,conversation_store:store});
+    const presentation=presentationCheckRecalculate({status:'pass',score:100,structure_score:100,brevity_score:100,readability_score:100,repetition_score:100,limits_score:100,checks:{},metrics:{},errors:[],warnings:[],explanation:'ok'},{summary:badSummary},presentationCodeIssues(badSummary));
+    return {needs,safe,repaired,utility,presentation};
+  })()`));
+
+  expect(result.needs.requirements.filter((item: any) => item.type === "price_limit")).toEqual([
+    expect.objectContaining({ normalized_value: 5500000, source_fact_ids: ["fact_11"] }),
+  ]);
+  expect(result.needs.requirements.filter((item: any) => item.type === "search_location")).toHaveLength(1);
+  expect(result.safe.conversation.facts).not.toContainEqual(expect.objectContaining({ category: "client_identity" }));
+  expect(result.safe.conversation.quotes).not.toContainEqual(expect.objectContaining({ text: "Николай." }));
+  expect(result.repaired.value.key_facts).toEqual(expect.arrayContaining([
+    { label: "Бюджет", value: "до 5 500 000 ₽" },
+    { label: "Главное возражение", value: "ежемесячный взнос 9 600 ₽" },
+  ]));
+  expect(result.repaired.value.key_facts).not.toContainEqual(expect.objectContaining({ label: "Клиент" }));
+  expect(result.repaired.value.conversation_result).toContain("Агент после звонка отправит клиенту в MAX");
+  expect(result.utility).toMatchObject({ status: "fail", can_continue_without_recording: false });
+  expect(result.utility.problems.map((item: any) => item.type)).toEqual(expect.arrayContaining(["crm_data_without_working_context", "unclear_result", "fragmented_information", "ambiguous_wording"]));
+  expect(result.presentation).toMatchObject({ status: "fail" });
+  expect(result.presentation.errors.map((item: any) => item.type)).toContain("mixed_meanings_in_key_fact");
+});
+
 test("first-pass scoring не превращает пять corrections из восьми в 100", async ({ page }) => {
   await page.goto(moduleUrl);
   const quality = await page.evaluate(() => reconciliationQuality({
@@ -983,7 +1030,7 @@ test("Utility parser отбрасывает составной summary_fragment 
   })()`));
   expect(result.validated.useful_summary_elements).toEqual([]);
   expect(result.output).toMatchObject({ status: "pass", score: 100 });
-  expect(result.version).toBe(5);
+  expect(result.version).toBe(6);
 });
 
 test("идеальное и эталонное summary по участку получают 100/pass без требований данных карточки", async ({ page }) => {
@@ -1510,7 +1557,7 @@ test("Presentation отбрасывает JSON-сериализацию вмес
   })()`));
   expect(result.validated.errors).toEqual([]);
   expect(result.output).toMatchObject({ status: "pass", score: 100 });
-  expect(result.stage).toMatchObject({ promptVersion: 6 });
+  expect(result.stage).toMatchObject({ promptVersion: 7 });
 });
 
 test("Presentation Judge не может объявить подтверждённый канал MAX запрещённым значением", async ({ page }) => {
@@ -1526,7 +1573,7 @@ test("Presentation Judge не может объявить подтверждён
   })()`));
   expect(result.validated.errors).toEqual([]);
   expect(result.output).toMatchObject({ status: "pass", score: 100, errors: [] });
-  expect(result.stage.promptVersion).toBe(6);
+  expect(result.stage.promptVersion).toBe(7);
   expect(result.stage.prompt).toContain("канал MAX, не являются запрещёнными");
 });
 
@@ -1606,7 +1653,7 @@ test("Quality Gate применяет hard stops независимо от вы�
     const warning=run(ctx=>{qgWarning(ctx,'presentation_check',98)});
     return {hallucination,wrongNext,pii,cannotContinue,invalidStructure,tooLong,duplicate,warning};
   })()`), qualityGateFixture);
-  expect(result.hallucination).toMatchObject({ decision: "REVIEW_REQUIRED", summary_quality_score: 99 });
+  expect(result.hallucination).toMatchObject({ decision: "REVIEW_REQUIRED", summary_quality_score: 89 });
   expect(result.hallucination.hard_stops.map((item: any) => item.code)).toContain("HALLUCINATION");
   expect(result.wrongNext.hard_stops.map((item: any) => item.code)).toEqual(expect.arrayContaining(["WRONG_NEXT_STEP", "MISSING_CRITICAL_NEXT_STEP"]));
   expect(result.pii.hard_stops.map((item: any) => item.code)).toContain("PII_EXPOSURE");
@@ -1740,7 +1787,7 @@ test("CRM v1 сохраняет только разрешённые Summary и v
   expect(result.autoPayload.summary).toEqual({ conversation_result: "Клиент выбирает участок.", key_facts: [], quotes: [], next_step: "Агент отправит материалы." });
   expect(result.autoPayload.attributes).toEqual({ interest: ["Строительство"], funding_source: "наличные / депозит", purchase_term: "не определено" });
   expect(JSON.stringify(result.autoPayload)).not.toContain("не использовать");
-  expect(result.reviewItem).toMatchObject({ crm_record_id: "crm-review", run_id: "qg-run", summary_quality_score: 95.5 });
+  expect(result.reviewItem).toMatchObject({ crm_record_id: "crm-review", run_id: "qg-run", summary_quality_score: 89 });
   expect(result.empty).toMatchObject({ status: "SAVED" });
   expect(result.emptyPresentation).not.toContain("Ключевые факты");
   expect(result.emptyPresentation).not.toContain("Важная цитата");
@@ -3450,7 +3497,7 @@ test("Генерация саммари использует только Conver
 
   expect(result.settings).toEqual({ provider: "ai-tunnel", model: "gpt-5-mini", temperature: 0, maxTokens: 8000, outKey: "summary" });
   expect(result.success.calls).toBe(1);
-  expect(result.success.report.output).toEqual(expect.objectContaining({ status: "GENERATED", conversation_result: "Клиент ищет квартиру в Центральном районе.", key_facts: expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 12 млн ₽" })]), quotes: ["Бюджет до 12 миллионов"], next_step: "Агент отправит клиенту видеообзор и ссылку на подборку.", error: "" }));
+  expect(result.success.report.output).toEqual(expect.objectContaining({ status: "GENERATED", conversation_result: "Клиент ищет квартиру в Центральном районе. Агент отправит клиенту видеообзор и ссылку на подборку.", key_facts: expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 12 млн ₽" })]), quotes: ["Бюджет до 12 миллионов"], next_step: "Агент отправит клиенту видеообзор и ссылку на подборку.", error: "" }));
   expect(result.success.report.output).not.toHaveProperty("score");
   expect(result.success.report.summary_metrics).toMatchObject({ json_valid: true, grounded_key_facts: "4/4", grounded_quotes: "1/1", next_step_match: true, pii_absent: true, generation_status: "GENERATED", store_status: "READY", next_step_source: "primary_next_step", retry_count: 0, model: "gpt-5-mini", tokens: 10 });
   expect(result.success.report.prompt_audit).toMatchObject({ transcript_present: true, transcript_injected: false, resolved_prompt_contains_transcript: false, card_metadata_omitted: 0, verified_quote_count: 1 });
@@ -3478,7 +3525,7 @@ test("Генерация саммари использует только Conver
   expect(result.tooLong.report.output.errors[0].message).toContain("1200");
   expect(result.badFact).toMatchObject({ calls: 2, report: { output: { status: "technical_error", error_code: "SUMMARY_UNGROUNDED_CONTENT", errors: [expect.objectContaining({ path: "key_facts[0]", message: "Факт отсутствует в Conversation Store." })] }, retry_count: 1 } });
   expect(result.groundingRetry).toMatchObject({ calls: 2, report: { output: { status: "GENERATED" }, retry_count: 1 } });
-  expect(result.badQuote.report.output.errors).toEqual([expect.objectContaining({ path: "quotes[0]" })]);
+  expect(result.badQuote.report.output).toMatchObject({ status: "GENERATED", quotes: ["Бюджет до 12 миллионов"] });
   expect(result.badNext.report).toMatchObject({ output: { status: "GENERATED", next_step: "Агент отправит клиенту видеообзор и ссылку на подборку." } });
   expect(result.badNext.report.policy_repair_count).toBeGreaterThan(0);
   expect(result.badDeadline.report.output.errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: "next_step", message: expect.stringContaining("Срок") })]));
@@ -3677,7 +3724,7 @@ test("production report после деплоя нормализует паде�
   expect(result.value.conversation_result).toContain("по Мистолово");
   expect(result.value.conversation_result).not.toContain("по Деревня");
   expect(result.value.key_facts).toContainEqual({ label: "Минимальная площадь", value: "6 соток" });
-  expect(result.value.key_facts).toContainEqual({ label: "Главное возражение", value: "побор 9 600" });
+  expect(result.value.key_facts).toContainEqual({ label: "Главное возражение", value: "ежемесячный взнос 9 600 ₽" });
 });
 
 test("production report явно отражает получателя next step без повтора в итоге разговора", async ({ page }) => {
@@ -3689,7 +3736,7 @@ test("production report явно отражает получателя next step
   });
 
   expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в Макс видеообзор и ссылку на подборку, затем посмотрит дополнительные варианты.");
-  expect(result.value.conversation_result).toBe("Николай ищет участок в Деревне Мистолово минимум 6 соток.");
+  expect(result.value.conversation_result).toBe("Николай ищет участок в Деревне Мистолово минимум 6 соток. Агент после звонка отправит клиенту в Макс видеообзор и ссылку на подборку, затем посмотрит дополнительные варианты.");
 });
 
 test("Summary сохраняет подбор вариантов из связанной договорённости", async ({ page }) => {
@@ -3705,7 +3752,7 @@ test("Summary сохраняет подбор вариантов из связа
   });
 
   expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в MAX видеообзор, затем посмотрит дополнительные варианты и отправит ссылку на подборку.");
-  expect(result.value.conversation_result).toBe("Клиент ищет участок.");
+  expect(result.value.conversation_result).toBe("Клиент ищет участок. Агент после звонка отправит клиенту в MAX видеообзор, затем посмотрит дополнительные варианты и отправит ссылку на подборку.");
 });
 
 test("Summary заменяет короткий повтор отправки видео на рабочий итог", async ({ page }) => {
@@ -3719,7 +3766,7 @@ test("Summary заменяет короткий повтор отправки в
     return moduleSummaryApplyStorePolicy(structuredClone(summary),store);
   });
 
-  expect(result.value.conversation_result).toBe("Клиент ищет участок по указанным параметрам.");
+  expect(result.value.conversation_result).toBe("Клиент ищет участок по указанным параметрам. Агент после звонка отправит клиенту в MAX видеообзор и ссылку на подборку.");
   expect(result.value.next_step).toBe("Агент после звонка отправит клиенту в MAX видеообзор и ссылку на подборку.");
 });
 
@@ -3785,8 +3832,8 @@ test("Summary выбирает доказательные цитаты и сох
 
   expect(result.value.key_facts).toContainEqual({label:"Районы поиска",value:"Мистолово, Капитолово, Лаврики"});
   expect(result.value.quotes).toEqual([
-    "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.",
-    "Не, ну у меня просто цена до пяти с половиной, вот так."
+    "Не, ну у меня просто цена до пяти с половиной, вот так.",
+    "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это."
   ]);
   expect(result.value.quotes).not.toContain("Слушайте, по поводу участка звоню вам.");
 });
@@ -4314,7 +4361,7 @@ test("Conversation Store восстанавливает критические r
       __pipeline_configuration_hash: "5a24b0b5",
       __transcript: "Клиент: Кто продаёт?\nАгент: Продаёт физическое лицо.\nКлиент: Спасибо.",
       fact_check: { status: "ok", decision: "PASS", verified_facts: facts, verified_quotes: [], fact_check_quality: { overall_score: 1, decision: "PASS" } },
-      need_check: { status: "ok", decision: "PASS", verified_attributes: { interest: [], funding_source: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check"), purchase_term: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check") }, verified_requirements: [], missing_critical_needs: [], need_check_quality: { overall_score: 1, decision: "PASS" } },
+      need_check: { status: "ok", decision: "PASS", verified_attributes: { interest: [], funding_source: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check"), purchase_term: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check") }, verified_requirements: [], missing_critical_needs: [{ id: "missing_budget", name: "price_limit", reason: "Пропущен ценовой предел клиента", severity: "critical", critical: true }], need_check_quality: { overall_score: 1, decision: "PASS" } },
       outcome_check: {
         status: "ok", decision: "PASS",
         verified_call_results: [verified({ id: "result_1", value: "агент отправит материалы", evidence: "Агент: отправить видео" }, "outcome_check")],
@@ -4346,6 +4393,8 @@ test("Conversation Store восстанавливает критические r
     { order: 2, action: "проверить дополнительные варианты", agreement_id: "agreement_check" },
   ]);
   expect(result.ready.store_issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "RECOVERED_CRITICAL_REQUIREMENT", severity: "info" })]));
+  expect(result.ready.store_issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "MISSING_CRITICAL_NEED_RESOLVED", status: "resolved", severity: "info", blocks_publish: false })]));
+  expect(result.ready.quality.decision).toBe("READY");
   expect(result.critical.quality.decision).toBe("MANUAL_REVIEW");
   expect(result.critical.store_issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "PRIMARY_NEXT_STEP_MISSING", severity: "critical" })]));
   expect(result.snapshotA.semantic_hash).toBe(result.snapshotB.semantic_hash);

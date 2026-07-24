@@ -367,9 +367,11 @@ const MODULE_SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентст�
 
 Единственный источник фактов — Conversation Store. Транскрипция передаётся только как вспомогательный материал для проверки точности цитат и не разрешает добавлять сведения, отсутствующие в Store.
 
-Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. В «нужно уточнить» включай только client_question с question_status="unanswered" или "partially_answered"; question_status="answered" означает закрытый вопрос.
+Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. Не выводи данные, уже находящиеся в карточке: имя клиента, роль «частное лицо/агент/оператор», имя агента, источник заявки, адрес и параметры конкретного объекта. В «нужно уточнить» включай только client_question с question_status="unanswered" или "partially_answered"; question_status="answered" означает закрытый вопрос.
 
-Используй значения из Store без смыслового расширения: допустимо только человекочитаемое форматирование чисел (например, 5500000 → 5 500 000). Не добавляй единицы, назначение суммы или связь между фактами, которых нет в соответствующей записи Store. Канал MAX означает только MAX: не расшифровывай и не заменяй его Telegram/«Телеграмом». В conversation_result пиши 1–2 коротких предложения только из проверенных значений Store.
+Используй значения из Store без смыслового расширения: допустимо человекочитаемое форматирование чисел и нейтральная деловая нормализация подтверждённого смысла («побор» → «ежемесячный взнос», «скинуть» → «отправить», «ссылка на подбор» → «подборка альтернатив»). Не добавляй единицы, назначение суммы или связь между фактами, которых нет в соответствующей записи Store или её evidence. Канал MAX означает только MAX: не расшифровывай и не заменяй его Telegram/«Телеграмом». В conversation_result пиши 1–2 коротких предложения: что хочет клиент, что для него важно, чем закончился разговор и какая договорённость достигнута.
+
+Не помещай прямую цитату, кавычки или конструкцию «клиент: …» внутрь key_facts. Один key_fact содержит один краткий деловой смысл. Не повторяй одну и ту же цитату внутри key_facts и quotes. Разговорные слова допустимы только в отдельном массиве quotes.
 
 Верни строго JSON без пояснений:
 {
@@ -458,7 +460,7 @@ const MODULE_AGENT_UTILITY_PROMPT = `Ты — независимый Judge пр�
 
 Ответь на один вопрос: может ли агент, читая summary вместе с карточкой CRM, за 5–10 секунд понять ситуацию и продолжить работу без прослушивания записи? Conversation Store — основной контекст, транскрипция — только вспомогательный контекст.
 
-Оцени только рабочую понятность, практичность следующего шага, удобство быстрого чтения и независимость от записи. Не ищи галлюцинации, ошибки сумм или ролей, полноту всех критических фактов, корректность договорённостей, JSON/лимиты и формат. Не требуй телефон, адрес, цену или характеристики карточки, имя клиента/агента, funding_source или purchase_term, если они не нужны для продолжения. Если подтверждённый следующий шаг поручает агенту отправить видео, ссылку или подборку, не требуй заранее указывать точный файл, URL, аккаунт или дополнительные фильтры: агент является владельцем этого рабочего контекста. Не предлагай новую версию summary и не дублируй missing из проверки критической полноты.
+Оцени только рабочую понятность, практичность следующего шага, удобство быстрого чтения и независимость от записи. Штрафуй CRM-мусор без рабочего смысла (имя клиента, «частное лицо», роли агента/оператора), отсутствие результата разговора и достигнутой договорённости в conversation_result, необходимость собирать основной смысл из трёх разных блоков, цитату внутри key_fact, разговорную или неоднозначную лексику вне quotes. Не ищи галлюцинации, ошибки сумм или ролей, полноту всех критических фактов, корректность договорённостей, JSON/лимиты и формат. Не требуй телефон, адрес, цену или характеристики карточки, имя клиента/агента, funding_source или purchase_term, если они не нужны для продолжения. Если подтверждённый следующий шаг поручает агенту отправить видео, ссылку или подборку, не требуй заранее указывать точный файл, URL, аккаунт или дополнительные фильтры: агент является владельцем этого рабочего контекста. Не предлагай новую версию summary и не дублируй missing из проверки критической полноты.
 
 Допустимые problem type: unclear_client_goal, unclear_client_situation, unclear_result, unclear_next_step, unclear_owner, missing_action_context, fragmented_information, excessive_detail, difficult_to_scan, crm_data_without_working_context, recording_required, ambiguous_wording.
 Допустимые missing type: client_goal, client_situation, call_result, next_step, owner, action_context, working_context.
@@ -512,7 +514,7 @@ Semantic guards: proposed нельзя выдавать за подтвержд�
 
 const MODULE_PRESENTATION_CHECK_PROMPT = `Ты — независимый Checker формата, структуры и краткости CRM-саммари.
 
-Оцени только переданный объект summary: структуру, краткость, читаемость, смысловые повторы, перегруженность, удобство быстрого чтения и распределение информации по блокам. Умеренное пересечение conversation_result и key_facts допустимо и не является повтором само по себе.
+Оцени только переданный объект summary: структуру, краткость, читаемость, смысловые повторы, перегруженность, удобство быстрого чтения и распределение информации по блокам. Умеренное пересечение conversation_result и key_facts допустимо и не является повтором само по себе. Прямая цитата, конструкция «клиент: …» или длинное пояснение в скобках внутри key_fact запрещены. Повтор одной цитаты внутри key_facts и quotes является semantic_repetition. Разговорные слова вне quotes и перегруженные скобочные конструкции снижают читаемость.
 
 Не ищи галлюцинации, ошибки сумм или ролей, пропущенные факты, практическую полезность и корректность договорённостей по транскрипции. Не предлагай новую версию summary. Такие issues не возвращай.
 
@@ -618,7 +620,7 @@ Conversation Store (проверенные факты/потребности/р�
     {
       id:s(), enabled:true, type:'check', name:'Проверка полезности для агента',
       provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000,
-      outKey:'agent_utility_check', promptVersion:5, prompt:MODULE_AGENT_UTILITY_PROMPT
+      outKey:'agent_utility_check', promptVersion:6, prompt:MODULE_AGENT_UTILITY_PROMPT
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка договорённостей и следующего шага',
@@ -628,7 +630,7 @@ Conversation Store (проверенные факты/потребности/р�
     {
       id:s(), enabled:true, type:'check', name:'Проверка формата, структуры и краткости',
       provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000,
-      outKey:'presentation_check', promptVersion:6, prompt:MODULE_PRESENTATION_CHECK_PROMPT
+      outKey:'presentation_check', promptVersion:7, prompt:MODULE_PRESENTATION_CHECK_PROMPT
     },
     {
       id:s(), enabled:true, type:'code', vendor:'Code',
@@ -785,7 +787,7 @@ verdict: "verified", "rejected" или "needs_correction". reason — не бо�
     },
     {
       id:s(), enabled:true, type:'llm', name:'Определение потребностей',
-      model:'gpt-5-mini', outKey:'needs', promptId:'need-agent-v2', promptVersion:7, promptUpdatedAt:'2026-07-24', maxTokens:6000,
+      model:'gpt-5-mini', outKey:'needs', promptId:'need-agent-v2', promptVersion:8, promptUpdatedAt:'2026-07-24', maxTokens:6000,
       prompt:
 `Ты — Need Agent пайплайна анализа звонков по недвижимости.
 Определи только подтверждённые интересы и требования клиента. Основной источник — verified facts после Fact Check. Исходные facts используй только для source_fact_ids, транскрипцию — как вспомогательный контекст.
@@ -824,6 +826,8 @@ verdict: "verified", "rejected" или "needs_correction". reason — не бо�
 - Дата просмотра/встречи не является сроком покупки: purchase_term="не определено".
 - Адрес обсуждаемого объекта не является search_location. Районы, явно перечисленные клиентом как область поиска, являются search_location.
 - Цена объявления не является price_limit. Прямой бюджет/лимит клиента является price_limit.
+- Каждый verified fact category="client_finance" со смыслом бюджета/ценового предела и числовым normalized_value обязательно переноси в requirement type="price_limit" с value из normalized_value.
+- Никогда не создавай price_limit из category="client_question", даже если вопрос содержит сумму или слово «цена».
 - Характеристика объекта становится requirement только при явном подтверждении требования клиентом.
 - Минимальную площадь помещения записывай как minimum_area, минимальную площадь участка в сотках — как minimum_land_area. Не используй общий type="area".
 - Локация текущего объекта не является search_location без прямых слов клиента о районе или территории поиска.
@@ -952,7 +956,7 @@ verdict: "verified", "rejected" или "needs_correction". Для verified/rejec
     },
     {
       id:s(), enabled:true, type:'llm', name:'Генерация саммари',
-      provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000, outKey:'summary', promptId:'summary-agent-v2', promptVersion:6, promptUpdatedAt:'2026-07-24',
+      provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000, outKey:'summary', promptId:'summary-agent-v2', promptVersion:7, promptUpdatedAt:'2026-07-24',
       prompt:MODULE_SUMMARY_PROMPT,
       legacyPrompt:
 `Ты — Summary Agent агентства недвижимости. Напиши саммари звонка для карточки клиента в CRM так, чтобы другой агент, открыв карточку, продолжил работу с клиентом без прослушивания звонка.
@@ -1386,7 +1390,7 @@ function migratePipelineConfig(stages, deletedOutKeys){
     if(!stage||!(stage.outKey==='context_utility_check'||stage.outKey==='context_check'||/Проверка полезности для агента/i.test(stage.name||''))) return;
     if(stage.contractVersion) return;
     stage.type='check';stage.name='Проверка полезности для агента';stage.outKey='agent_utility_check';
-    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=5;stage.prompt=MODULE_AGENT_UTILITY_PROMPT;
+    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=6;stage.prompt=MODULE_AGENT_UTILITY_PROMPT;
     delete stage.codeFn;delete stage.vendor;
   });
   result.forEach(stage=>{
@@ -1403,7 +1407,7 @@ function migratePipelineConfig(stages, deletedOutKeys){
     if(!stage||!(stage.outKey==='presentation_check'||/Проверка формата(?: и правил|, структуры и краткости)/i.test(stage.name||''))) return;
     if(stage.contractVersion) return;
     stage.type='check';stage.name='Проверка формата, структуры и краткости';stage.outKey='presentation_check';
-    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=6;stage.prompt=MODULE_PRESENTATION_CHECK_PROMPT;
+    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=7;stage.prompt=MODULE_PRESENTATION_CHECK_PROMPT;
     delete stage.codeFn;delete stage.vendor;
   });
 
@@ -4429,13 +4433,22 @@ function buildConversationStoreV1(ctx){
   if(actionableResults.length&&(!Object.keys(conversation.primary_next_step).length||conversation.primary_next_step.status==='not_defined')) store_issues.push({code:'PRIMARY_NEXT_STEP_MISSING',stage:'outcome_check',entity_id:actionableResults[0].id,severity:'critical',message:'Подтверждённые действия есть, но основной следующий шаг не определён.'});
   conversation.agreements.filter(item=>item.owner==='агент'&&/отправ|скин|пришл|направ/.test(normalizedSemanticText(item.action))&&!item.channel).forEach(item=>store_issues.push({code:'AGREEMENT_CHANNEL_MISSING',stage:'outcome_check',entity_id:item.id,severity:'critical',message:'У согласованной отправки материалов отсутствует канал.'}));
   const recoveredNeedText=normalizedSemanticText(JSON.stringify(conversation.requirements));
-  toList(nc.missing_critical_needs).filter(item=>item&&((item.critical===true)||item.severity==='critical')).filter(item=>{
+  const missingCriticalNeeds=toList(nc.missing_critical_needs).filter(item=>item&&((item.critical===true)||item.severity==='critical'));
+  const missingNeedWasRecovered=item=>{
     const text=normalizedSemanticText(JSON.stringify(item));
-    if(/price limit|бюджет|цен[аы].*до/.test(text)&&/(price limit|5500000|5 5 млн)/.test(recoveredNeedText)) return false;
-    if(/property type|ижс/.test(text)&&/ижс/.test(recoveredNeedText)) return false;
-    if(/search location|локац/.test(text)&&/мистолов/.test(recoveredNeedText)) return false;
-    return true;
-  }).forEach((item,index)=>store_issues.push({code:'MISSING_CRITICAL_NEED',stage:'need_check',entity_id:String(item.source_fact_id||item.id||'missing_need_'+index),severity:'critical',message:String(item.reason||item.name||'Пропущена критическая потребность.')}));
+    if(/price limit|бюджет|ценов.*предел|цен[аы].*до/.test(text)&&/(price limit|5500000|5 5 млн)/.test(recoveredNeedText)) return true;
+    if(/property type|ижс/.test(text)&&/ижс/.test(recoveredNeedText)) return true;
+    if(/search location|локац/.test(text)&&/мистолов/.test(recoveredNeedText)) return true;
+    return false;
+  };
+  missingCriticalNeeds.forEach((item,index)=>{
+    const entityId=String(item.source_fact_id||item.id||'missing_need_'+index),message=String(item.reason||item.name||'Пропущена критическая потребность.');
+    if(missingNeedWasRecovered(item)){
+      store_issues.push({code:'MISSING_CRITICAL_NEED_RESOLVED',stage:'need_check',entity_id:entityId,status:'resolved',severity:'info',blocks_publish:false,message:'Пропущенная потребность однозначно восстановлена из verified fact: '+message});
+    }else{
+      store_issues.push({code:'MISSING_CRITICAL_NEED',stage:'need_check',entity_id:entityId,status:'open',severity:'critical',blocks_publish:true,message});
+    }
+  });
   toList(oc.missing_critical_outcomes).filter(item=>item&&((item.critical===true)||item.severity==='critical')).forEach((item,index)=>store_issues.push({code:'MISSING_CRITICAL_OUTCOME',stage:'outcome_check',entity_id:String(item.id||'missing_outcome_'+index),severity:'critical',message:String(item.reason||item.name||'Пропущен критический результат.')}));
   let decision='READY';
   if(decisions.some(value=>value==='FAIL'||value==='MANUAL_REVIEW'||value==='REVIEW_REQUIRED')) decision='MANUAL_REVIEW';
@@ -4605,7 +4618,8 @@ function moduleSummaryQualityGateV1(ctx){
     if(!meta.stage_execution_id||!String(meta.stage_execution_id).startsWith(runId+':')||meta.run_id!==runId||meta.transcript_hash!==transcriptHash||meta.pipeline_configuration_hash!==pipelineHash||meta.conversation_store_hash!==storeHash) technical('STALE_OR_FOREIGN_CHECK_RESULT',source,'metadata','Результат проверщика относится к другому запуску или hashes не совпадают.');
   }
   if(technicalErrors.length) return summaryQualityGateTechnicalOutput(ctx,criteria,technicalErrors);
-  const summaryQualityScore=+Object.values(criteria).reduce((sum,item)=>sum+item.weighted_score,0).toFixed(1),hardStops=summaryQualityGateHardStops(ctx),warnings=summaryQualityGateWarnings(ctx),criterionValues=Object.values(criteria),statuses=criterionValues.map(item=>item.status),scores=criterionValues.map(item=>item.score),manualSignal=Object.keys(SUMMARY_QUALITY_GATE_CRITERIA).some(key=>ctx[key]&&ctx[key].requires_manual_review===true);
+  const rawSummaryQualityScore=+Object.values(criteria).reduce((sum,item)=>sum+item.weighted_score,0).toFixed(1),hardStops=summaryQualityGateHardStops(ctx),warnings=summaryQualityGateWarnings(ctx),criterionValues=Object.values(criteria),statuses=criterionValues.map(item=>item.status),scores=criterionValues.map(item=>item.score),manualSignal=Object.keys(SUMMARY_QUALITY_GATE_CRITERIA).some(key=>ctx[key]&&ctx[key].requires_manual_review===true);
+  const summaryQualityScore=statuses.includes('fail')?Math.min(rawSummaryQualityScore,89):rawSummaryQualityScore;
   let decision;
   if(hardStops.length||statuses.includes('fail')||summaryQualityScore<SUMMARY_QUALITY_GATE_THRESHOLDS.review_max_total||scores.some(score=>score<SUMMARY_QUALITY_GATE_THRESHOLDS.review_min_criterion)||storeStatus==='MANUAL_REVIEW'||summaryQualityGateSummaryStatus(ctx)==='MANUAL_REVIEW'||manualSignal||ctx.truth_check.has_hallucinations===true||ctx.truth_check.has_pii===true||ctx.agent_utility_check.can_continue_without_recording===false||ctx.action_check.next_step_verified===false) decision='REVIEW_REQUIRED';
   else{
@@ -6403,6 +6417,7 @@ function moduleSummaryDependencyOutput(){
 function moduleSummaryIsCardMetadataFact(fact){
   if(!fact||typeof fact!=='object') return false;
   const identity=moduleSummaryNorm([fact.category,fact.name,fact.type].filter(Boolean).join(' '));
+  if(/(?:client identity|client_identity|client role|client_role|agent identity|agent_identity|agent role|agent_role|operator identity|operator_identity|operator role|operator_role|имя клиент|роль клиент|имя агент|роль агент|имя оператор|роль оператор|тип продавц)/.test(identity)) return true;
   const clientNeed=/(?:client finance|client_finance|client constraint|client_constraint|search criteria|search_criteria|client question|client_question|client objection|client_objection|budget|бюджет|требован|пожелан|ограничен|возражен|вопрос клиент)/.test(identity);
   if(clientNeed) return false;
   return /(?:object information|object_information|card metadata|card_metadata|адрес объект|цена (?:в объявлении|объекта)|стоимость объект|площадь объект|этаж объект|характеристик[аи] объект|номер объявлен|код объект|id объект)/.test(identity);
@@ -6413,12 +6428,23 @@ function moduleSummaryStoreView(store){
   const facts=Array.isArray(conversation.facts)?conversation.facts:[];
   const allowedFacts=facts.filter(fact=>!moduleSummaryIsCardMetadataFact(fact));
   const allowedFactIds=new Set(allowedFacts.map(fact=>fact&&fact.id).filter(Boolean));
+  const quotePriority={client_finance:100,budget:100,client_constraint:95,search_criteria:90,client_objection:85,search_location:80,communication_result:70,agent_commitment:65,communication_channel:60,client_question:60,client_intent:10};
+  const factById=new Map(allowedFacts.map(fact=>[fact&&fact.id,fact]));
   const quotes=(Array.isArray(conversation.quotes)?conversation.quotes:[]).filter(quote=>{
     const ids=Array.isArray(quote&&quote.supports_fact_ids)?quote.supports_fact_ids.filter(Boolean):[];
     if(ids.length) return ids.some(id=>allowedFactIds.has(id));
     const text=moduleSummaryNorm(quote&&typeof quote==='object'?quote.text:quote);
     return !/(?:адрес объект|объект находится по адресу|цена объект|стоимость объект|площадь объект|этаж объект|номер объявлен|код объект)/.test(text);
-  });
+  }).map(quote=>{
+    const linked=toList(quote&&quote.supports_fact_ids).map(id=>factById.get(id)).filter(Boolean);
+    const text=moduleSummaryNorm(quote&&typeof quote==='object'?quote.text:quote);
+    const semanticLinked=linked.length?linked:allowedFacts.filter(fact=>{
+      const evidence=moduleSummaryNorm(fact&&fact.evidence),value=moduleSummaryNorm(fact&&fact.value);
+      return Boolean(text&&(evidence&&text===evidence||value&&text.includes(value)||evidence&&evidence.includes(text)));
+    });
+    const semanticScore=/(?:побор|взнос|не устраива|смуща)/.test(text)?85:/(?:бюджет|цен[аы]\s+до|миллион|млн)/.test(text)?100:0;
+    return {quote,score:Math.max(semanticScore,0,...semanticLinked.map(fact=>quotePriority[fact.category]??40))};
+  }).filter(item=>item.score>=60).sort((left,right)=>right.score-left.score).slice(0,4).map(item=>item.quote);
   return {
     conversation:{
       facts:allowedFacts,
@@ -6526,7 +6552,7 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
   let count=0;
   if(value&&value.status!=='ERROR'){
     const keyFactsBeforePolicy=value.key_facts.length;
-    value.key_facts=value.key_facts.filter(item=>!/^(?:статус клиента|вопрос о продавце)$/i.test(String(item&&item.label||'').trim()));
+    value.key_facts=value.key_facts.filter(item=>!/(?:^|\b)(?:клиент|имя клиента|роль клиента|статус клиента|тип клиента|частное лицо|имя агента|роль агента|вопрос о продавце)(?:\b|$)/i.test(String(item&&item.label||'').trim()));
     count+=keyFactsBeforePolicy-value.key_facts.length;
     value.key_facts.forEach(item=>{
       const label=String(item&&item.label||'').trim();
@@ -6547,6 +6573,12 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
     if(budgetItem&&Number.isFinite(budgetNumber)&&budgetNumber>0&&!/(?:₽|руб|млн|миллион|тыс)/i.test(String(budgetItem.value||''))){
       const normalizedBudget='до '+String(Math.round(budgetNumber)).replace(/\B(?=(\d{3})+(?!\d))/g,' ')+' ₽';
       if(budgetItem.value!==normalizedBudget){budgetItem.value=normalizedBudget;count++;}
+    }
+    if(!budgetItem&&Number.isFinite(budgetNumber)&&budgetNumber>0){
+      const normalizedBudget='до '+String(Math.round(budgetNumber)).replace(/\B(?=(\d{3})+(?!\d))/g,' ')+' ₽';
+      if(value.key_facts.length<4) value.key_facts.unshift({label:'Бюджет',value:normalizedBudget});
+      else value.key_facts[0]={label:'Бюджет',value:normalizedBudget};
+      count++;
     }
     const landArea=facts.find(fact=>/минимальн[а-яё_ -]*(?:площад|размер)|minimum_land_area/i.test(String(fact&&fact.category||'')+' '+String(fact&&fact.name||''))&&/(?:сот|участ)/i.test(String(fact&&fact.name||'')+' '+String(fact&&fact.evidence||'')));
     const landAreaNumber=Number(landArea&&landArea.normalized_value);
@@ -6611,7 +6643,8 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
         return !repeatsFullAction&&!repeatsVideoOnly;
       }).join(' ').trim();
       const fallbackResult=(conversation.requirements||[]).length||facts.some(fact=>fact&&fact.category==='client_intent')?'Клиент ищет участок по указанным параметрам.':'Обсуждение завершено согласованным следующим шагом.';
-      const conciseResult=withoutRepeatedAction||fallbackResult;
+      const agreementResult=/[.!?]$/.test(value.next_step)?value.next_step:value.next_step+'.';
+      const conciseResult=(withoutRepeatedAction||fallbackResult)+' '+agreementResult;
       if(conciseResult!==value.conversation_result){value.conversation_result=conciseResult;count++;}
     }
     if(/ссылк.*подбор/.test(nextNorm)&&/подготов.*подбор/.test(nextNorm)){
@@ -6622,13 +6655,12 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
     if(objection){
       const rawObjectionValue=String(objection.value||objection.normalized_value||objection.evidence||'').trim();
       let objectionValue=rawObjectionValue;
-      if(/побор/i.test(objectionValue)&&(/конечно[^.]*конечно/i.test(objectionValue)||objectionValue.length>80)){
+      if(/побор/i.test(objectionValue)){
         const amount=(objectionValue.match(/\b\d{4,}\b/)||[])[0];
-        const concise=['побор',amount&&amount.replace(/\B(?=(\d{3})+(?!\d))/g,' ')].filter(Boolean).join(' ');
-        if(concise) objectionValue=concise;
+        objectionValue=['ежемесячный взнос',amount&&amount.replace(/\B(?=(\d{3})+(?!\d))/g,' ')+' ₽'].filter(Boolean).join(' ');
       }
       const objectionItem=value.key_facts.find(item=>/главн[а-яё]* возражен|возражен/i.test(String(item&&item.label||'')));
-      if(objectionItem&&objectionValue!==rawObjectionValue&&moduleSummaryNorm(objectionItem.value)===moduleSummaryNorm(rawObjectionValue)){
+      if(objectionItem&&objectionValue!==rawObjectionValue){
         objectionItem.value=objectionValue;count++;
       }
       const mainText=moduleSummaryNorm([value.conversation_result,...value.key_facts.flatMap(item=>[item.label,item.value])].join(' '));
@@ -6644,12 +6676,14 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       }
     }
     const factById=new Map(facts.map(fact=>[fact.id,fact]));
-    const quotePriority={client_objection:100,client_finance:95,client_constraint:90,search_criteria:90,search_location:80,communication_channel:60,client_question:50,client_intent:10,client_identity:0,client_role:0};
+    const quotePriority={client_finance:100,budget:100,client_constraint:95,search_criteria:90,client_objection:85,search_location:80,communication_channel:60,client_question:60,client_intent:10,client_identity:0,client_role:0};
     const rankedQuotes=(conversation.quotes||[])
-      .filter(quote=>quote&&quote.speaker==='Клиент'&&typeof quote.text==='string'&&quote.text.trim())
+      .filter(quote=>quote&&quote.speaker!=='Агент'&&typeof quote.text==='string'&&quote.text.trim())
       .map(quote=>{
         const linked=(quote.supports_fact_ids||[]).map(id=>factById.get(id)).filter(Boolean);
-        const score=Math.max(0,...linked.map(fact=>{
+        const quoteText=moduleSummaryNorm(quote.text);
+        const semanticScore=/(?:побор|взнос|не устраива|смуща)/.test(quoteText)?85:/(?:бюджет|цен[аы]\s+до|миллион|млн)/.test(quoteText)?100:0;
+        const score=Math.max(semanticScore,0,...linked.map(fact=>{
           const identity=moduleSummaryNorm(String(fact&&fact.category||'')+' '+String(fact&&fact.name||''));
           if(/search location/.test(identity)&&/адрес объект/.test(identity)) return 0;
           return quotePriority[fact.category]??40;
@@ -6659,9 +6693,10 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       .filter(item=>item.score>=50)
       .sort((a,b)=>b.score-a.score||b.text.length-a.text.length)
       .filter((item,index,items)=>items.findIndex(candidate=>moduleSummaryNorm(candidate.text)===moduleSummaryNorm(item.text))===index)
+      .filter(item=>!value.key_facts.some(fact=>moduleSummaryNorm(fact.value).includes(moduleSummaryNorm(item.text))))
       .slice(0,2)
       .map(item=>item.text);
-    if(rankedQuotes.length&&JSON.stringify(value.quotes)!==JSON.stringify(rankedQuotes)){value.quotes=rankedQuotes;count++;}
+    if(Array.isArray(conversation.quotes)&&JSON.stringify(value.quotes)!==JSON.stringify(rankedQuotes)){value.quotes=rankedQuotes;count++;}
   }
   if(value&&value.status!=='ERROR'&&(!primary||!primary.action||primary.status==='not_defined')){
     const next='Следующий шаг не согласован.';
@@ -7112,20 +7147,32 @@ function validateAgentUtilityJudgeOutput(value,ctx){
 }
 function agentUtilityRecalculate(judge,ctx){
   const clearNextStep=agentUtilityHasClearNextStep(ctx);
-  let actionability=clearNextStep?Math.max(90,judge.actionability):judge.actionability,problems=judge.problems.slice();
-  const contextClarity=clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.context_clarity):judge.context_clarity;
-  const recordingIndependence=clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.recording_independence):judge.recording_independence;
+  let actionability=clearNextStep?Math.max(90,judge.actionability):judge.actionability,problems=judge.problems.slice(),scanability=judge.scanability;
+  let contextClarity=clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.context_clarity):judge.context_clarity;
+  let recordingIndependence=clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.recording_independence):judge.recording_independence;
   const next=String(ctx.summary.next_step||'');
   if(/будем\s+на\s+связи|остаемся\s+на\s+связи|остаёмся\s+на\s+связи/i.test(next)&&!/(отправ|позвон|перезвон|подготов|уточн|покаж|встрет|согласу)/i.test(next)){
     actionability=Math.min(actionability,60);
     if(!problems.some(item=>item.type==='unclear_next_step')) problems.push({type:'unclear_next_step',field:'next_step',summary_fragment:next,problem:'Нет конкретного действия, ответственного или рабочего контекста следующего шага.'});
   }
-  const score=Math.round(contextClarity*.30+actionability*.30+judge.scanability*.20+recordingIndependence*.20);
+  const result=String(ctx.summary.conversation_result||''),keyFacts=toList(ctx.summary.key_facts);
+  const addProblem=(type,field,fragment,problem)=>{if(!problems.some(item=>item.type===type&&item.field===field))problems.push({type,field,summary_fragment:String(fragment||''),problem});};
+  const crmFact=keyFacts.find(item=>/(?:^|\b)(?:клиент|имя клиента|роль клиента|статус клиента|частное лицо)(?:\b|$)/i.test(String(item&&item.label||'')));
+  if(crmFact){contextClarity=Math.min(contextClarity,75);scanability=Math.min(scanability,75);addProblem('crm_data_without_working_context','key_facts',crmFact.value||crmFact.label,'В рабочие факты попали имя, роль или статус из карточки клиента.');}
+  const quotedFact=keyFacts.find(item=>/[«»"]/.test(String(item&&item.value||''))||/\([^)]{20,}\)/.test(String(item&&item.value||'')));
+  if(quotedFact){scanability=Math.min(scanability,70);addProblem('fragmented_information','key_facts',quotedFact.value,'Цитата или длинное пояснение внутри ключевого факта мешает быстрому чтению.');}
+  const colloquial=[result,...keyFacts.map(item=>item&&item.value),next].find(text=>/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(String(text||'')));
+  if(colloquial){contextClarity=Math.min(contextClarity,80);addProblem('ambiguous_wording','summary',colloquial,'Разговорная формулировка вне блока цитат неоднозначна для CRM.');}
+  if(clearNextStep&&!/(?:отправ|позвон|перезвон|подготов|уточн|согласу|встрет|просмотр|следующ)/i.test(result)){
+    contextClarity=Math.min(contextClarity,65);recordingIndependence=Math.min(recordingIndependence,65);
+    addProblem('unclear_result','conversation_result',result,'Итог разговора не содержит достигнутой договорённости или результата звонка.');
+  }
+  const score=Math.round(contextClarity*.30+actionability*.30+scanability*.20+recordingIndependence*.20);
   const problemTypes=new Set(problems.map(item=>item.type));
   const can_continue_without_recording=contextClarity>=85&&actionability>=85&&recordingIndependence>=85&&![...AGENT_UTILITY_CRITICAL_PROBLEMS].some(type=>problemTypes.has(type));
-  let status='pass';if(score<85||!can_continue_without_recording||[...AGENT_UTILITY_CRITICAL_PROBLEMS].some(type=>problemTypes.has(type))) status='fail';else if(score<95||judge.scanability<85||problems.length||judge.missing_for_next_agent.length) status='warning';
+  let status='pass';if(score<85||!can_continue_without_recording||[...AGENT_UTILITY_CRITICAL_PROBLEMS].some(type=>problemTypes.has(type))) status='fail';else if(score<95||scanability<85||problems.length||judge.missing_for_next_agent.length) status='warning';
   const explanation=status==='pass'?'Summary позволяет за 5–10 секунд понять ситуацию и продолжить работу без записи.':status==='warning'?'Summary позволяет продолжить работу без записи, но содержит небольшую рабочую неясность.':'Summary не даёт достаточно ясного рабочего контекста для продолжения без записи.';
-  return {status,score,can_continue_without_recording,context_clarity:contextClarity,actionability,scanability:judge.scanability,recording_independence:recordingIndependence,missing_for_next_agent:judge.missing_for_next_agent,useful_summary_elements:judge.useful_summary_elements,problems,explanation};
+  return {status,score,can_continue_without_recording,context_clarity:contextClarity,actionability,scanability,recording_independence:recordingIndependence,missing_for_next_agent:judge.missing_for_next_agent,useful_summary_elements:judge.useful_summary_elements,problems,explanation};
 }
 function moduleAgentUtilityPrompt(stage,ctx){
   const transcript=String(transcriptText(ctx)||'');
@@ -7268,7 +7315,7 @@ function isModulePresentationCheckStage(stage){return IS_TRANSCRIPTION_SUMMARY_M
 const PRESENTATION_ISSUE_TYPES=new Set(['invalid_structure','missing_required_field','empty_required_field','too_many_key_facts','too_many_quotes','excessive_length','excessive_detail','semantic_repetition','duplicate_key_fact','fragmented_text','difficult_to_scan','long_sentence','unclear_wording','formal_intro','markdown_inside_value','heading_inside_value','forbidden_value','recommendation_in_next_step','empty_optional_item','mixed_meanings_in_key_fact','next_step_not_concise']);
 const PRESENTATION_CHECK_KEYS=['required_fields_present','conversation_result_valid','key_facts_valid','quotes_valid','next_step_valid','character_limit_valid','no_excessive_repetition','easy_to_scan'];
 const PRESENTATION_METRIC_KEYS=['total_characters','conversation_result_characters','key_facts_count','quotes_count','next_step_characters','sentence_count'];
-const PRESENTATION_CRITICAL_TYPES=new Set(['invalid_structure','missing_required_field','empty_required_field','too_many_key_facts','too_many_quotes','excessive_length','fragmented_text','difficult_to_scan','recommendation_in_next_step','forbidden_value']);
+const PRESENTATION_CRITICAL_TYPES=new Set(['invalid_structure','missing_required_field','empty_required_field','too_many_key_facts','too_many_quotes','excessive_length','fragmented_text','difficult_to_scan','recommendation_in_next_step','forbidden_value','mixed_meanings_in_key_fact']);
 
 function presentationSummaryText(summary){return [summary.conversation_result,...summary.key_facts.flatMap(item=>[item.label,item.value]),...summary.quotes,summary.next_step].join('\n');}
 function presentationMetrics(summary){
@@ -7345,12 +7392,18 @@ function presentationCodeIssues(summary){
   if(summary.key_facts.length>4) issues.push(presentationIssue('too_many_key_facts','key_facts',summary.key_facts[4].value||summary.key_facts[4].label||fallback,'Допустимо не более четырёх key_facts.'));
   if(summary.quotes.length>2) issues.push(presentationIssue('too_many_quotes','quotes',summary.quotes[2]||fallback,'Допустимо не более двух quotes.'));
   if(metrics.total_characters>1200) issues.push(presentationIssue('excessive_length','root',fallback,'Общий объём пользовательского текста превышает 1200 символов.'));
-  summary.key_facts.forEach((item,index)=>{if(!item.label.trim()||!item.value.trim()) issues.push(presentationIssue('empty_required_field','key_facts['+index+']',item.value||item.label||fallback,'label и value должны быть непустыми.'));});
+  summary.key_facts.forEach((item,index)=>{
+    if(!item.label.trim()||!item.value.trim()) issues.push(presentationIssue('empty_required_field','key_facts['+index+']',item.value||item.label||fallback,'label и value должны быть непустыми.'));
+    if(/[«»"]/.test(item.value)||/\([^)]{20,}\)/.test(item.value)||/(?:^|\b)клиент\s*:/i.test(item.label+' '+item.value)) issues.push(presentationIssue('mixed_meanings_in_key_fact','key_facts['+index+']',item.value||item.label,'Key fact смешивает рабочее значение с цитатой, карточкой клиента или длинным пояснением.'));
+    if(summary.quotes.some(quote=>moduleSummaryNorm(item.value).includes(moduleSummaryNorm(quote)))) issues.push(presentationIssue('semantic_repetition','key_facts['+index+']',item.value,'Цитата повторена внутри key_facts и отдельного блока quotes.'));
+    if(/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(item.value)) issues.push(presentationIssue('unclear_wording','key_facts['+index+']',item.value,'Разговорную формулировку вне цитаты нужно заменить нейтральной.'));
+  });
   summary.quotes.forEach((quote,index)=>{if(!quote.trim()) issues.push(presentationIssue('empty_optional_item','quotes['+index+']',fallback,'Пустой optional item нужно удалить.'));});
   const duplicateFacts=new Map();summary.key_facts.forEach((item,index)=>{const key=moduleSummaryNorm(item.label+' '+item.value);if(key&&duplicateFacts.has(key)) issues.push(presentationIssue('duplicate_key_fact','key_facts['+index+']',item.value||item.label,'Одинаковый key_fact указан повторно.'));else duplicateFacts.set(key,index);});
   const sentences=summary.conversation_result.split(/(?<=[.!?])\s+/).map(item=>item.trim()).filter(Boolean),seenSentences=new Set();sentences.forEach(sentence=>{const key=moduleSummaryNorm(sentence);if(key.length>20&&seenSentences.has(key)) issues.push(presentationIssue('semantic_repetition','conversation_result',sentence,'Один и тот же факт повторён несколькими предложениями.'));seenSentences.add(key);if(sentence.length>220) issues.push(presentationIssue('long_sentence','conversation_result',sentence,'Предложение слишком длинное и сложное для быстрого чтения.'));});
   allValues.forEach(value=>{if(/(^|\s)#{1,6}\s|\*\*|__|`{1,3}/m.test(value)) issues.push(presentationIssue('markdown_inside_value','value',value,'Markdown внутри значений запрещён.'));if(/(?:^|\n)\s*(?:итог разговора|ключевые факты|цитаты|следующий шаг)\s*:/i.test(value)) issues.push(presentationIssue('heading_inside_value','value',value,'Внутри значения обнаружен заголовок блока.'));if(/не определено/i.test(value)) issues.push(presentationIssue('forbidden_value','value',value,'Значение «не определено» нужно исключить.'));});
   if(/^(?:по итогам|в ходе|в рамках)\s+(?:разговора|звонка)/i.test(summary.conversation_result.trim())) issues.push(presentationIssue('formal_intro','conversation_result',summary.conversation_result,'Формальное вступление не добавляет рабочего смысла.'));
+  [summary.conversation_result,summary.next_step].forEach((text,index)=>{if(/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(text)) issues.push(presentationIssue('unclear_wording',index?'next_step':'conversation_result',text,'Разговорную формулировку вне цитаты нужно заменить нейтральной.'));});
   if(/(?:рекомендуется|следует|стоит|необходимо)/i.test(summary.next_step)) issues.push(presentationIssue('recommendation_in_next_step','next_step',summary.next_step,'next_step не должен содержать рекомендацию AI.'));
   if(summary.next_step.length>200||summary.next_step.split(/[.!?]+/).filter(item=>item.trim()).length>2) issues.push(presentationIssue('next_step_not_concise','next_step',summary.next_step,'next_step должен быть кратким и быстро считываться.'));
   if(/(?:\+7|8)[\s(.-]*\d{3}[\s).-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}/.test(presentationSummaryText(summary))) issues.push(presentationIssue('forbidden_value','root',fallback,'Телефонные номера запрещены.'));
@@ -8129,6 +8182,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
   out.requirements=out.requirements.filter(req=>{
     const sourceFacts=req.source_fact_ids.map(id=>byId.get(id)).filter(Boolean);
     const source=normalizedSemanticText([req.evidence,...sourceFacts.map(factText)].join(' '));
+    if(req.type==='price_limit'&&sourceFacts.some(fact=>fact.category==='client_question')) return false;
     const clientConfirmed=sourceFacts.some(fact=>fact.speaker==='Клиент')&&/(хочу|ищу|нужн|важн|рассматрива|не хочу|требован|предпочита|бюджет|лимит|рассчитыва|готов)/.test(source);
     if(req.type==='search_location') return clientConfirmed&&/(район|город|локац|метро|ищу|рассматрива)/.test(source)&&!(/(?:улиц|ул |дом|корпус|адрес).{0,40}\d/.test(source)&&!/(ищу|рассматрива|район)/.test(source));
     if(req.type==='price_limit') return clientConfirmed&&/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(source)&&!/(цена|стоимость|объявлен)/.test(source);
@@ -8138,7 +8192,8 @@ function normalizeNeedExtractionSemantics(value,ctx){
     if(out.requirements.some(item=>item.type===type&&item.source_fact_ids.includes(fact.id))) return;
     const used=new Set(out.requirements.map(item=>item.id));
     let index=1;while(used.has('req_auto_'+index)) index++;
-    out.requirements.push({id:'req_auto_'+index,type,value:fact.normalized_value??fact.value,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
+    const normalizedValue=fact.normalized_value??fact.value;
+    out.requirements.push({id:'req_auto_'+index,type,value:normalizedValue,normalized_value:normalizedValue,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
   };
   clientFacts.forEach(fact=>{
     const text=factText(fact),identity=normalizedSemanticText([fact.category,fact.name].join(' '));
@@ -8146,7 +8201,9 @@ function normalizeNeedExtractionSemantics(value,ctx){
     // остаётся бюджетом клиента даже при разговорной evidence «цена до пяти с
     // половиной»: запрет на цену объявления применяется к object_price, а не
     // к явно классифицированному и verified клиентскому лимиту.
-    const verifiedBudget=/budget max|client budget|client finance.*максимальн.*цена|бюджет|price limit|максимальн.*(?:сумм|цена)/.test(identity)&&!/(object|listing|объект|объявлен)/.test(identity);
+    const verifiedBudget=(fact.category==='client_finance'||/budget max|client budget|client finance|бюджет|price limit|ценов.*предел|максимальн.*(?:сумм|цена)/.test(identity))
+      &&!/(object|listing|объект|объявлен)/.test(identity)
+      &&Number.isFinite(Number(fact.normalized_value));
     if(verifiedBudget||/(бюджет|лимит|рассчитыва|готов.*потрат|до .*миллион|до .*млн)/.test(text)&&!/(цена|стоимость|объявлен)/.test(text)) addRequirement('price_limit',fact);
     // Минимальная площадь/количество соток — самостоятельное требование
     // клиента. Оно не должно исчезать только потому, что Need Agent вернул
@@ -8162,6 +8219,8 @@ function normalizeNeedExtractionSemantics(value,ctx){
     if((verifiedSearchLocation||/location|локац|район|местополож/.test(identity)&&/(ищу|рассматрива|нужн).*район|район.*(?:ищу|рассматрива|нужн)/.test(text))&&!/(улиц|дом|корпус|адрес).{0,40}\d/.test(text)) addRequirement('search_location',fact);
     if(/search criteria|search_criteria|критерий поиска|назначение участка/.test(identity)&&/ижс/.test(text)) addRequirement('property_type',fact);
   });
+  const locationDeduplication=deduplicateSearchLocationRequirements(out.requirements);
+  out.requirements=locationDeduplication.requirements;
   out.need_meta.interest_count=out.attributes.interest.length;
   out.need_meta.requirements_count=out.requirements.length;
   const noNeeds=!out.attributes.interest.length&&!out.requirements.length&&out.attributes.funding_source.value==='не определено'&&out.attributes.purchase_term.value==='не определено';
