@@ -4236,20 +4236,21 @@ function canonicalSearchLocation(value){
 
 function deduplicateSearchLocationRequirements(requirements){
   const source=toList(requirements),locations=source.filter(item=>item&&item.type==='search_location');
-  if(!locations.length) return {requirements:source,count:0,provenance:[]};
+  if(!locations.length) return {requirements:source,count:0,transformations:[]};
   const values=[],sourceFactIds=[],mergedIds=[];
-  locations.forEach(item=>{
+  const base=[...locations].sort((a,b)=>toList(b.value).length-toList(a.value).length)[0];
+  [base,...locations.filter(item=>item!==base)].forEach(item=>{
     toList(item.value).forEach(value=>{const canonical=canonicalSearchLocation(value);if(canonical&&!values.some(existing=>moduleSummaryNorm(existing)===moduleSummaryNorm(canonical))) values.push(canonical);});
     toList(item.source_fact_ids).forEach(id=>{if(!sourceFactIds.includes(id))sourceFactIds.push(id);});
     if(item.id)mergedIds.push(item.id);
   });
-  const base=[...locations].sort((a,b)=>toList(b.value).length-toList(a.value).length)[0];
   const mergedValue=locations.length===1&&!Array.isArray(base.value)?values[0]:values;
-  const merged={...base,value:mergedValue,normalized_value:mergedValue,source_fact_ids:sourceFactIds,deduplication_provenance:{strategy:'MERGE_OVERLAPPING_SEARCH_LOCATIONS',merged_requirement_ids:mergedIds}};
+  const merged={...base,value:mergedValue,normalized_value:mergedValue,source_fact_ids:sourceFactIds};
   const firstIndex=source.findIndex(item=>item&&item.type==='search_location');
   const result=source.filter(item=>!item||item.type!=='search_location');
   result.splice(Math.min(firstIndex,result.length),0,merged);
-  return {requirements:result,count:locations.length-1,provenance:[merged.deduplication_provenance]};
+  const transformations=locations.length>1?[{type:'MERGE_OVERLAPPING_SEARCH_LOCATIONS',output_requirement_id:String(merged.id||''),source_requirement_ids:mergedIds}]:[];
+  return {requirements:result,count:locations.length-1,transformations};
 }
 
 function conversationStorePrimarySteps(primary,agreements){
@@ -4263,7 +4264,7 @@ function buildConversationStoreV1(ctx){
   for(const [key] of dependencies){
     const dependency=ctx&&ctx[key];
     if(!dependency) return conversationStoreError('DEPENDENCY_ERROR','MISSING_DEPENDENCY','ctx.'+key,'Обязательный этап отсутствует.');
-    if(['technical_error','dependency_error'].includes(dependency.status)) return conversationStoreError('DEPENDENCY_ERROR','FAILED_DEPENDENCY','ctx.'+key+'.status','Обязательный этап завершился с ошибкой '+dependency.status+'.');
+    if(['technical_error','dependency_error'].includes(dependency.status)&&dependency.continue_pipeline!==true) return conversationStoreError('DEPENDENCY_ERROR','FAILED_DEPENDENCY','ctx.'+key+'.status','Обязательный этап завершился с ошибкой '+dependency.status+'.');
   }
   const fc=ctx.fact_check,nc=ctx.need_check,oc=ctx.outcome_check;
   const requiredBlocks=[
@@ -4398,7 +4399,7 @@ function buildConversationStoreV1(ctx){
   }
   const store_issues=[];
   recoveredRequirements.forEach(item=>store_issues.push({code:'RECOVERED_CRITICAL_REQUIREMENT',stage:'need_check',entity_id:item.id,severity:'info',message:'Критическое требование восстановлено из однозначного verified fact.'}));
-  requirementDeduplication.provenance.forEach((item,index)=>store_issues.push({code:'SEARCH_LOCATION_DEDUPLICATED',stage:'need_check',entity_id:'location_dedup_'+index,severity:'info',message:'Пересекающиеся локации объединены в один verified-набор.',provenance:item}));
+  requirementDeduplication.transformations.forEach((item,index)=>store_issues.push({code:'SEARCH_LOCATION_DEDUPLICATED',stage:'need_check',entity_id:'location_dedup_'+index,severity:'info',message:'Пересекающиеся локации объединены в один verified-набор.',transformation:item}));
   const actionableResults=conversation.call_results.filter(item=>/отправ|подготов|подбор|провер|уточн|перезвон|связ/.test(normalizedSemanticText(item.value)));
   if(actionableResults.length&&(!Object.keys(conversation.primary_next_step).length||conversation.primary_next_step.status==='not_defined')) store_issues.push({code:'PRIMARY_NEXT_STEP_MISSING',stage:'outcome_check',entity_id:actionableResults[0].id,severity:'critical',message:'Подтверждённые действия есть, но основной следующий шаг не определён.'});
   conversation.agreements.filter(item=>item.owner==='агент'&&/отправ|скин|пришл|направ/.test(normalizedSemanticText(item.action))&&!item.channel).forEach(item=>store_issues.push({code:'AGREEMENT_CHANNEL_MISSING',stage:'outcome_check',entity_id:item.id,severity:'critical',message:'У согласованной отправки материалов отсутствует канал.'}));
@@ -4568,6 +4569,7 @@ function moduleSummaryQualityGateV1(ctx){
   const storeStatus=summaryQualityGateStoreStatus(ctx);if(['DEPENDENCY_ERROR','TECHNICAL_ERROR'].includes(storeStatus)) technical('STORE_DEPENDENCY_ERROR','conversation_store','store_meta.status','Conversation Store завершился технической ошибкой.');
   if(ctx&&ctx.conversation_store&&!['READY','READY_WITH_WARNINGS','MANUAL_REVIEW','DEPENDENCY_ERROR','TECHNICAL_ERROR'].includes(storeStatus)) technical('INVALID_STORE_STATUS','conversation_store','store_meta.status','Недопустимый status Conversation Store.');
   if(!ctx||!ctx.conversation_store) technical('MISSING_CONVERSATION_STORE','conversation_store','conversation_store','Conversation Store отсутствует.');
+  if(ctx&&ctx.need_check&&ctx.need_check.continue_pipeline===true) technical('NEED_JUDGE_TECHNICAL_ERROR','need_check','evaluation_status','Need Judge не выполнил оценку; пайплайн продолжен с provisional-данными без права auto-save.');
   if(!runId||!transcriptHash||!pipelineHash||!storeHash) technical('MISSING_RUN_METADATA','quality_gate','metadata','Metadata текущего запуска неполна.');
   const storeProvenance=ctx&&ctx.conversation_store&&ctx.conversation_store.provenance||{};
   if(storeProvenance.run_id!==runId||storeProvenance.transcript_hash!==transcriptHash||storeProvenance.pipeline_configuration_hash!==pipelineHash) technical('STALE_OR_FOREIGN_CHECK_RESULT','conversation_store','provenance','Conversation Store относится к другому запуску.');
@@ -5009,7 +5011,7 @@ const CODE_FUNCS = {
       }
       try{
         const input=validateNeedExtractionRoot(n,ctx,false);
-        return {criteria:[{name:'Need Agent technical contract',checker:'code',status:'pass',score:100,explanation:'Root schema, canonical dictionaries, ID, source_fact_ids, confidence, статусы, counts, null и дополнительные поля проверены.'}],fieldStatus:{module_payload:'pass'},hardFail:false,input,issues:[]};
+        return {criteria:[{name:'Need Agent technical contract',checker:'code',status:'pass',score:100,explanation:'Root schema, canonical dictionaries, ID, source_fact_ids, confidence, статусы, counts, null и дополнительные поля проверены.'}],fieldStatus:{module_payload:'pass'},hardFail:false,input:needJudgeBusinessInput(input),issues:[]};
       }catch(error){
         const message=String(error&&error.message||error);
         return {criteria:[{name:'Need Agent technical contract',checker:'code',status:'fail',score:0,explanation:message}],fieldStatus:{module_payload:'fail'},hardFail:true,schemaError:message,input:n,issues:[message]};
@@ -7663,9 +7665,10 @@ function applyFactExtractionPolicies(value,ctx){
     }
   }
   if(transcript){
-    const clientTurns=[...transcript.matchAll(/(?:^|\n)Клиент:\s*\n?\s*[—-]?\s*([^\n]+)/g)].map(match=>String(match[1]||'').trim()).filter(Boolean);
-    const evidence=clientTurns.find(turn=>/(?:^|[.!?]\s*)Там,\s*[А-ЯЁ][А-Яа-яЁё-]+(?:,\s*[А-ЯЁ][А-Яа-яЁё-]+){1,4},?\s*что-нибудь такое/i.test(turn));
-    const match=evidence&&evidence.match(/(?:^|[.!?]\s*)Там,\s*([А-ЯЁ][А-Яа-яЁё-]+(?:,\s*[А-ЯЁ][А-Яа-яЁё-]+){1,4}),?\s*что-нибудь такое/i);
+    const parsedTurns=parseTranscriptTurns(transcript);
+    const clientTurns=parsedTurns.filter(turn=>/клиент/.test(normalizedSemanticText(turn.role))).map(turn=>String(turn.text||'').trim()).filter(Boolean);
+    const evidence=clientTurns.find(turn=>/(?:^|[.!?]\s*)там,\s*[а-яё-]+(?:,\s*[а-яё-]+){1,4},?\s*что-нибудь такое/i.test(turn));
+    const match=evidence&&evidence.match(/(?:^|[.!?]\s*)там,\s*([а-яё-]+(?:,\s*[а-яё-]+){1,4}),?\s*что-нибудь такое/i);
     const locations=match?match[1].split(',').map(item=>item.trim()).filter(Boolean):[];
     const alreadyCovered=locations.length&&facts.some(item=>{
       if(item&&item.category!=='search_location') return false;
@@ -7679,7 +7682,16 @@ function applyFactExtractionPolicies(value,ctx){
       recoveredFactCount++;
       warnings.push('SEARCH_LOCATION_RANGE_POLICY_ADDED');
     }
-    const turns=parseTranscriptTurns(transcript);
+    const turns=parsedTurns;
+    const hasClientIntent=facts.some(item=>item&&item.category==='client_intent');
+    if(!hasClientIntent){
+      const intentTurn=turns.find(turn=>/клиент/.test(normalizedSemanticText(turn.role))&&/(?:по поводу|насч[её]т)\s+(?:земельного\s+)?участк[а-яё]*\s+(?:звоню|обращаюсь)|(?:звоню|обращаюсь).*(?:по поводу|насч[её]т).*(?:участк|земл)/.test(normalizedSemanticText(turn.text)));
+      if(intentTurn){
+        const factIds=new Set(facts.map(item=>item&&item.id));let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
+        facts.push({id:'fact_'+factIndex,category:'client_intent',name:'цель обращения',value:'покупка участка',normalized_value:'покупка участка',speaker:'Клиент',evidence:String(intentTurn.text||'').trim(),confidence:.95,verification_status:'pending'});
+        recoveredFactCount++;warnings.push('CLIENT_INTENT_POLICY_ADDED');
+      }
+    }
     const hasIzhFact=facts.some(item=>item&&item.category==='search_criteria'&&/ижс/i.test([item.value,item.normalized_value,item.evidence].flat().join(' ')));
     if(!hasIzhFact){
       for(let index=0;index<turns.length-1;index++){
@@ -8108,7 +8120,15 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
     const precision_score=facts_checked?facts_verified/facts_checked:1,quote_score=quotes_checked?quotes_verified/quotes_checked:1;
     const criticalInput=input.facts.filter(factIsCritical),criticalVerified=criticalInput.filter(item=>verifiedFactIds.has(item.id)).length;
     const critical_recall_score=criticalInput.length?criticalVerified/criticalInput.length:1;
-    const audit=reconciliationQuality(reconciled,facts_checked+quotes_checked,facts_verified+quotes_verified,reconciled.warnings.length);
+    let audit=reconciliationQuality(reconciled,facts_checked+quotes_checked,facts_verified+quotes_verified,reconciled.warnings.length);
+    const extractionAudit=ctx&&ctx.__extraction_audits&&ctx.__extraction_audits.facts;
+    const recoveredItems=Number(extractionAudit&&extractionAudit.recovered_fact_count||0)+Number(extractionAudit&&extractionAudit.recovered_quote_count||0);
+    if(recoveredItems>0){
+      const modelItems=Number(extractionAudit.model_output_fact_count||0)+Number(extractionAudit.model_output_quote_count||0);
+      const finalItems=Math.max(1,Number(extractionAudit.final_fact_count||0)+Number(extractionAudit.final_quote_count||0));
+      const recoveryAdjustedScore=Math.min(audit.score,Math.round(modelItems/finalItems*100));
+      audit={...audit,score:recoveryAdjustedScore,first_pass_accuracy_score:+(recoveryAdjustedScore/100).toFixed(3),recovered_items_count:recoveredItems,decision:audit.decision==='PASS'?'PASS_WITH_WARNINGS':audit.decision};
+    }
     const overall_score=audit.first_pass_accuracy_score,decision=audit.decision;
     const fact_check_quality={facts_checked,facts_verified,facts_rejected,quotes_checked,quotes_verified,quotes_rejected,critical_facts_missing:reconciled.warnings.length,precision_score:+precision_score.toFixed(3),critical_recall_score:+critical_recall_score.toFixed(3),quote_score:+quote_score.toFixed(3),overall_score,...audit,decision};
     return {verified_facts,rejected_facts,verified_quotes,rejected_quotes,corrected_items:reconciled.corrected,missing_critical_facts:reconciled.warnings.map((reason,index)=>({category:'warning_'+index,name:'Пропущенный факт',reason,critical:true})),fact_check_quality,criteria:[...(codeResult.criteria||[]),{name:'Reconciliation',status:decision==='PASS'?'pass':'warning',score:audit.score,explanation:'First-pass точность рассчитана до применения corrections.'}],score:audit.score,confidence:reconciled.overall_confidence,decision,status:decision==='PASS'?'ok':'warn',judge_items:reconciled.judge_items,reconciliation:{input_items_count:llmParsed.__entries.length,judge_items_count:llmParsed.items.length,verified_count:reconciled.verified.length-reconciled.corrected.length,corrected_count:reconciled.corrected.length,rejected_count:reconciled.rejected.length,unknown_ids:[],missing_ids:[],applied_corrections:reconciled.corrected.map(item=>({id:item.judge_id,corrections:item.applied_corrections})),...audit},warnings:reconciled.warnings,raw_response:{items:llmParsed.items,overall_confidence:llmParsed.overall_confidence,warnings:llmParsed.warnings},issues:[]};
@@ -8179,6 +8199,7 @@ const NEED_FUNDING_VALUES=new Set(['наличные / депозит','ипот
 const NEED_TERM_VALUES=new Set(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
 const NEED_REQUIREMENT_TYPES=new Set(['search_location','property_type','market_type','residential_complex','rooms','minimum_area','maximum_area','minimum_land_area','maximum_land_area','repair','floor_preference','transport_accessibility','infrastructure','legal_requirement','price_limit','hard_constraint','rejected_option','other_requirement','area','floor','other']);
 const NEED_ITEM_KEYS=['value','confidence','evidence','source_fact_ids','verification_status'];
+const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS']);
 
 class NeedSchemaError extends Error{
   constructor(message){super(message);this.name='NeedSchemaError';}
@@ -8311,6 +8332,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
   });
   const locationDeduplication=deduplicateSearchLocationRequirements(out.requirements);
   out.requirements=locationDeduplication.requirements;
+  out.need_meta.transformations=locationDeduplication.transformations;
   out.need_meta.interest_count=out.attributes.interest.length;
   out.need_meta.requirements_count=out.requirements.length;
   const noNeeds=!out.attributes.interest.length&&!out.requirements.length&&out.attributes.funding_source.value==='не определено'&&out.attributes.purchase_term.value==='не определено';
@@ -8358,7 +8380,8 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
     validateNeedSourceIds(item,path,verifiedFactIds);
     needExpect(item.verification_status==='pending',path+'.verification_status','"pending"',item.verification_status);
   });
-  needExactKeys(value.need_meta,'need_meta',['interest_count','requirements_count','decision']);
+  const needMetaKeys=['interest_count','requirements_count','decision',...(Object.prototype.hasOwnProperty.call(value.need_meta,'transformations')?['transformations']:[])];
+  needExactKeys(value.need_meta,'need_meta',needMetaKeys);
   needExpect(Number.isInteger(value.need_meta.interest_count)&&value.need_meta.interest_count>=0,'need_meta.interest_count','non-negative integer',value.need_meta.interest_count);
   needExpect(Number.isInteger(value.need_meta.requirements_count)&&value.need_meta.requirements_count>=0,'need_meta.requirements_count','non-negative integer',value.need_meta.requirements_count);
   if(value.need_meta.interest_count!==value.attributes.interest.length) throw new NeedSchemaError('need_meta.interest_count: expected '+value.attributes.interest.length+', received '+value.need_meta.interest_count);
@@ -8366,7 +8389,25 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
   const noNeeds=!value.attributes.interest.length&&!value.requirements.length&&value.attributes.funding_source.value==='не определено'&&value.attributes.purchase_term.value==='не определено';
   const expectedDecision=noNeeds?'NO_NEEDS':'EXTRACTED';
   if(value.need_meta.decision!==expectedDecision) throw new NeedSchemaError('need_meta.decision: expected "'+expectedDecision+'", received '+needReceived(value.need_meta.decision));
-  return normalizeSemantics?normalizeNeedExtractionSemantics(value,ctx):value;
+  if(Object.prototype.hasOwnProperty.call(value.need_meta,'transformations')){
+    needExpect(Array.isArray(value.need_meta.transformations),'need_meta.transformations','array',value.need_meta.transformations);
+    value.need_meta.transformations.forEach((item,index)=>{
+      const path='need_meta.transformations['+index+']';
+      needExactKeys(item,path,['type','output_requirement_id','source_requirement_ids']);
+      needExpect(NEED_TRANSFORMATION_TYPES.has(item.type),path+'.type','canonical transformation type',item.type);
+      needExpect(typeof item.output_requirement_id==='string'&&item.output_requirement_id.trim().length>0,path+'.output_requirement_id','non-empty string',item.output_requirement_id);
+      needExpect(Array.isArray(item.source_requirement_ids)&&item.source_requirement_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_requirement_ids','non-empty string[]',item.source_requirement_ids);
+    });
+  }
+  if(!normalizeSemantics) return value;
+  const normalized=normalizeNeedExtractionSemantics(value,ctx);
+  return validateNeedExtractionRoot(normalized,ctx,false);
+}
+
+function needJudgeBusinessInput(value){
+  const copy=JSON.parse(JSON.stringify(value));
+  if(copy.need_meta) delete copy.need_meta.transformations;
+  return copy;
 }
 
 const NEED_CHECK_QUALITY_KEYS=['attributes_checked','attributes_verified','attributes_rejected','requirements_checked','requirements_verified','requirements_rejected','critical_needs_missing','attribute_accuracy_score','requirement_precision_score','critical_recall_score','overall_score','decision'];
@@ -8533,8 +8574,16 @@ function needCheckDependencyError(ctx){
   return null;
 }
 
-function needCheckTechnicalOutput(codeResult,errorCode,message){
-  return {status:errorCode==='DEPENDENCY_ERROR'?'dependency_error':'technical_error',decision:'ERROR',score:null,error_code:errorCode,schema_error:message,parse_error:message,verified_attributes:{interest:[]},rejected_attributes:[],verified_requirements:[],rejected_requirements:[],missing_critical_needs:[],need_check_quality:{attributes_checked:0,attributes_verified:0,attributes_rejected:0,requirements_checked:0,requirements_verified:0,requirements_rejected:0,critical_needs_missing:0,attribute_accuracy_score:null,requirement_precision_score:null,critical_recall_score:null,overall_score:null,decision:'ERROR'},criteria:codeResult&&codeResult.criteria||[],issues:[message]};
+function needCheckTechnicalOutput(codeResult,errorCode,message,input=null){
+  const canContinue=errorCode!=='DEPENDENCY_ERROR'&&Boolean(input&&input.attributes&&Array.isArray(input.requirements));
+  const provisionalAttributes=canContinue?JSON.parse(JSON.stringify(input.attributes)):{interest:[]};
+  if(canContinue){
+    provisionalAttributes.interest=toList(provisionalAttributes.interest).map(item=>({...item,verified:false,verification_status:'unverified_due_to_technical_error'}));
+    for(const key of ['funding_source','purchase_term']) provisionalAttributes[key]={...(provisionalAttributes[key]||{}),verified:false,verification_status:'unverified_due_to_technical_error'};
+  }
+  const provisionalRequirements=canContinue?input.requirements.map(item=>({...item,verified:false,verification_status:'unverified_due_to_technical_error'})):[];
+  const attributesChecked=canContinue?toList(input.attributes.interest).length+2:0,requirementsChecked=canContinue?input.requirements.length:0;
+  return {status:errorCode==='DEPENDENCY_ERROR'?'dependency_error':'technical_error',execution_status:'TECHNICAL_ERROR',evaluation_status:'NOT_EVALUATED',continue_pipeline:canContinue,decision:'ERROR',score:null,error_code:errorCode,schema_error:message,parse_error:message,verified_attributes:provisionalAttributes,rejected_attributes:[],verified_requirements:provisionalRequirements,rejected_requirements:[],provisional_attributes:provisionalAttributes,provisional_requirements:provisionalRequirements,missing_critical_needs:[],need_check_quality:{attributes_checked:attributesChecked,attributes_verified:0,attributes_rejected:0,requirements_checked:requirementsChecked,requirements_verified:0,requirements_rejected:0,critical_needs_missing:0,attribute_accuracy_score:0,requirement_precision_score:0,critical_recall_score:0,overall_score:0,decision:'ERROR'},criteria:codeResult&&codeResult.criteria||[],issues:[message]};
 }
 
 function relevantNeedJudgeWarnings(warnings,ctx){
@@ -8556,9 +8605,9 @@ function relevantNeedJudgeWarnings(warnings,ctx){
 }
 
 function mergeNeedCheckV2(codeResult,llmParsed,parseErr,input,ctx){
-  if(codeResult.dependencyError) return needCheckTechnicalOutput(codeResult,'DEPENDENCY_ERROR',codeResult.dependencyError);
-  if(codeResult.hardFail) return needCheckTechnicalOutput(codeResult,'SCHEMA_VALIDATION_FAILED',codeResult.schemaError||codeResult.issues[0]);
-  if(parseErr||!llmParsed) return needCheckTechnicalOutput(codeResult,parseErr&&/verified_|rejected_|need_check_quality|criteria|missing_critical/.test(parseErr)?'INVALID_JUDGE_OUTPUT':'JUDGE_RESULT_UNAVAILABLE',parseErr||'нет ответа');
+  if(codeResult.dependencyError) return needCheckTechnicalOutput(codeResult,'DEPENDENCY_ERROR',codeResult.dependencyError,input);
+  if(codeResult.hardFail) return needCheckTechnicalOutput(codeResult,'SCHEMA_VALIDATION_FAILED',codeResult.schemaError||codeResult.issues[0],input);
+  if(parseErr||!llmParsed) return needCheckTechnicalOutput(codeResult,parseErr&&/verified_|rejected_|need_check_quality|criteria|missing_critical/.test(parseErr)?'INVALID_JUDGE_OUTPUT':'JUDGE_RESULT_UNAVAILABLE',parseErr||'нет ответа',input);
   if(llmParsed.__judge_contract==='verdict-only-v2'){
     const reconciled=reconcileVerdictOnly(llmParsed,ctx),kindById=new Map(llmParsed.__entries.map(entry=>[entry.id,entry.kind]));
     reconciled.warnings=relevantNeedJudgeWarnings(reconciled.warnings,ctx);
@@ -8841,7 +8890,7 @@ function outcomeDependencyError(ctx){
   for(const key of ['fact_check','need_check']){
     const dependency=ctx&&ctx[key];
     if(!dependency) return 'ctx.'+key+': expected completed dependency, received undefined';
-    if(['technical_error','dependency_error'].includes(dependency.status)) return 'ctx.'+key+'.status: expected usable dependency, received '+JSON.stringify(dependency.status);
+    if(['technical_error','dependency_error'].includes(dependency.status)&&dependency.continue_pipeline!==true) return 'ctx.'+key+'.status: expected usable dependency, received '+JSON.stringify(dependency.status);
   }
   return null;
 }
@@ -8858,7 +8907,7 @@ function outcomeCheckDependencyError(ctx){
     if(!dependency) return 'ctx.'+key+': expected successful dependency, received undefined';
     const qualityKey=key==='fact_check'?'fact_check_quality':'need_check_quality';
     const decision=String(dependency.decision||dependency[qualityKey]&&dependency[qualityKey].decision||'').toUpperCase();
-    if(['technical_error','dependency_error'].includes(dependency.status)||['FAIL','ERROR'].includes(decision)) return 'ctx.'+key+': expected non-failing dependency, received '+JSON.stringify(decision||dependency.status);
+    if((['technical_error','dependency_error'].includes(dependency.status)||['FAIL','ERROR'].includes(decision))&&dependency.continue_pipeline!==true) return 'ctx.'+key+': expected non-failing dependency, received '+JSON.stringify(decision||dependency.status);
   }
   return null;
 }
@@ -9259,7 +9308,8 @@ async function runStage(stage, ctx){
       rep.meta=buildStageMeta(stage,rep);
       return rep;
     }
-    const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
+    const promptContext=isNeedCheckStage?{...ctx,needs:codeResult.input}:ctx;
+    const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, promptContext), promptContext);
     const prompt=promptAudit.prompt;
     const verdictSchemaId=isNeedCheckStage?'judge_need_verdict_only_v2':'judge_verdict_only_v1';
     const verdictResponseFormat=(isFactCheckStage||isNeedCheckStage||isOutcomeCheckStage)?{type:'json_schema',json_schema:{name:verdictSchemaId,strict:true,schema:isFactCheckStage?FACT_VERDICT_ONLY_JSON_SCHEMA:isNeedCheckStage?NEED_VERDICT_ONLY_JSON_SCHEMA:VERDICT_ONLY_JSON_SCHEMA}}:null;
@@ -9806,6 +9856,10 @@ async function runPipeline(){
     }
     // сохраняем в контекст
     if(stage.outKey && rep.output!==undefined){
+      if(rep.extraction_audit){
+        if(!ctx.__extraction_audits) ctx.__extraction_audits={};
+        ctx.__extraction_audits[stage.outKey]=rep.extraction_audit;
+      }
       // Apply V9 cleanup for specific stages BEFORE storing
       if(stage.outKey === 'facts' && rep.output) rep.output = cleanupFactsV9(rep.output);
       if(stage.outKey === 'needs' && rep.output) rep.output = cleanupNeedsV9(rep.output);
@@ -9823,7 +9877,7 @@ async function runPipeline(){
     progBar.style.width=((i+1)/active.length*100)+'%';
     const extractorTechnicalFailure=stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))&&['technical_error','dependency_error'].includes(rep.output?.status);
     const factCheckTechnicalFailure=stage.codeFn==='factCheckCode'&&rep.output?.status==='technical_error';
-    const needCheckTechnicalFailure=stage.codeFn==='needCheckCode'&&['technical_error','dependency_error'].includes(rep.output?.status);
+    const needCheckTechnicalFailure=stage.codeFn==='needCheckCode'&&['technical_error','dependency_error'].includes(rep.output?.status)&&rep.output?.continue_pipeline!==true;
     const outcomeCheckTechnicalFailure=stage.codeFn==='outcomeCheckCode'&&['technical_error','dependency_error'].includes(rep.output?.status);
     const conversationStoreSourceFail=stage.codeFn==='conversationStore'&&['fact_check','need_check','outcome_check'].some(key=>String(ctx[key]?.decision||ctx[key]?.[key+'_quality']?.decision||'').toUpperCase()==='FAIL');
     const conversationStoreFailure=stage.codeFn==='conversationStore'&&(['TECHNICAL_ERROR','DEPENDENCY_ERROR'].includes(rep.output?.store_meta?.status)||conversationStoreSourceFail);

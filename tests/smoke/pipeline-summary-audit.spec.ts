@@ -3858,6 +3858,62 @@ test("Fact policy добавляет перечисленные клиентом
   expect(result.value.extraction_meta.fact_count).toBe(2);
 });
 
+test("Need producer публикует дедупликацию отдельно от требований, а Judge получает только бизнес-контракт", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const verifiedFacts=[
+      {id:'fact_1',category:'search_location',name:'область поиска',value:'Капитолова',normalized_value:'Капитолова',speaker:'Клиент',evidence:'Рассматриваю Капитолова.',confidence:.96,verification_status:'verified',verified:true},
+      {id:'fact_2',category:'search_location',name:'районы поиска',value:['Мистолово','Капитолова','Лаврики'],normalized_value:['Мистолово','Капитолова','Лаврики'],speaker:'Клиент',evidence:'Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',confidence:.96,verification_status:'verified',verified:true},
+    ];
+    const pendingFacts=verifiedFacts.map(({verified,...fact})=>({...fact,verification_status:'pending'}));
+    const requirement=(id,value,fact)=>({id,type:'search_location',value,normalized_value:value,confidence:.95,evidence:fact.evidence,source_fact_ids:[fact.id],verification_status:'pending'});
+    const input={
+      attributes:{interest:[],funding_source:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'},purchase_term:{value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'}},
+      requirements:[requirement('req_1','Капитолова',verifiedFacts[0]),requirement('req_2',['Мистолово','Капитолова','Лаврики'],verifiedFacts[1])],
+      need_meta:{interest_count:0,requirements_count:2,decision:'EXTRACTED'}
+    };
+    const ctx={facts:{facts:pendingFacts,quotes:[],extraction_meta:{fact_count:2,quote_count:0,decision:'EXTRACTED'}},fact_check:{status:'ok',decision:'PASS',verified_facts:verifiedFacts}};
+    const published=validateNeedExtractionRoot(input,ctx);
+    const check=CODE_FUNCS.needCheckCode({}, {...ctx,needs:published});
+    return {published,judgeInput:check.input,hardFail:check.hardFail};
+  });
+
+  expect(result.hardFail).toBe(false);
+  expect(result.published.requirements).toEqual([
+    expect.objectContaining({value:["Мистолово","Капитолово","Лаврики"],source_fact_ids:["fact_2","fact_1"]}),
+  ]);
+  expect(result.published.requirements[0]).not.toHaveProperty("deduplication_provenance");
+  expect(result.published.need_meta.transformations).toEqual([
+    expect.objectContaining({
+      type:"MERGE_OVERLAPPING_SEARCH_LOCATIONS",
+      output_requirement_id:result.published.requirements[0].id,
+      source_requirement_ids:expect.arrayContaining([result.published.requirements[0].id]),
+    }),
+  ]);
+  expect(result.published.need_meta.transformations[0].source_requirement_ids).toHaveLength(2);
+  expect(result.judgeInput.need_meta).not.toHaveProperty("transformations");
+});
+
+test("технический сбой Need Judge сохраняет provisional-данные и разрешает диагностический downstream", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const item={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'};
+    const input={attributes:{interest:[],funding_source:item,purchase_term:item},requirements:[{id:'req_1',type:'property_type',value:'ИЖС',normalized_value:'ИЖС',confidence:.95,evidence:'Нужен ИЖС.',source_fact_ids:['fact_1'],verification_status:'pending'}],need_meta:{interest_count:0,requirements_count:1,decision:'EXTRACTED'}};
+    const fallback=mergeNeedCheckV2({criteria:[],hardFail:false},null,'JUDGE_RESULT_UNAVAILABLE',input,{});
+    return {fallback,outcomeDependency:outcomeDependencyError({fact_check:{status:'ok',decision:'PASS'},need_check:fallback})};
+  });
+
+  expect(result.fallback).toMatchObject({
+    status:"technical_error",
+    execution_status:"TECHNICAL_ERROR",
+    evaluation_status:"NOT_EVALUATED",
+    continue_pipeline:true,
+    decision:"ERROR",
+    provisional_requirements:[expect.objectContaining({id:"req_1",verification_status:"unverified_due_to_technical_error",verified:false})],
+  });
+  expect(result.outcomeDependency).toBeNull();
+});
+
 test("локация из ответа на вопрос об объекте не становится областью поиска", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
