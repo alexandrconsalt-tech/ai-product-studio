@@ -720,7 +720,7 @@ ${factCategoryPromptBlock()}.
     },
     {
       id:s(), enabled:true, type:'hybrid', name:'Проверка фактов',
-      model:'gpt-5-mini', temperature:0, maxTokens:12000, codeFn:'factCheckCode', outKey:'fact_check', promptId:'fact-check-v2', promptVersion:9, promptUpdatedAt:'2026-07-24',
+      model:'gpt-5-mini', temperature:0, maxTokens:12000, codeFn:'factCheckCode', outKey:'fact_check', promptId:'fact-check-v2', promptVersion:10, promptUpdatedAt:'2026-07-24',
       prompt:
 `Ты — LLM Fact Judge. Код уже проверил технический контракт Fact Agent. Твоя задача — только смысловая сверка каждого факта и каждой цитаты с полной транскрипцией.
 
@@ -729,7 +729,7 @@ ${factCategoryPromptBlock()}.
 Проверь особенно строго:
 - цена объекта не должна считаться бюджетом клиента (error_type="object_price_as_budget", severity="critical");
 - вопрос агента без содержательного ответа клиента не является фактом (error_type="question_as_fact");
-- конкретный закрытый вопрос агента о требовании и непосредственно следующий однозначный ответ клиента «да/конечно/верно» образуют подтверждённый контекст; клиенту не обязательно повторять термин из вопроса;
+- конкретный закрытый вопрос агента о требовании и непосредственно следующий однозначный ответ клиента «да/конечно/верно» образуют подтверждённый контекст; клиенту не обязательно повторять термин из вопроса. Пример (обязательно verified, а не rejected): Агент: «Ну, до пяти с половиной, ну, если это ИЖС, да?» Клиент: «Да, да, конечно, я понял.» — это прямое подтверждение требования search_criteria="ИЖС"; отклонять такой факт с обоснованием «не подтверждено как требование клиента» запрещено;
 - speaker должен совпадать с реальным говорящим (error_type="speaker_mismatch"; при серьёзной путанице ролей severity="critical");
 - normalized_value должна точно сохранять смысл и числовую величину (error_type="incorrect_normalization"; спорную нормализацию критического числа отметь normalization_disputed=true);
 - один смысловой факт нельзя подтверждать дважды под разными id (error_type="duplicate_fact");
