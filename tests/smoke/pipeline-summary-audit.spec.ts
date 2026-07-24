@@ -863,10 +863,15 @@ test("PASS_WITH_CORRECTIONS остаётся предупреждением да
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
     const rep={status:'warn',output:{decision:'PASS_WITH_CORRECTIONS',score:33,criteria:[]},ms:1,tokens:0,cost:0};
-    return {meta:buildStageMeta({outKey:'need_check',codeFn:'needCheckCode'},rep),badge:badgeText(rep.status)};
+    return {
+      meta:buildStageMeta({outKey:'need_check',codeFn:'needCheckCode'},rep),
+      runtimeStatus:statusFromDecision('PASS_WITH_CORRECTIONS'),
+      badge:badgeText(statusFromDecision('PASS_WITH_CORRECTIONS'))
+    };
   });
 
   expect(result.meta).toMatchObject({status:"warning",score:33});
+  expect(result.runtimeStatus).toBe("warn");
   expect(result.badge).toBe("Внимание");
 });
 

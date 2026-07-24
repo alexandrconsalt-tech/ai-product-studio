@@ -3412,8 +3412,8 @@ function evaluateSttContract(ctx){
 // проверки, а не просто "есть нюансы"), RETRY/RETRY_STT/FAIL/STOP=красный.
 function statusFromDecision(decision){
   if(decision==='PASS') return 'ok';
-  if(decision==='PASS_WITH_WARNINGS') return 'warn';
-  if(decision==='MANUAL_REVIEW') return 'attn';
+  if(decision==='PASS_WITH_WARNINGS'||decision==='PASS_WITH_CORRECTIONS'||decision==='WARNING') return 'warn';
+  if(decision==='MANUAL_REVIEW'||decision==='REVIEW_REQUIRED') return 'attn';
   return 'bad';
 }
 
