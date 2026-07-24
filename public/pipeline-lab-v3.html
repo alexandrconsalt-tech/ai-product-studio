@@ -8785,9 +8785,19 @@ function mergeNeedCheckV2(codeResult,llmParsed,parseErr,input,ctx){
         &&/(?:не определ|не указан|отсутств|нет данных)/.test(key);
       return !(neutralFunding||neutralTerm);
     });
+    // funding_source/purchase_term должны ВСЕГДА присутствовать в
+    // verified_attributes как объект (пустой {}, если Judge отклонил
+    // значение), а не отсутствовать вовсе. conversationStore жёстко
+    // требует ctx.need_check.verified_attributes.funding_source/
+    // purchase_term быть объектом (см. requiredBlocks в
+    // buildConversationStoreV1) и падает с DEPENDENCY_ERROR, обрывая весь
+    // пайплайн ещё до Summary, если ключ отсутствует — а Judge вполне
+    // законно отклоняет одно значение (например, "ипотека одобрена", когда
+    // по факту "в процессе одобрения"), это нормальный, ожидаемый исход
+    // проверки, а не повод останавливать весь пайплайн.
     const verified_attributes={interest:reconciled.verified.filter(item=>kindById.get(item.judge_id)==='interest')};
-    const funding=reconciled.verified.find(item=>kindById.get(item.judge_id)==='funding_source');if(funding)verified_attributes.funding_source=funding;
-    const term=reconciled.verified.find(item=>kindById.get(item.judge_id)==='purchase_term');if(term)verified_attributes.purchase_term=term;
+    const funding=reconciled.verified.find(item=>kindById.get(item.judge_id)==='funding_source');verified_attributes.funding_source=funding||{};
+    const term=reconciled.verified.find(item=>kindById.get(item.judge_id)==='purchase_term');verified_attributes.purchase_term=term||{};
     let verified_requirements=reconciled.verified.filter(item=>kindById.get(item.judge_id)==='requirement');
     const recoveredRequirements=conversationStoreRecoveredRequirements(toList(ctx&&ctx.fact_check&&ctx.fact_check.verified_facts),verified_requirements).map(item=>({...item,verified:true}));
     verified_requirements.push(...recoveredRequirements);
