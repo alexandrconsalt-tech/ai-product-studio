@@ -3949,14 +3949,16 @@ test("земельный Summary нормализуется без дублей 
     const store={conversation:{facts,requirements,attributes:{},quotes:[{id:'q',text:facts[2].evidence,speaker:'Клиент',supports_fact_ids:['objection']}],agreements:[{id:'a',recipient:'клиент',action:'отправить видеообзор и подборку альтернативных участков',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed'}],primary_next_step:{action:'отправить видеообзор и подборку альтернативных участков',owner:'агент',deadline:'после звонка',channel:'MAX',status:'confirmed',agreement_ids:['a']}}};
     const draft={status:'GENERATED',conversation_result:'Клиент интересуется участком в районе Деревня Мистолово / Капитолова / Лаврики и отвергает взнос.',key_facts:[{label:'Бюджет',value:'5 500 000'}],quotes:['цена до пяти с половиной',facts[2].evidence],next_step:'отправить материалы',error:''};
     const summary=moduleSummaryApplyStorePolicy(draft,store).value;
+    const grounding=moduleSummaryGrounding(summary,store);
     const expected=criticalCompletenessExpectedItems({conversation_store:store});
     const confidence=moduleSummaryConfidence({conversation_store:{...store,quality:{overall_confidence:1}},fact_check:{overall_confidence:.95},need_check:{overall_confidence:.95},outcome_check:{overall_confidence:.9}});
-    return {summary,expected,confidence};
+    return {summary,expected,confidence,grounding};
   });
 
   expect(result.summary.conversation_result).toBe("Клиент рассматривает покупку участка ИЖС от 6 соток в Мистолове, Капитолове или Лавриках с бюджетом до 5,5 млн ₽. Клиента смущает ежемесячный взнос 9 600 ₽.");
   expect(result.summary.key_facts).toEqual([]);
   expect(result.summary.quotes).toEqual(["Вот этот побор 9600 мне прямо не это."]);
+  expect(result.grounding).toEqual([]);
   expect(result.expected.map((item: any) => item.id)).toEqual(["critical-client-goal","critical-budget","critical-property-type","critical-minimum-land-area","critical-search-location","critical-objection"]);
   expect(result.confidence).toBe(.963);
 });

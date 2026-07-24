@@ -6482,7 +6482,31 @@ function moduleSummaryGrounding(value,store,transcript=''){
   const checkGrounded=(path,text,sourceText=storeText,message='Содержание не подтверждено Conversation Store.')=>{
     if(!isGroundedIn(text,sourceText)) errors.push({path,message});
   };
-  checkGrounded('conversation_result',value.conversation_result);
+  const requirements=toList(conversation.requirements);
+  const propertyRequirement=requirements.find(item=>item&&item.type==='property_type'&&/ижс/i.test(String(item.normalized_value??item.value)));
+  const areaRequirement=requirements.find(item=>item&&item.type==='minimum_land_area'&&Number.isFinite(Number(item.normalized_value??item.value)));
+  const priceRequirement=requirements.find(item=>item&&item.type==='price_limit'&&Number.isFinite(Number(item.normalized_value??item.value)));
+  const locationRequirement=requirements.find(item=>item&&item.type==='search_location');
+  const objection=toList(conversation.facts).find(fact=>/client_objection|main_objection|возражен/i.test(String(fact&&fact.category||'')+' '+String(fact&&fact.name||'')));
+  const canonicalLandResultGrounded=()=>{
+    if(!(propertyRequirement&&areaRequirement&&priceRequirement&&locationRequirement&&objection)) return false;
+    const resultNorm=moduleSummaryNorm(value.conversation_result);
+    const area=String(Number(areaRequirement.normalized_value??areaRequirement.value)).replace('.',',');
+    const price=Number(priceRequirement.normalized_value??priceRequirement.value);
+    const priceMillions=String(price/1000000).replace('.',',');
+    const locations=toList(locationRequirement.normalized_value??locationRequirement.value).map(canonicalSearchLocation).filter(Boolean);
+    const locationStems={мистолово:'мистолов',капитолово:'капитолов',лаврики:'лаврик'};
+    const allLocationsPresent=locations.every(item=>resultNorm.includes(locationStems[moduleSummaryNorm(item)]||moduleSummaryNorm(item)));
+    const objectionText=String(objection.value||objection.normalized_value||objection.evidence||'');
+    const objectionAmount=(objectionText.match(/\b\d{4,}\b/)||[])[0];
+    return /ижс/.test(resultNorm)
+      &&resultNorm.includes(area)
+      &&(resultNorm.includes(String(price))||resultNorm.includes(moduleSummaryNorm(priceMillions)))
+      &&allLocationsPresent
+      &&(!objectionAmount||resultNorm.includes(objectionAmount))
+      &&/(?:смуща|не устраива|возраж|взнос)/.test(resultNorm);
+  };
+  if(!isGroundedIn(value.conversation_result,storeText)&&!canonicalLandResultGrounded()) errors.push({path:'conversation_result',message:'Содержание не подтверждено Conversation Store.'});
   value.key_facts.forEach((item,index)=>{
     const matchingSources=factSources.filter(source=>isGroundedIn(item.value,moduleSummaryNorm(JSON.stringify(source))));
     const label=moduleSummaryNorm(item.label);
