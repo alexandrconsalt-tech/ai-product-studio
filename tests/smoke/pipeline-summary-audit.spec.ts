@@ -3345,6 +3345,13 @@ test("Conversation Store v1 собирает только verified данные 
     const store=ctx=>CODE_FUNCS.conversationStore({},ctx);
     const readyCtx=make(),before=JSON.stringify(readyCtx),ready=store(readyCtx),after=JSON.stringify(readyCtx);
     const warnings=store(make({decisions:['PASS','PASS_WITH_WARNINGS','PASS']}));
+    const cleanRecoveryCtx=make({decisions:['PASS_WITH_WARNINGS','PASS','PASS'],rejectedFacts:[]});
+    cleanRecoveryCtx.fact_check.missing_critical_facts=[];
+    cleanRecoveryCtx.fact_check.rejected_quotes=[];
+    cleanRecoveryCtx.fact_check.corrected_items=[];
+    cleanRecoveryCtx.fact_check.warnings=[];
+    cleanRecoveryCtx.fact_check.fact_check_quality.recovered_items_count=2;
+    const cleanRecovery=store(cleanRecoveryCtx);
     const manual=store(make({decisions:['PASS','MANUAL_REVIEW','PASS']}));
     const failedDecision=store(make({decisions:['PASS','FAIL','PASS']}));
     const missingFactCtx=make();delete missingFactCtx.fact_check;const missingFact=store(missingFactCtx);
@@ -3373,7 +3380,7 @@ test("Conversation Store v1 собирает только verified данные 
     let downstreamRan=false;CODE_FUNCS.storeDownstreamMarker=()=>{downstreamRan=true;return {output:{ran:true},status:'ok',metrics:[],checks:[]}};
     const originalPipeline=pipeline;pipeline=[{id:'store-stage',enabled:true,type:'code',name:'Conversation Store',codeFn:'conversationStore',outKey:'conversation_store'},{id:'store-marker',enabled:true,type:'code',name:'Маркер downstream',codeFn:'storeDownstreamMarker',outKey:'marker'}];renderStages();document.getElementById('transcript').value='Клиент: Тест';await runPipeline();
     const pipelineStop={downstreamRan,marker:ctx.marker,conversation_store:ctx.conversation_store};pipeline=originalPipeline;renderStages();delete CODE_FUNCS.storeDownstreamMarker;
-    return {ready,warnings,manual,failedDecision,missingFact,failed,filtered,brokenQuote,brokenRequirement,brokenPrimary,duplicate,stale,transcriptMismatch,pipelineMismatch,pii,noFundingEvidence,nullableNormalized,correctedQuestionRequirement,correctedFact,minimum,hashA:deterministicA.output.store_meta.conversation_store_hash,hashB:deterministicB.output.store_meta.conversation_store_hash,inputUnchanged:before===after,frozen:Object.isFrozen(ready.output)&&Object.isFrozen(ready.output.conversation.facts[0]),frozenValue,storedAfterMutation:ready.output.conversation.facts[0].value,empty,pipelineStop};
+    return {ready,warnings,cleanRecovery,manual,failedDecision,missingFact,failed,filtered,brokenQuote,brokenRequirement,brokenPrimary,duplicate,stale,transcriptMismatch,pipelineMismatch,pii,noFundingEvidence,nullableNormalized,correctedQuestionRequirement,correctedFact,minimum,hashA:deterministicA.output.store_meta.conversation_store_hash,hashB:deterministicB.output.store_meta.conversation_store_hash,inputUnchanged:before===after,frozen:Object.isFrozen(ready.output)&&Object.isFrozen(ready.output.conversation.facts[0]),frozenValue,storedAfterMutation:ready.output.conversation.facts[0].value,empty,pipelineStop};
   })()`));
 
   expect(result.ready.output).toMatchObject({ quality: { decision: "READY", overall_confidence: 0.91 }, store_meta: { schema_version: "conversation_store_v1", status: "READY" }, provenance: { run_id: "run_1", transcript_hash: "transcript_hash", pipeline_configuration_hash: "pipeline_hash", source_stage_ids: { fact_check: "run_1:01:stage", need_check: "run_1:02:stage", outcome_check: "run_1:03:stage" } } });
@@ -3382,6 +3389,7 @@ test("Conversation Store v1 собирает только verified данные 
   expect(JSON.stringify(result.ready.output.conversation)).not.toContain("fact_rejected");
   expect(JSON.stringify(result.ready.output.conversation)).not.toContain("Не сохранять");
   expect(result.warnings.output.quality.decision).toBe("READY_WITH_WARNINGS");
+  expect(result.cleanRecovery.output.quality.decision).toBe("READY");
   expect(result.manual.output.quality.decision).toBe("MANUAL_REVIEW");
   expect(result.failedDecision.output.quality.decision).toBe("MANUAL_REVIEW");
   expect(result.missingFact.output).toMatchObject({ quality: { decision: "DEPENDENCY_ERROR" }, errors: [{ code: "MISSING_DEPENDENCY", path: "ctx.fact_check" }] });
