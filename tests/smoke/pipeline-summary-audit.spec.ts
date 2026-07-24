@@ -3992,7 +3992,7 @@ test("production-вариативность восстанавливает ло�
       {id:'funding_source',verdict:'verified',reason:'Не указано.',confidence:.9,corrections:{}},
       {id:'purchase_term',verdict:'verified',reason:'Не указано.',confidence:.9,corrections:{}},
       ...needInput.requirements.map(item=>({id:item.id,verdict:item.type==='search_location'?'rejected':'verified',reason:item.type==='search_location'?'Капитолова не совпадает с Капитолово.':'Подтверждено.',confidence:.9,corrections:{}}))
-    ],overall_confidence:.9,warnings:[]},needInput);
+    ],overall_confidence:.9,warnings:['funding_source не определён в фактах','purchase_term не определён в фактах']},needInput);
     const needCheck=mergeNeedCheckV2({hardFail:false,criteria:[]},needJudge,null,needInput,{fact_check:{verified_facts:[locationFact,areaFact]}});
     const outcomeInput=normalizeOutcomeSemantics({
       call_results:[],
