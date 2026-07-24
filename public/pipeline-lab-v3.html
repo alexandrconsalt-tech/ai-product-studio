@@ -7222,6 +7222,7 @@ function agentUtilityHasClearNextStep(ctx){
 function agentUtilityOutOfScopeProblem(item){
   const type=String(item&&item.type||''),text=moduleSummaryNorm(JSON.stringify(item||{}));
   if(AGENT_UTILITY_OUT_OF_SCOPE_TYPES.has(type)||/(hallucin|fact.distortion|money|number.error|role.confusion|quote.distortion|quote.not.verified|agreement.not.confirmed|invented|pii|json|schema|limit.error|format.error)/.test(type)) return true;
+  if(['crm_data_without_working_context','fragmented_information','difficult_to_scan','unclear_client_situation'].includes(type)&&/(?:key.?facts?.*(?:пуст|отсутств)|(?:пуст|отсутств).*key.?facts?|машинн.*обработ)/.test(text)) return true;
   if(/(?:телефон|номер телефона|адрес|цена объекта|стоимость объекта|площад|этаж|комнатност|имя агента|имя клиента).*(?:не указан|отсутств|нужно добавить)|(?:не указан|отсутств|нужно добавить).*(?:телефон|адрес|цена объекта|площад|этаж|комнатност|имя)/.test(text)) return true;
   if(/достоверност|неверн.*(?:сумм|бюджет|роль)|дословност.*цитат|искажен.*цитат/.test(text)) return true;
   if(/(?:какой|точн|конкретн).{0,30}(?:видео|файл|url|ссылк|аккаунт)|(?:видео|файл|url|ссылк|аккаунт).{0,30}(?:какой|точн|конкретн)/.test(text)) return true;
