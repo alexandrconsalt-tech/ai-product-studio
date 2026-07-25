@@ -7787,8 +7787,17 @@ function validateFactExtractionRoot(value){
     factSchemaExpect(Array.isArray(quote.supports_fact_ids),path+'.supports_fact_ids','string[]',quote.supports_fact_ids);
     quote.supports_fact_ids.forEach((factId,factIndex)=>{
       factSchemaExpect(typeof factId==='string',path+'.supports_fact_ids['+factIndex+']','string',factId);
-      if(!factIds.has(factId)) throw new FactSchemaError(path+'.supports_fact_ids['+factIndex+']: unknown fact id "'+factId+'"');
     });
+    // Модель иногда оставляет в цитате ссылку на fact id, которого нет в facts[]
+    // (например, решила не включать факт в финальный ответ, но забыла убрать
+    // ссылку на него из уже написанной цитаты). Раньше любая такая висячая
+    // ссылка была SCHEMA_VALIDATION_FAILED и роняла весь этап извлечения фактов
+    // целиком (a значит и весь pipeline) без единой попытки восстановления,
+    // хотя сама цитата и остальные её ссылки корректны. Битую ссылку достаточно
+    // молча убрать из supports_fact_ids -- ни цитата, ни валидные факты не
+    // страдают; проверка "цитата ссылается только на существующие факты" при
+    // этом продолжает выполняться.
+    quote.supports_fact_ids=quote.supports_fact_ids.filter(factId=>factIds.has(factId));
     factSchemaExpect(typeof quote.confidence==='number'&&Number.isFinite(quote.confidence)&&quote.confidence>=0&&quote.confidence<=1,path+'.confidence','number from 0 to 1',quote.confidence);
     factSchemaExpect(quote.verification_status==='pending',path+'.verification_status','"pending"',quote.verification_status);
   });
