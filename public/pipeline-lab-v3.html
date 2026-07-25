@@ -6623,7 +6623,21 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       value.key_facts=value.key_facts.filter(item=>!/^нужно уточнить\b/i.test(String(item&&item.label||'').trim()));
       count+=beforeQuestions-value.key_facts.length;
     }
-    const budget=facts.find(fact=>/client_finance|budget_max|client_budget|бюджет|максимальн[а-яё]* цена/i.test(String(fact&&fact.category||'')+' '+String(fact&&fact.name||''))&&!/(цена в объявлении|цена объекта|object_information)/i.test(String(fact&&fact.category||'')+' '+String(fact&&fact.name||'')));
+    // category="client_finance" — широкая категория Fact Agent: под ней могут
+    // прийти и задаток/маткапитал/платёж по ипотеке (часто с normalized_value
+    // как boolean-флаг вида true/false), и собственно ценовой лимит клиента.
+    // Раньше сюда попадал ЛЮБОЙ client_finance-факт по одному лишь совпадению
+    // категории, а Number(true)===1 давало фиктивный "бюджет до 1 ₽" из
+    // факта вроде "получен задаток" — требуем реальную бюджетную семантику
+    // и настоящий числовой (не boolean/строковый) normalized_value.
+    const budgetSemantics=/бюджет|ценов[а-яё]*\s*предел|лимит|не\s*дороже|не\s*больше|максимальн[а-яё]*\s*(?:цена|сумма|бюджет)/i;
+    const budget=facts.find(fact=>{
+      const identity=String(fact&&fact.category||'')+' '+String(fact&&fact.name||'');
+      if(!/client_finance|budget_max|client_budget|бюджет|максимальн[а-яё]* цена/i.test(identity)) return false;
+      if(/(цена в объявлении|цена объекта|object_information)/i.test(identity)) return false;
+      if(typeof (fact&&fact.normalized_value)!=='number') return false;
+      return budgetSemantics.test(identity+' '+String(fact&&fact.value||'')+' '+String(fact&&fact.evidence||''));
+    });
     const budgetNumber=Number(budget&&budget.normalized_value);
     const budgetItem=value.key_facts.find(item=>/бюджет|ценов[а-яё]* предел/i.test(String(item&&item.label||'')));
     if(budgetItem&&Number.isFinite(budgetNumber)&&budgetNumber>0&&!/(?:₽|руб|млн|миллион|тыс)/i.test(String(budgetItem.value||''))){
@@ -6636,7 +6650,7 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
       else value.key_facts[0]={label:'Бюджет',value:normalizedBudget};
       count++;
     }
-    const landArea=facts.find(fact=>/минимальн[а-яё_ -]*(?:площад|размер)|minimum_land_area/i.test(String(fact&&fact.category||'')+' '+String(fact&&fact.name||''))&&/(?:сот|участ)/i.test(String(fact&&fact.name||'')+' '+String(fact&&fact.evidence||'')));
+    const landArea=facts.find(fact=>/минимальн[а-яё_ -]*(?:площад|размер)|minimum_land_area/i.test(String(fact&&fact.category||'')+' '+String(fact&&fact.name||''))&&/(?:сот|участ)/i.test(String(fact&&fact.name||'')+' '+String(fact&&fact.evidence||''))&&typeof fact.normalized_value==='number');
     const landAreaNumber=Number(landArea&&landArea.normalized_value);
     const landAreaItem=value.key_facts.find(item=>/минимальн[а-яё]* (?:площад|размер)|площад[а-яё]* участ/i.test(String(item&&item.label||'')));
     if(landAreaItem&&Number.isFinite(landAreaNumber)&&landAreaNumber>0&&!/(?:сот|га|м²|кв\.?\s*м)/i.test(String(landAreaItem.value||''))){
