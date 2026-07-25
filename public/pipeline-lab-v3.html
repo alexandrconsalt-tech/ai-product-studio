@@ -7827,15 +7827,38 @@ function factContainsPii(item){
   return /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(text);
 }
 
+// Клиентская реплика иногда разбивается транскрибацией на две последовательные
+// реплики одного спикера (пауза/самоперебивка, например "...на—" / новая реплика
+// "Клиент:" / "На накопительном..."). Модель, читая их как непрерывную мысль,
+// законно склеивает обе в одну evidence-строку с одним пробелом между ними —
+// но точный transcript.includes() тогда не находит совпадение, потому что в
+// исходном тексте между репликами стоит "\nКлиент:\n— ", а не пробел. Раньше
+// это приводило к молчаливому удалению факта целиком (см. NON_VERBATIM_EVIDENCE_REMOVED)
+// вместе с любой критической информацией в нём. buildTurnMergedTranscriptText
+// строит вариант транскрипции, где реплики склеены пробелом, а маркер "—"/"-"
+// в начале каждой реплики убран (как это выглядело бы в естественном тексте),
+// и используется как запасная проверка перед удалением факта/цитаты.
+function buildTurnMergedTranscriptText(transcript){
+  const turns=parseTranscriptTurns(transcript);
+  return turns.map(turn=>String(turn&&turn.text||'').replace(/^[—-]\s*/,'')).join(' ').replace(/\s+/g,' ').trim();
+}
+function transcriptContainsEvidence(transcript,mergedTranscript,evidence){
+  if(typeof evidence!=='string'||!evidence.trim()) return false;
+  if(transcript.includes(evidence)) return true;
+  const evidenceNormalized=evidence.replace(/\s+/g,' ').trim();
+  return Boolean(evidenceNormalized)&&mergedTranscript.includes(evidenceNormalized);
+}
+
 function applyFactExtractionPolicies(value,ctx){
   if(!value||typeof value!=='object'||Array.isArray(value)||!Array.isArray(value.facts)) return {value,warnings:[]};
   const transcript=String(transcriptText(ctx)||'');
+  const mergedTranscript=transcript?buildTurnMergedTranscriptText(transcript):'';
   const modelOutputFactCount=value.facts.length,modelOutputQuoteCount=Array.isArray(value.quotes)?value.quotes.length:0;
   let recoveredFactCount=0,recoveredQuoteCount=0;
   const removedIds=new Set(),warnings=[];
   const facts=value.facts.filter(item=>{
     if(factContainsPii(item)){removedIds.add(item&&item.id);warnings.push('PII_FACT_REMOVED');return false;}
-    if(transcript&&typeof item.evidence==='string'&&!transcript.includes(item.evidence)){removedIds.add(item&&item.id);warnings.push('NON_VERBATIM_EVIDENCE_REMOVED');return false;}
+    if(transcript&&typeof item.evidence==='string'&&!transcriptContainsEvidence(transcript,mergedTranscript,item.evidence)){removedIds.add(item&&item.id);warnings.push('NON_VERBATIM_EVIDENCE_REMOVED');return false;}
     return true;
   });
   if(transcript){
@@ -7853,7 +7876,7 @@ function applyFactExtractionPolicies(value,ctx){
   }
   const quotes=(Array.isArray(value.quotes)?value.quotes:[]).filter(item=>{
     if(factContainsPii(item)) return false;
-    if(transcript&&typeof item.text==='string'&&!transcript.includes(item.text)) return false;
+    if(transcript&&typeof item.text==='string'&&!transcriptContainsEvidence(transcript,mergedTranscript,item.text)) return false;
     return Array.isArray(item.supports_fact_ids)&&item.supports_fact_ids.every(id=>!removedIds.has(id));
   });
   const hasClientObjection=facts.some(item=>/client_objection|main_objection|возражен/i.test(String(item&&item.category||'')+' '+String(item&&item.name||'')));
