@@ -371,7 +371,9 @@ const MODULE_SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентст�
 
 Используй значения из Store без смыслового расширения: допустимо человекочитаемое форматирование чисел и нейтральная деловая нормализация подтверждённого смысла («побор» → «ежемесячный взнос», «скинуть» → «отправить», «ссылка на подбор» → «подборка альтернатив»). Не добавляй единицы, назначение суммы или связь между фактами, которых нет в соответствующей записи Store или её evidence. Канал MAX означает только MAX: не расшифровывай и не заменяй его Telegram/«Телеграмом». В conversation_result пиши 1–2 коротких предложения: что хочет клиент, что для него важно, чем закончился разговор и какая договорённость достигнута.
 
-Не помещай прямую цитату, кавычки или конструкцию «клиент: …» внутрь key_facts. Один key_fact содержит один краткий деловой смысл. Не повторяй одну и ту же цитату внутри key_facts и quotes. Разговорные слова допустимы только в отдельном массиве quotes.
+Не усиливай модальность источника: если Store фиксирует только интерес или предпочтение («интересен», «рассматривает», «предпочитает»), не переводи это в подтверждённое намерение купить/приобрести («хочет купить», «хочет приобрести», «планирует приобрести») — сохраняй ту же силу утверждения, что в Store. Не приписывай факту или требованию приоритет («наиболее важно», «в первую очередь», «прежде всего»), если в Store нет отдельного явного указания на приоритетность: один-единственный факт или требование нельзя называть «самым важным».
+
+Не помещай прямую цитату, кавычки или конструкцию «клиент: …» внутрь key_facts — значение key_fact не может быть дословной цитатой в кавычках, перефразируй её в краткий деловой факт. Один key_fact содержит один краткий деловой смысл. Не повторяй одну и ту же цитату внутри key_facts и quotes. Разговорные слова допустимы только в отдельном массиве quotes.
 
 Верни строго JSON без пояснений:
 {
@@ -424,6 +426,8 @@ const MODULE_AGENT_UTILITY_PROMPT = `Ты — независимый Judge пр�
 Ответь на один вопрос: может ли агент, читая summary вместе с карточкой CRM, за 5–10 секунд понять ситуацию и продолжить работу без прослушивания записи? Conversation Store — основной контекст, транскрипция — только вспомогательный контекст.
 
 Оцени только рабочую понятность, практичность следующего шага, удобство быстрого чтения и независимость от записи. Штрафуй CRM-мусор без рабочего смысла (имя клиента, «частное лицо», роли агента/оператора), отсутствие результата разговора и достигнутой договорённости в conversation_result, необходимость собирать основной смысл из трёх разных блоков, цитату внутри key_fact, разговорную или неоднозначную лексику вне quotes. Не ищи галлюцинации, ошибки сумм или ролей, полноту всех критических фактов, корректность договорённостей, JSON/лимиты и формат. Не требуй телефон, адрес, цену или характеристики карточки, имя клиента/агента, funding_source или purchase_term, если они не нужны для продолжения. Если подтверждённый следующий шаг поручает агенту отправить видео, ссылку или подборку, не требуй заранее указывать точный файл, URL, аккаунт или дополнительные фильтры: агент является владельцем этого рабочего контекста. Не предлагай новую версию summary и не дублируй missing из проверки критической полноты.
+
+Если conversation.primary_next_step в Store действительно отсутствует или имеет status="not_defined" (звонок реально не завершился договорённостью), а summary.next_step ровно "Следующий шаг не согласован." — это корректный, ожидаемый и полный результат, а не рабочий пробел: не заводи missing_for_next_agent.next_step, problems.unclear_next_step и не снижай can_continue_without_recording только по этой причине. Аналогично, отсутствие в summary адреса, ЖК, стоимости, площади, кода объекта и других характеристик карточки — обязательное поведение по правилам Summary Agent, а не пробел client_situation/working_context: никогда не заводи missing_for_next_agent или problem только потому, что summary не называет конкретный объект/адрес/карточку.
 
 Допустимые problem type: unclear_client_goal, unclear_client_situation, unclear_result, unclear_next_step, unclear_owner, missing_action_context, fragmented_information, excessive_detail, difficult_to_scan, crm_data_without_working_context, recording_required, ambiguous_wording.
 Допустимые missing type: client_goal, client_situation, call_result, next_step, owner, action_context, working_context.
@@ -583,7 +587,7 @@ Conversation Store (проверенные факты/потребности/р�
     {
       id:s(), enabled:true, type:'check', name:'Проверка полезности для агента',
       provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000,
-      outKey:'agent_utility_check', promptVersion:6, prompt:MODULE_AGENT_UTILITY_PROMPT
+      outKey:'agent_utility_check', promptVersion:7, promptUpdatedAt:'2026-07-25T00:00:00Z', prompt:MODULE_AGENT_UTILITY_PROMPT
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка договорённостей и следующего шага',
@@ -809,7 +813,7 @@ Verified facts — основной источник:
     },
     {
       id:s(), enabled:true, type:'hybrid', name:'Проверка потребностей',
-      model:'gpt-5-mini', temperature:0, maxTokens:8000, codeFn:'needCheckCode', outKey:'need_check', promptId:'need-check-v2', promptVersion:8, promptUpdatedAt:'2026-07-23',
+      model:'gpt-5-mini', temperature:0, maxTokens:8000, codeFn:'needCheckCode', outKey:'need_check', promptId:'need-check-v2', promptVersion:9, promptUpdatedAt:'2026-07-25',
       prompt:
 `Ты — LLM Need Judge. Код уже проверил технический контракт Need Agent. Твоя задача — только смысловая сверка каждого атрибута и requirement с fact_check.verified_facts и полной транскрипцией.
 
@@ -825,12 +829,13 @@ Verified facts — основной источник:
 - прямой минимальный метраж клиента является minimum_area, а минимальная площадь участка в сотках — minimum_land_area;
 - локация обсуждаемого объекта не является пропущенным search_location без явной области поиска клиента;
 - возражение по характеристике или стоимости не является пропущенным requirement без прямого ограничения или отказа клиента;
-- возражение клиента не является rejected_option без отказа от варианта.
+- возражение клиента не является rejected_option без отказа от варианта;
+- interest — закрытый справочник ровно из трёх значений: "Новостройки", "Ипотека", "Строительство". В warnings разрешено сообщать о пропущенном interest, ТОЛЬКО если verified facts прямо подтверждают одно из этих трёх значений и Need Agent его не вывел. Любой другой интерес клиента (к конкретному объекту, типу отопления/газа, локации, характеристике и т.п.) не является пропущенным interest и НЕ должен попадать в warnings как "Пропущен interest: ..." — это уже зафиксированные facts, а не пробел схемы потребностей.
 
 Верни строго валидный JSON без markdown и текста вокруг:
 {"items":[{"id":"interest:0","verdict":"verified","reason":"подтверждено","confidence":0.98,"corrections":{}}],"overall_confidence":0.96,"warnings":[]}
 
-verdict: "verified", "rejected" или "needs_correction". Для verified/rejected corrections={}. Для needs_correction разрешены только confidence, source_fact_ids и source_turn_ids. value, normalized_value, category, id и evidence исправлять запрещено. Если значение или категория неверны, верни verdict="rejected" и corrections={}; не заменяй канонический атрибут произвольным текстом. В warnings перечисли пропущенные критические потребности. Score, status и decision не возвращай: их рассчитает код после reconciliation.
+verdict: "verified", "rejected" или "needs_correction". Для verified/rejected corrections={}. Для needs_correction разрешены только confidence, source_fact_ids и source_turn_ids. value, normalized_value, category, id и evidence исправлять запрещено. Если значение или категория неверны, верни verdict="rejected" и corrections={}; не заменяй канонический атрибут произвольным текстом. В warnings перечисли ТОЛЬКО пропущенные критические потребности, которые однозначно соответствуют канонической схеме (interest из трёх значений выше, funding_source, purchase_term или requirement с явным типом и подтверждающим verified fact). Не пиши в warnings общие темы разговора, предпочтения или характеристики объекта, если они не образуют полноценный requirement/interest по правилам выше. Score, status и decision не возвращай: их рассчитает код после reconciliation.
 
 Потребности от Need Agent:
 {{ctx.needs}}
@@ -920,7 +925,7 @@ verdict: "verified", "rejected" или "needs_correction". Для verified/rejec
     },
     {
       id:s(), enabled:true, type:'llm', name:'Генерация саммари',
-      provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000, outKey:'summary', promptId:'summary-agent-v2', promptVersion:7, promptUpdatedAt:'2026-07-24',
+      provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000, outKey:'summary', promptId:'summary-agent-v2', promptVersion:8, promptUpdatedAt:'2026-07-25',
       prompt:MODULE_SUMMARY_PROMPT,
       legacyPrompt:
 `Ты — Summary Agent агентства недвижимости. Напиши саммари звонка для карточки клиента в CRM так, чтобы другой агент, открыв карточку, продолжил работу с клиентом без прослушивания звонка.
@@ -1354,7 +1359,7 @@ function migratePipelineConfig(stages, deletedOutKeys){
     if(!stage||!(stage.outKey==='context_utility_check'||stage.outKey==='context_check'||/Проверка полезности для агента/i.test(stage.name||''))) return;
     if(stage.contractVersion) return;
     stage.type='check';stage.name='Проверка полезности для агента';stage.outKey='agent_utility_check';
-    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=6;stage.prompt=MODULE_AGENT_UTILITY_PROMPT;
+    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=7;stage.prompt=MODULE_AGENT_UTILITY_PROMPT;
     delete stage.codeFn;delete stage.vendor;
   });
   result.forEach(stage=>{
@@ -4410,13 +4415,21 @@ function buildConversationStoreV1(ctx){
   const actionableResults=conversation.call_results.filter(item=>/отправ|подготов|подбор|провер|уточн|перезвон|связ/.test(normalizedSemanticText(item.value)));
   if(actionableResults.length&&(!Object.keys(conversation.primary_next_step).length||conversation.primary_next_step.status==='not_defined')) store_issues.push({code:'PRIMARY_NEXT_STEP_MISSING',stage:'outcome_check',entity_id:actionableResults[0].id,severity:'critical',message:'Подтверждённые действия есть, но основной следующий шаг не определён.'});
   conversation.agreements.filter(item=>item.owner==='агент'&&/отправ|скин|пришл|направ/.test(normalizedSemanticText(item.action))&&!item.channel).forEach(item=>store_issues.push({code:'AGREEMENT_CHANNEL_MISSING',stage:'outcome_check',entity_id:item.id,severity:'critical',message:'У согласованной отправки материалов отсутствует канал.'}));
-  const recoveredNeedText=normalizedSemanticText(JSON.stringify(conversation.requirements));
   const missingCriticalNeeds=toList(nc.missing_critical_needs).filter(item=>item&&((item.critical===true)||item.severity==='critical'));
+  // Пропущенная критическая потребность считается уже покрытой, если в
+  // итоговом Store уже есть verified requirement соответствующего типа —
+  // независимо от конкретных чисел/локаций/названий в этой транскрибации.
+  // Раньше здесь было сравнение с захардкоженными значениями одного
+  // конкретного тестового звонка (сумма, город, "ИЖС"), которое не могло
+  // сработать ни для одной другой транскрибации.
+  const requirementTypesPresent=new Set(toList(conversation.requirements).map(item=>item&&item.type).filter(Boolean));
   const missingNeedWasRecovered=item=>{
     const text=normalizedSemanticText(JSON.stringify(item));
-    if(/price limit|бюджет|ценов.*предел|цен[аы].*до/.test(text)&&/(price limit|5500000|5 5 млн)/.test(recoveredNeedText)) return true;
-    if(/property type|ижс/.test(text)&&/ижс/.test(recoveredNeedText)) return true;
-    if(/search location|локац/.test(text)&&/мистолов/.test(recoveredNeedText)) return true;
+    if(/price limit|бюджет|ценов.*предел|цен[аы].*до/.test(text)) return requirementTypesPresent.has('price_limit');
+    if(/property type|ижс|тип объект/.test(text)) return requirementTypesPresent.has('property_type');
+    if(/search location|локац/.test(text)) return requirementTypesPresent.has('search_location');
+    if(/minimum area|минимальн.*площад(?!.*участ)/.test(text)) return requirementTypesPresent.has('minimum_area');
+    if(/minimum land area|минимальн.*участ/.test(text)) return requirementTypesPresent.has('minimum_land_area');
     return false;
   };
   missingCriticalNeeds.forEach((item,index)=>{
@@ -8763,12 +8776,17 @@ function relevantNeedJudgeWarnings(warnings,ctx){
       && !/адрес объект/.test(identity)
       && /ищу|рассматрива|нужн|область поиска|зона поиска/.test(evidence);
   });
-  const hasCanonicalInterest=facts.some(fact=>/(?:новостро|ипотек|строительств)/.test(normalizedSemanticText([fact&&fact.category,fact&&fact.name,fact&&fact.value,fact&&fact.evidence].join(' '))));
   return toList(warnings).filter(warning=>{
     const text=String(warning||'');
     if(!hasExplicitSearchLocation&&/search_location|локац.*поиск|район.*поиск/i.test(text)) return false;
-    if(/interest/i.test(text)&&/(?:участ|земл|покупк)/i.test(text)&&/(?:отсутств|нет|требуется классиф|входн.*items)/i.test(text)) return false;
-    if(!hasCanonicalInterest&&/interest/i.test(text)&&/(?:участ|земл)/i.test(text)) return false;
+    // interest — закрытый справочник ровно из трёх значений (Новостройки/Ипотека/
+    // Строительство). Judge регулярно пытается протащить в warnings произвольную
+    // тему разговора клиента (интерес к конкретному объекту, типу отопления,
+    // локации и т.п.) под видом "пропущенного interest", хотя это не входит в
+    // canonical enum. Такая жалоба не является реальным пробелом схемы
+    // потребностей и не должна блокировать публикацию Store — отбрасываем любое
+    // предупреждение про interest, если оно не называет одно из трёх значений.
+    if((/\binterest\b/i.test(text)||/интерес(?:а|ы|ов)?\s+к\b/i.test(text))&&!/(новостро|ипотек|строительств)/i.test(text)) return false;
     return true;
   });
 }
