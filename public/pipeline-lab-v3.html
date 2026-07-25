@@ -7027,9 +7027,17 @@ function truthGroundingIssues(ctx){
     if(primary.status==='proposed'&&/(назначен|подтвержден|подтверждён|договорились)/i.test(next)) issues.push(truthCodeIssue('overstated_agreement','next_step',next,'Предложенный шаг представлен как подтверждённый.',nextEvidence));
     if(primary.status==='preliminary'&&/(назначен|confirmed|подтвержден|подтверждён|окончательно)/i.test(next)) issues.push(truthCodeIssue('overstated_agreement','next_step',next,'Предварительный шаг представлен как подтверждённый.',nextEvidence));
     if(['promised','proposed','preliminary'].includes(primary.status)&&/(отправил|подготовил|позвонил|уточнил|выполнил|провел|провёл)/i.test(next)) issues.push(truthCodeIssue('completed_instead_of_promised','next_step',next,'Будущее действие представлено как выполненное.',nextEvidence));
-    if(primary.owner==='агент'&&/(?:^|\s)клиент[^.]{0,50}(?:отправит|позвонит|подготовит|уточнит)/i.test(next)||primary.owner==='клиент'&&/(?:^|\s)агент[^.]{0,50}(?:отправит|позвонит|подготовит|уточнит)/i.test(next)) issues.push(truthCodeIssue('wrong_owner','next_step',next,'Указан неверный ответственный.',nextEvidence));
+    // (?![а-яё]) — иначе "клиент" ложно матчится внутри "клиенту"/"клиента"
+    // (дательный/родительный падеж, получатель действия, а не исполнитель) —
+    // та же защита, что уже стоит в actionCheck ниже (строка ~7484), просто
+    // здесь её не было.
+    if(primary.owner==='агент'&&/(?:^|\s)клиент(?:ка)?(?![а-яё])[^.;]{0,50}(?:отправит|позвонит|подготовит|уточнит)/i.test(next)||primary.owner==='клиент'&&/(?:^|\s)агент(?![а-яё])[^.;]{0,50}(?:отправит|позвонит|подготовит|уточнит)/i.test(next)) issues.push(truthCodeIssue('wrong_owner','next_step',next,'Указан неверный ответственный.',nextEvidence));
     const temporal=['сегодня','завтра','послезавтра','понедельник','вторник','среда','четверг','пятница','суббота','воскресенье'];
-    if(temporal.some(marker=>moduleSummaryNorm(next).includes(marker)&&!nextNorm.includes(marker))||(moduleSummaryNorm(next).match(/\b\d+(?:[ :.,]\d+)?\b/g)||[]).some(number=>!nextNorm.includes(number))) issues.push(truthCodeIssue('invented_deadline','next_step',next,'Срок отсутствует в Store/evidence.',nextEvidence));
+    // Числовая проверка ловит только время-подобные значения (например
+    // "18:30"), а не голые цифры — иначе маркеры нумерованного списка
+    // ("1)", "2)"), которые Summary Agent обязан использовать для
+    // multi-step next_step, ложно принимались за выдуманный дедлайн.
+    if(temporal.some(marker=>moduleSummaryNorm(next).includes(marker)&&!nextNorm.includes(marker))||(moduleSummaryNorm(next).match(/\b\d{1,2}[ :.]+\d{2}\b/g)||[]).some(value=>!nextNorm.includes(value))) issues.push(truthCodeIssue('invented_deadline','next_step',next,'Срок отсутствует в Store/evidence.',nextEvidence));
     const channels=['whatsapp','telegram','телефон','почт','email','e mail','max'],nextChannelNorm=normalizeChannelAliases(moduleSummaryNorm(next));
     if(channels.some(channel=>nextChannelNorm.includes(channel)&&!nextNorm.includes(channel))) issues.push(truthCodeIssue('invented_channel','next_step',next,'Канал отсутствует в Store/evidence.',nextEvidence));
   }
