@@ -25,6 +25,7 @@ type PlaygroundTestRunStore = Readonly<{
   getRuns: (projectId: string) => readonly PlaygroundTestRun[];
   refreshFromStorage: () => void;
   clearAll: () => void;
+  removeRuns: (runIds: ReadonlySet<string> | readonly string[]) => void;
 }>;
 
 function normalizeRunsByProjectId(value: unknown): Record<string, readonly PlaygroundTestRun[]> {
@@ -204,6 +205,17 @@ export const usePlaygroundTestRunStore = create<PlaygroundTestRunStore>()(
       getRuns: (projectId) => get().runsByProjectId[projectId] ?? [],
       refreshFromStorage: () => set((state) => ({ runsByProjectId: mergeRunsByProjectId(state.runsByProjectId, readPersistedRunsByProjectId()) })),
       clearAll: () => set({ runsByProjectId: {} }),
+      removeRuns: (runIds) => {
+        const idsToRemove = runIds instanceof Set ? runIds : new Set(runIds);
+        if (idsToRemove.size === 0) return;
+        set((state) => {
+          const next: Record<string, readonly PlaygroundTestRun[]> = {};
+          for (const [projectId, runs] of Object.entries(state.runsByProjectId)) {
+            next[projectId] = runs.filter((run) => !idsToRemove.has(run.id));
+          }
+          return { runsByProjectId: next };
+        });
+      },
     }),
     {
       name: STORAGE_KEY,

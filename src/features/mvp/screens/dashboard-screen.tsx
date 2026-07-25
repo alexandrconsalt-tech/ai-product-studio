@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, Download, Gauge, History, LineChart as LineChartIcon, Timer, Wallet, XCircle } from "lucide-react";
-import { Badge, Button, Card, Dialog, EmptyState, LineChart, Page, Section, SegmentedControl, Select, Status } from "@/shared/ui";
+import { AlertTriangle, CheckCircle2, Download, Gauge, History, LineChart as LineChartIcon, Timer, Trash2, Wallet, XCircle } from "lucide-react";
+import { Badge, Button, Card, Checkbox, Dialog, EmptyState, LineChart, Page, Section, SegmentedControl, Select, Status } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
 import { computeDashboardStats, scoreFromReportResult, scoreFromStageReport } from "@/shared/evaluation/playground-dashboard-analytics";
@@ -179,40 +179,91 @@ function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; on
 
 function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun[] }>) {
   const [selectedRun, setSelectedRun] = React.useState<PlaygroundTestRun | null>(null);
+  const [selectedIds, setSelectedIds] = React.useState<ReadonlySet<string>>(new Set());
+  const removeRuns = usePlaygroundTestRunStore((state) => state.removeRuns);
+
+  // Deleted/filtered runs shouldn't leave stale ids selected across re-renders.
+  React.useEffect(() => {
+    const visibleIds = new Set(runs.map((run) => run.id));
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [runs]);
+
+  function toggleRun(runId: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+  }
+
+  const allVisibleSelected = runs.length > 0 && runs.every((run) => selectedIds.has(run.id));
+
+  function toggleSelectAll() {
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(runs.map((run) => run.id)));
+  }
+
+  function handleDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Удалить выбранные запуски (${selectedIds.size})? Это действие необратимо.`)) return;
+    removeRuns(selectedIds);
+    if (selectedRun && selectedIds.has(selectedRun.id)) setSelectedRun(null);
+    setSelectedIds(new Set());
+  }
 
   return (
     <Section>
-      <div className="flex items-center gap-2">
-        <History className="size-4 text-text-muted" aria-hidden="true" />
-        <h2 className="text-lg font-semibold">История запусков</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <History className="size-4 text-text-muted" aria-hidden="true" />
+          <h2 className="text-lg font-semibold">История запусков</h2>
+        </div>
+        {selectedIds.size > 0 ? (
+          <Button variant="danger" size="sm" onClick={handleDeleteSelected}>
+            <Trash2 className="size-4" aria-hidden="true" />
+            Удалить выбранные ({selectedIds.size})
+          </Button>
+        ) : null}
       </div>
-      <p className="text-sm text-text-muted">Нажмите на запуск, чтобы посмотреть его полный результат.</p>
+      <div className="flex items-center gap-2 text-sm text-text-muted">
+        <Checkbox checked={allVisibleSelected} onChange={toggleSelectAll} aria-label="Выбрать все запуски в списке" />
+        <span>Выбрать все</span>
+        <span className="text-text-muted">· Нажмите на строку, чтобы посмотреть её полный результат.</span>
+      </div>
       <div className="grid gap-2">
         {runs.map((run) => (
-          <button
+          <div
             key={run.id}
-            type="button"
-            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
-            onClick={() => setSelectedRun(run)}
+            className="grid grid-cols-[auto_1fr_1fr] items-center gap-2 rounded-lg border border-border bg-surface p-3 text-sm hover:bg-hover md:grid-cols-[auto_1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
           >
-            <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
-            <span className="truncate text-text-muted">{runProductLabel(run)}</span>
-            <span className="flex items-center gap-1">
-              {run.status === "succeeded" ? <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" /> : <XCircle className="size-3.5 text-error" aria-hidden="true" />}
-              {run.status === "succeeded" ? "успешно" : "с ошибкой"}
-            </span>
-            <span>{formatUsd(run.costUsd)}</span>
-            <span>{formatMs(run.durationMs)}</span>
-            <span>{run.qualityScore !== undefined ? `SQS ${Math.round(run.qualityScore)}%` : "—"}</span>
-            <span className="truncate">{run.decision ?? "—"}</span>
-            <span>{scoreFromReportResult(run.report, "truth_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "truth_check")!)}%` : "—"}</span>
-            <span>{scoreFromReportResult(run.report, "critical_facts_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "critical_facts_check")!)}%` : "—"}</span>
-            <span>{scoreFromReportResult(run.report, "context_utility_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "context_utility_check")!)}%` : "—"}</span>
-            <span>{scoreFromReportResult(run.report, "action_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "action_check")!)}%` : "—"}</span>
-            <span>{scoreFromReportResult(run.report, "presentation_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "presentation_check")!)}%` : "—"}</span>
-            <span className="truncate text-text-muted">{failedStage(run.report)}</span>
-            <span className="truncate text-text-muted">{mainIssue(run.report)}</span>
-          </button>
+            <Checkbox
+              checked={selectedIds.has(run.id)}
+              onChange={() => toggleRun(run.id)}
+              aria-label={`Выбрать запуск от ${formatDateTime(run.finishedAt)}`}
+            />
+            <button type="button" className="contents text-left" onClick={() => setSelectedRun(run)}>
+              <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
+              <span className="truncate text-text-muted">{runProductLabel(run)}</span>
+              <span className="flex items-center gap-1">
+                {run.status === "succeeded" ? <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" /> : <XCircle className="size-3.5 text-error" aria-hidden="true" />}
+                {run.status === "succeeded" ? "успешно" : "с ошибкой"}
+              </span>
+              <span>{formatUsd(run.costUsd)}</span>
+              <span>{formatMs(run.durationMs)}</span>
+              <span>{run.qualityScore !== undefined ? `SQS ${Math.round(run.qualityScore)}%` : "—"}</span>
+              <span className="truncate">{run.decision ?? "—"}</span>
+              <span>{scoreFromReportResult(run.report, "truth_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "truth_check")!)}%` : "—"}</span>
+              <span>{scoreFromReportResult(run.report, "critical_facts_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "critical_facts_check")!)}%` : "—"}</span>
+              <span>{scoreFromReportResult(run.report, "context_utility_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "context_utility_check")!)}%` : "—"}</span>
+              <span>{scoreFromReportResult(run.report, "action_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "action_check")!)}%` : "—"}</span>
+              <span>{scoreFromReportResult(run.report, "presentation_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "presentation_check")!)}%` : "—"}</span>
+              <span className="truncate text-text-muted">{failedStage(run.report)}</span>
+              <span className="truncate text-text-muted">{mainIssue(run.report)}</span>
+            </button>
+          </div>
         ))}
       </div>
       {selectedRun ? <RunDetailDialog run={selectedRun} onClose={() => setSelectedRun(null)} /> : null}
