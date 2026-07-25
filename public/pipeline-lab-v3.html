@@ -6483,6 +6483,18 @@ function moduleSummaryTokens(value){
   const stop=new Set(['для','или','это','как','что','при','без','есть','был','была','будет','клиент','агент','итог','разговор','следующий','шаг']);
   return moduleSummaryNorm(value).split(' ').filter(token=>token.length>2&&!stop.has(token));
 }
+// Русская морфология меняет хвост слова в зависимости от падежа/числа
+// ("апартаменты" -> "апартаментов", "управляющая" -> "управляющей"), поэтому
+// точное сравнение токенов ложно не находит грамматически изменённую форму
+// того же слова. Корень почти всегда лежит в первых 4-6 буквах — сравниваем
+// по общему префиксу заданной длины вместо точного совпадения токена.
+function moduleSummarySameRoot(a,b){
+  if(a===b) return true;
+  const len=Math.min(a.length,b.length);
+  if(len<4) return false;
+  const shared=Math.min(len,6);
+  return a.slice(0,shared)===b.slice(0,shared);
+}
 function moduleSummaryStoreText(store){
   const conversation=store&&store.conversation||{};
   return JSON.stringify(conversation);
@@ -6985,8 +6997,14 @@ function truthGroundingIssues(ctx){
   const summary=ctx.summary,conversation=ctx.conversation_store.conversation,transcript=String(transcriptText(ctx)||''),issues=[];
   const sources=[...(conversation.facts||[]),...(conversation.requirements||[]),...Object.values(conversation.attributes||{}).flatMap(item=>Array.isArray(item)?item:[item]).filter(Boolean)];
   const sourceNorms=sources.map(source=>({source,norm:moduleSummaryNorm(JSON.stringify(source))}));
+  const storeUnionNorm=sourceNorms.map(entry=>entry.norm).join(' ');
   const transcriptNorm=moduleSummaryNorm(transcript);
-  const grounded=(text,norm)=>{const value=moduleSummaryNorm(text),tokens=moduleSummaryTokens(text),numbers=value.match(/\b\d+\b/g)||[];if(numbers.some(number=>!new RegExp('(?:^|\\s)'+number+'(?:$|\\s)').test(norm))) return false;if(value&&norm.includes(value)) return true;return Boolean(tokens.length&&tokens.filter(token=>norm.includes(token)).length/tokens.length>=.6);};
+  const grounded=(text,norm)=>{
+    const value=moduleSummaryNorm(text),tokens=moduleSummaryTokens(text),normTokens=moduleSummaryTokens(norm),numbers=value.match(/\b\d+\b/g)||[];
+    if(numbers.some(number=>!new RegExp('(?:^|\\s)'+number+'(?:$|\\s)').test(norm))) return false;
+    if(value&&norm.includes(value)) return true;
+    return Boolean(tokens.length&&tokens.filter(token=>norm.includes(token)||normTokens.some(normToken=>moduleSummarySameRoot(token,normToken))).length/tokens.length>=.6);
+  };
   summary.key_facts.forEach((item,index)=>{
     const path='key_facts['+index+']',matching=sourceNorms.filter(entry=>grounded(item.value,entry.norm));
     const hasNumber=/\d/.test(item.value),isBudget=/бюджет/i.test(item.label);
@@ -6998,6 +7016,13 @@ function truthGroundingIssues(ctx){
       if(matching.length&&!budgetMatch){issues.push(truthCodeIssue('money_or_number_error',path,item.value,'Цена объекта или иное число выдано за бюджет.',JSON.stringify(matching[0].source)));return;}
     }
     if(!matching.length){
+      // Пункт key_facts может законно объединять несколько отдельных verified
+      // фактов (например, несколько незакрытых вопросов клиента в одном
+      // пункте). Проверка по одному source не находит совпадения для такой
+      // комбинации, хотя каждая часть по отдельности подтверждена — разрешаем
+      // объединённое подтверждение по всему Store целиком, как в
+      // moduleSummaryGrounding.
+      if(grounded(item.value,storeUnionNorm)) return;
       if(grounded(item.value,transcriptNorm)) issues.push(truthCodeIssue('fact_not_in_store',path,item.value,'Факт подтверждён транскрипцией, но отсутствует в Conversation Store.',item.value));
       else issues.push(truthCodeIssue(hasNumber?'money_or_number_error':'hallucination',path,item.value,hasNumber?'Числовое значение не совпадает с Conversation Store.':'Факт отсутствует в Store и транскрипции.',sourceNorms[0]?JSON.stringify(sourceNorms[0].source):transcript.slice(0,120)||'Conversation Store'));
       return;
@@ -7618,7 +7643,11 @@ function presentationCodeIssues(summary){
   if(metrics.total_characters>1200) issues.push(presentationIssue('excessive_length','root',fallback,'Общий объём пользовательского текста превышает 1200 символов.'));
   summary.key_facts.forEach((item,index)=>{
     if(!item.label.trim()||!item.value.trim()) issues.push(presentationIssue('empty_required_field','key_facts['+index+']',item.value||item.label||fallback,'label и value должны быть непустыми.'));
-    if(/[«»"]/.test(item.value)||/\([^)]{20,}\)/.test(item.value)||/(?:^|\b)клиент\s*:/i.test(item.label+' '+item.value)) issues.push(presentationIssue('mixed_meanings_in_key_fact','key_facts['+index+']',item.value||item.label,'Key fact смешивает рабочее значение с цитатой, карточкой клиента или длинным пояснением.'));
+    // Короткое название в кавычках-ёлочках (ЖК «Технопарк», ЖК «Ботаника») —
+    // обычная деловая нотация, а не встроенная цитата клиента. Флагуем
+    // только протяжённый текст в кавычках (полноценная фраза), который
+    // реально похож на вклеенную цитату.
+    if(/[«"][^»"]{15,}[»"]/.test(item.value)||/\([^)]{20,}\)/.test(item.value)||/(?:^|\b)клиент\s*:/i.test(item.label+' '+item.value)) issues.push(presentationIssue('mixed_meanings_in_key_fact','key_facts['+index+']',item.value||item.label,'Key fact смешивает рабочее значение с цитатой, карточкой клиента или длинным пояснением.'));
     if(summary.quotes.some(quote=>moduleSummaryNorm(item.value).includes(moduleSummaryNorm(quote)))) issues.push(presentationIssue('semantic_repetition','key_facts['+index+']',item.value,'Цитата повторена внутри key_facts и отдельного блока quotes.'));
     if(/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(item.value)) issues.push(presentationIssue('unclear_wording','key_facts['+index+']',item.value,'Разговорную формулировку вне цитаты нужно заменить нейтральной.'));
   });
