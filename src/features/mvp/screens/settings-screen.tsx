@@ -4,6 +4,8 @@ import * as React from "react";
 import { KeyRound } from "lucide-react";
 import { Alert, Badge, Button, Card, Input, Page, Section, Select } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
+import { usePlaygroundTestRunStore } from "@/shared/stores/playground-test-run-store";
+import { clearRunsAndReviews } from "@/features/summary-review/storage";
 import {
   clearAnthropicApiKey,
   clearAiTunnelApiKey,
@@ -200,6 +202,15 @@ function ApiKeysSection() {
 
 export function SettingsScreen() {
   const { reset } = useRepositoryStore();
+  const clearPlaygroundRuns = usePlaygroundTestRunStore((state) => state.clearAll);
+
+  function handleClearRunHistory() {
+    if (!window.confirm("Очистить историю запусков, Дашборд, Оценку саммари и Отчёт саммари? Это удалит только историю тестов и оценок в этом браузере — API-ключи и настройки pipeline не затронуты. Действие необратимо.")) return;
+    clearPlaygroundRuns();
+    clearRunsAndReviews();
+    window.location.reload();
+  }
+
   return (
     <Page>
       <div>
@@ -230,6 +241,17 @@ export function SettingsScreen() {
           <h2 className="text-lg font-semibold">Данные</h2>
           <p className="text-sm text-text-muted">MVP использует Local Storage Repository. Можно сбросить данные к Demo Project.</p>
           <Button className="w-fit" onClick={reset}>Сбросить Demo Repository</Button>
+        </Card>
+      </Section>
+
+      <Section>
+        <Card className="grid max-w-2xl gap-2">
+          <h2 className="text-lg font-semibold">История запусков и оценки</h2>
+          <p className="text-sm text-text-muted">
+            Очищает накопленную историю тестовых запусков и оценки в Дашборде, Оценке саммари, Отчёте саммари и Истории запусков — например,
+            перед новой серией тестов после изменения промптов. API-ключи, настройки Pipeline Lab v3 и сам Demo Repository не затрагиваются.
+          </p>
+          <Button className="w-fit" variant="secondary" onClick={handleClearRunHistory}>Очистить историю запусков и оценки</Button>
         </Card>
       </Section>
     </Page>

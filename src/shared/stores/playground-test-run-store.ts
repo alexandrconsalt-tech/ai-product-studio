@@ -24,6 +24,7 @@ type PlaygroundTestRunStore = Readonly<{
   recordRun: (run: PlaygroundTestRun) => void;
   getRuns: (projectId: string) => readonly PlaygroundTestRun[];
   refreshFromStorage: () => void;
+  clearAll: () => void;
 }>;
 
 function normalizeRunsByProjectId(value: unknown): Record<string, readonly PlaygroundTestRun[]> {
@@ -202,6 +203,7 @@ export const usePlaygroundTestRunStore = create<PlaygroundTestRunStore>()(
         }),
       getRuns: (projectId) => get().runsByProjectId[projectId] ?? [],
       refreshFromStorage: () => set((state) => ({ runsByProjectId: mergeRunsByProjectId(state.runsByProjectId, readPersistedRunsByProjectId()) })),
+      clearAll: () => set({ runsByProjectId: {} }),
     }),
     {
       name: STORAGE_KEY,

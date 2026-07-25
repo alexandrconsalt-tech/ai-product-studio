@@ -91,6 +91,12 @@ export function getReviews(): HumanReview[] {
   return readJson<HumanReview[]>(REVIEWS_KEY, []);
 }
 
+export function clearRunsAndReviews() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(RUNS_KEY);
+  window.localStorage.removeItem(REVIEWS_KEY);
+}
+
 export function saveRun(run: SummaryRun) {
   const runs = getRuns();
   const next = [compactRun(run), ...runs.filter((item) => item.id !== run.id).map(compactRun)];
