@@ -8044,7 +8044,17 @@ function reconciliationQuality(reconciled,total,finalAccepted,missingCritical){
   const finalValidity=total?finalAccepted/total:1;
   const correctionRatio=total?corrected/total:0;
   const reconciliationSuccess=corrected+rejected?corrected/(corrected+rejected):1;
-  const decision=missingCritical||rejected?'REVIEW_REQUIRED':correctionRatio>.1?'PASS_WITH_CORRECTIONS':'PASS';
+  // Отклонённый пункт — это Judge ПОЙМАЛ и корректно исключил ошибку Agent'а
+  // до того, как она попала в Store; это штатная, ожидаемая работа
+  // reconciliation-слоя, а не признак ненадёжного результата. Раньше ЛЮБОЕ
+  // (даже одно из многих) отклонение безусловно форсировало REVIEW_REQUIRED
+  // и через это — MANUAL_REVIEW всего Store, хотя итоговые (уже
+  // отреконсиленные) данные проходили все нижестоящие проверки на 100%.
+  // Порог сделан пропорциональным по той же логике, что уже применяется к
+  // correctionRatio: явный, объёмный процент отклонений — повод для ручной
+  // проверки; единичное отклонение среди многих пунктов — нет.
+  const rejectionRatio=total?rejected/total:0;
+  const decision=missingCritical||rejectionRatio>.2?'REVIEW_REQUIRED':(correctionRatio>.1||rejected)?'PASS_WITH_CORRECTIONS':'PASS';
   return {
     semantic_accuracy_score:+finalValidity.toFixed(3),
     first_pass_accuracy_score:+firstPass.toFixed(3),
