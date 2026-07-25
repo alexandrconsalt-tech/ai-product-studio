@@ -6924,7 +6924,10 @@ function validateTruthIssue(issue,path,ctx){
   if(!Object.prototype.hasOwnProperty.call(TRUTH_ISSUE_PENALTIES,issue.type)) truthFail(path+'.type','unknown issue type '+JSON.stringify(issue.type));
   ['field','summary_fragment','problem','evidence'].forEach(key=>truthString(issue[key],path+'.'+key,{required:true}));
   const summaryNorm=moduleSummaryNorm(truthSummaryText(ctx.summary)),fragmentNorm=moduleSummaryNorm(issue.summary_fragment);
-  if(!fragmentNorm||!summaryNorm.includes(fragmentNorm)) truthFail(path+'.summary_fragment','fragment is absent from summary');
+  if(!fragmentNorm||!summaryNorm.includes(fragmentNorm)){
+    if(/^\s*[\[{]/.test(issue.summary_fragment)||/["'](?:label|value|conversation_result|key_facts|next_step)["']\s*:/.test(issue.summary_fragment)) return null;
+    truthFail(path+'.summary_fragment','fragment is absent from summary');
+  }
   const primary=verifiedCallResultPrimaryNextStep(ctx&&ctx.conversation_store&&ctx.conversation_store.conversation||{});
   if(['next_step_error','agreement_not_confirmed'].includes(issue.type)&&(!primary.action||primary.status==='not_defined')&&/(?:не|нет)\s+(?:согласован|согласованного|определен|определён)/i.test(ctx.summary.next_step)) return null;
   const evidenceNorm=moduleSummaryNorm(issue.evidence);
