@@ -22,6 +22,51 @@
 import { z } from "zod";
 import { callModelByName, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
 
+// ── Lenient parsing helpers ──
+// Real model output is occasionally "almost right" (a score as "4" instead
+// of 4, a boolean as "true", an enum value translated/mis-cased, a
+// discriminator field omitted) -- with plain Zod that invalidates the
+// *entire* stage and produces a TECHNICAL_ERROR over what is otherwise a
+// perfectly usable response. Every field built with these helpers instead
+// falls back to a safe default and lets the rest of the object through.
+// Fields that actually drive scoring math (Quality Gate raw_score) are
+// still range-clamped, never silently zeroed.
+
+function looseConfidence(fallback: number) {
+  return z.preprocess((value) => {
+    const n = typeof value === "string" ? Number(value) : value;
+    return typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback;
+  }, z.number());
+}
+
+function looseNullableNumber() {
+  return z.preprocess((value) => {
+    if (value === null || value === undefined) return value;
+    const n = typeof value === "string" ? Number(value) : value;
+    return typeof n === "number" && Number.isFinite(n) ? n : null;
+  }, z.number().nullable().optional());
+}
+
+function looseBool(fallback: boolean) {
+  return z.preprocess((value) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") return value.trim().toLowerCase() === "true";
+    return fallback;
+  }, z.boolean());
+}
+
+/** Like the others, but preserves the strict literal-union TS type (via z.enum) for downstream consumers like CALL_SUMMARY_ERROR_LABELS[...] -- only the runtime *validation* is lenient. */
+function looseEnum<T extends readonly [string, ...string[]]>(values: T, fallback: T[number]) {
+  return z.preprocess((value) => ((values as readonly string[]).includes(value as string) ? value : fallback), z.enum(values));
+}
+
+function looseScore04(fallback: number) {
+  return z.preprocess((value) => {
+    const n = typeof value === "string" ? Number(value) : value;
+    return typeof n === "number" && Number.isFinite(n) ? Math.min(4, Math.max(0, Math.round(n))) : fallback;
+  }, z.number().int().min(0).max(4));
+}
+
 // ── Error taxonomy (spec §17) -- shared by the AI judge and the human evaluation form ──
 
 export const CALL_SUMMARY_ERROR_TYPES = [
@@ -57,33 +102,33 @@ export const CALL_SUMMARY_ERROR_LABELS: Record<CallSummaryErrorType, string> = {
 
 // ── Stage 1: Facts & Quotes (spec §2) ──
 
-const EvidenceSchema = z.object({ turn_id: z.number().optional(), quote: z.string() });
+const EvidenceSchema = z.object({ turn_id: z.number().optional(), quote: z.string().catch("") });
 
 const FactSchema = z.object({
-  id: z.string(),
-  category: z.string(),
+  id: z.string().catch(""),
+  category: z.string().catch(""),
   value: z.unknown().optional(),
-  normalized_text: z.string(),
+  normalized_text: z.string().catch(""),
   speaker: z.string().optional(),
-  evidence: z.array(EvidenceSchema).default([]),
-  confidence: z.number().min(0).max(1),
-  status: z.enum(["confirmed", "assumed", "conflict", "not_found"]).default("confirmed"),
+  evidence: z.array(EvidenceSchema).catch([]),
+  confidence: looseConfidence(0.8),
+  status: z.string().catch("confirmed"),
 });
 
 const QuoteSchema = z.object({
-  id: z.string(),
-  category: z.string(),
+  id: z.string().catch(""),
+  category: z.string().catch(""),
   speaker: z.string().optional(),
-  text: z.string(),
+  text: z.string().catch(""),
   turn_id: z.number().optional(),
-  importance: z.enum(["high", "medium", "low"]).default("medium"),
+  importance: z.string().catch("medium"),
 });
 
 export const FactsQuotesSchema = z.object({
-  facts: z.array(FactSchema).default([]),
-  quotes: z.array(QuoteSchema).default([]),
-  conflicts: z.array(z.object({ description: z.string(), values: z.array(z.unknown()).optional() })).default([]),
-  missing_critical_facts: z.array(z.string()).default([]),
+  facts: z.array(FactSchema).catch([]),
+  quotes: z.array(QuoteSchema).catch([]),
+  conflicts: z.array(z.object({ description: z.string().catch(""), values: z.array(z.unknown()).optional() })).catch([]),
+  missing_critical_facts: z.array(z.string()).catch([]),
 });
 export type FactsQuotes = z.infer<typeof FactsQuotesSchema>;
 
@@ -115,33 +160,43 @@ const FACTS_PROMPT = `Ты — аналитик, который извлекае
 // ── Stage 2: Needs (spec §3) ──
 
 export const NeedsSchema = z.object({
-  primary_need: z.object({
-    intent: z.string().optional(),
-    object_type: z.string().optional(),
-    purpose: z.string().optional(),
-    summary: z.string(),
-  }),
-  requirements: z.object({
-    locations: z.array(z.string()).default([]),
-    budget: z.object({ min: z.number().nullable().optional(), max: z.number().nullable().optional(), currency: z.string().optional() }).optional(),
-    object_parameters: z.array(z.object({ parameter: z.string(), operator: z.string().optional(), value: z.unknown(), unit: z.string().optional(), priority: z.enum(["must_have", "nice_to_have"]).optional() })).default([]),
-    preferences: z.array(z.string()).default([]),
-    limitations: z.array(z.string()).default([]),
-  }),
-  decision_context: z.object({
-    motivation: z.string().nullable().optional(),
-    purchase_timeline: z.string().optional(),
-    funding_source: z.string().optional(),
-    readiness: z.string().optional(),
-    decision_stage: z.string().optional(),
-  }),
-  canonical_attributes: z.object({
-    needs: z.array(z.string()).default([]),
-    funding_source: z.string().optional(),
-    purchase_timeline: z.string().optional(),
-  }),
-  evidence_links: z.array(z.string()).default([]),
-  confidence: z.number().min(0).max(1),
+  primary_need: z
+    .object({
+      intent: z.string().optional(),
+      object_type: z.string().optional(),
+      purpose: z.string().optional(),
+      summary: z.string().catch(""),
+    })
+    .catch({ summary: "" }),
+  requirements: z
+    .object({
+      locations: z.array(z.string()).catch([]),
+      budget: z.object({ min: looseNullableNumber(), max: looseNullableNumber(), currency: z.string().optional() }).optional().catch(undefined),
+      object_parameters: z
+        .array(z.object({ parameter: z.string().catch(""), operator: z.string().optional(), value: z.unknown(), unit: z.string().optional(), priority: z.string().optional() }))
+        .catch([]),
+      preferences: z.array(z.string()).catch([]),
+      limitations: z.array(z.string()).catch([]),
+    })
+    .catch({ locations: [], object_parameters: [], preferences: [], limitations: [] }),
+  decision_context: z
+    .object({
+      motivation: z.string().nullable().optional(),
+      purchase_timeline: z.string().optional(),
+      funding_source: z.string().optional(),
+      readiness: z.string().optional(),
+      decision_stage: z.string().optional(),
+    })
+    .catch({}),
+  canonical_attributes: z
+    .object({
+      needs: z.array(z.string()).catch([]),
+      funding_source: z.string().optional(),
+      purchase_timeline: z.string().optional(),
+    })
+    .catch({ needs: [] }),
+  evidence_links: z.array(z.string()).catch([]),
+  confidence: looseConfidence(0.7),
 });
 export type Needs = z.infer<typeof NeedsSchema>;
 
@@ -188,36 +243,46 @@ export const OUTCOME_TYPES = [
 ] as const;
 
 export const OutcomeSchema = z.object({
-  conversation_outcome: z.object({
-    type: z.enum(OUTCOME_TYPES),
-    summary: z.string(),
-    client_status: z.string().optional(),
-    resolved_questions: z.array(z.string()).default([]),
-    unresolved_questions: z.array(z.string()).default([]),
-  }),
+  conversation_outcome: z
+    .object({
+      // A plain, catch-all string rather than a strict OUTCOME_TYPES enum
+      // -- the prompt still asks the model for exactly one of those 10
+      // values (kept as guidance, not a hard gate), but a near-miss
+      // (wrong case, a synonym) should degrade to an unexpected label
+      // here, not blow up the entire stage.
+      type: z.string().catch("no_agreement"),
+      summary: z.string().catch(""),
+      client_status: z.string().optional(),
+      resolved_questions: z.array(z.string()).catch([]),
+      unresolved_questions: z.array(z.string()).catch([]),
+    })
+    .catch({ type: "no_agreement", summary: "", resolved_questions: [], unresolved_questions: [] }),
   agreements: z
     .array(
       z.object({
-        id: z.string(),
-        owner: z.enum(["agent", "client", "both"]),
-        action: z.string(),
-        deadline: z.object({ value: z.string().optional(), normalized: z.string().nullable().optional() }).optional(),
+        id: z.string().catch(""),
+        owner: z.string().catch("agent"),
+        action: z.string().catch(""),
+        deadline: z.object({ value: z.string().optional(), normalized: z.string().nullable().optional() }).optional().catch(undefined),
         channel: z.string().optional(),
-        status: z.enum(["agreed", "proposed", "rejected"]).default("agreed"),
-        evidence: EvidenceSchema.optional(),
+        status: z.string().catch("agreed"),
+        evidence: EvidenceSchema.optional().catch(undefined),
       }),
     )
-    .default([]),
-  next_step: z.object({
-    primary: z
-      .object({ owner: z.string().optional(), action: z.string().optional(), deadline: z.string().optional(), channel: z.string().optional() })
-      .nullable(),
-    client_commitment: z.string().nullable().optional(),
-    is_specific: z.boolean().default(false),
-    is_agreed: z.boolean().default(false),
-  }),
-  conversation_closed: z.boolean().default(false),
-  confidence: z.number().min(0).max(1),
+    .catch([]),
+  next_step: z
+    .object({
+      primary: z
+        .object({ owner: z.string().optional(), action: z.string().optional(), deadline: z.string().optional(), channel: z.string().optional() })
+        .nullable()
+        .catch(null),
+      client_commitment: z.string().nullable().optional(),
+      is_specific: looseBool(false),
+      is_agreed: looseBool(false),
+    })
+    .catch({ primary: null, is_specific: false, is_agreed: false }),
+  conversation_closed: looseBool(false),
+  confidence: looseConfidence(0.7),
 });
 export type Outcome = z.infer<typeof OutcomeSchema>;
 
@@ -248,23 +313,40 @@ const OUTCOME_PROMPT = `Ты определяешь итог звонка: че�
 
 // ── Stage 4: Summary Generator (spec §5-§8) ──
 
-export const SummarySchema = z.union([
-  z.object({
-    summary_status: z.literal("ok"),
-    conversation_result: z.string(),
-    key_facts: z.array(z.string()).max(4).default([]),
-    important_quotes: z.array(z.string()).max(2).default([]),
-    agreements_next_step: z.string(),
-  }),
-  z.object({
-    summary_status: z.literal("input_data_incomplete"),
-    missing_fact: z.object({ description: z.string(), turn_id: z.number().optional() }),
-    conversation_result: z.string().optional(),
-    key_facts: z.array(z.string()).max(4).default([]),
-    important_quotes: z.array(z.string()).max(2).default([]),
-    agreements_next_step: z.string().optional(),
-  }),
-]);
+function clampedStringArray(limit: number) {
+  return z
+    .array(z.unknown())
+    .optional()
+    .transform((arr) => (arr ?? []).slice(0, limit).map((item) => (typeof item === "string" ? item : JSON.stringify(item))));
+}
+
+const SummaryOkSchema = z.object({
+  summary_status: z.literal("ok"),
+  conversation_result: z.string().catch(""),
+  key_facts: clampedStringArray(4),
+  important_quotes: clampedStringArray(2),
+  agreements_next_step: z.string().catch(""),
+});
+const SummaryIncompleteSchema = z.object({
+  summary_status: z.literal("input_data_incomplete"),
+  missing_fact: z.object({ description: z.string().catch(""), turn_id: z.number().optional() }).catch({ description: "" }),
+  conversation_result: z.string().optional(),
+  key_facts: clampedStringArray(4),
+  important_quotes: clampedStringArray(2),
+  agreements_next_step: z.string().optional(),
+});
+
+// Only "input_data_incomplete" (the deliberate, narrow escape hatch from
+// spec §5) is treated as that branch; anything else -- including a
+// missing/mistyped/translated summary_status -- normalizes to "ok" before
+// validation, so a model that forgot the discriminator field entirely
+// still produces a usable summary instead of failing the whole stage.
+export const SummarySchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && (value as Record<string, unknown>).summary_status !== "input_data_incomplete") {
+    return { ...(value as Record<string, unknown>), summary_status: "ok" };
+  }
+  return value;
+}, z.union([SummaryOkSchema, SummaryIncompleteSchema]));
 export type Summary = z.infer<typeof SummarySchema>;
 
 const SUMMARY_PROMPT = `Ты формируешь короткое человеческое summary звонка для агента, который его не слушал.
@@ -322,7 +404,12 @@ export const CRITERION_LABELS: Record<CriterionKey, string> = {
 // иллюстративный пример из §13 приложенной спеки, где веса были 30/25/20/15/10).
 export const CRITERION_WEIGHT = 0.2;
 
-const CriterionRawSchema = z.object({ raw_score: z.number().int().min(0).max(4), comment: z.string().optional() });
+// A missing/malformed criterion here must never silently pass as a 4 --
+// that would inflate the score exactly where honesty matters most.
+// looseScore04's own fallback is deliberately 2 (a below-passing "existing
+// but weak" score), and a criterion whose sub-object is missing entirely
+// also lands on raw_score:2, not on a full parse failure.
+const CriterionRawSchema = z.object({ raw_score: looseScore04(2), comment: z.string().optional() }).catch({ raw_score: 2 });
 export const QualityScoresRawSchema = z.object({
   faithfulness: CriterionRawSchema,
   completeness: CriterionRawSchema,
@@ -333,15 +420,15 @@ export const QualityScoresRawSchema = z.object({
 export type QualityScoresRaw = z.infer<typeof QualityScoresRawSchema>;
 
 const QualityIssueSchema = z.object({
-  type: z.enum(CALL_SUMMARY_ERROR_TYPES),
-  critical: z.boolean().default(false),
+  type: looseEnum(CALL_SUMMARY_ERROR_TYPES, "FORMAT_VIOLATION"),
+  critical: looseBool(false),
   comment: z.string().optional(),
 });
 export type QualityIssue = z.infer<typeof QualityIssueSchema>;
 
 export const QualityJudgeRawSchema = z.object({
   scores: QualityScoresRawSchema,
-  issues: z.array(QualityIssueSchema).default([]),
+  issues: z.array(QualityIssueSchema).catch([]),
 });
 export type QualityJudgeRaw = z.infer<typeof QualityJudgeRawSchema>;
 
