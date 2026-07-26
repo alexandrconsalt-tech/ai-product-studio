@@ -369,6 +369,16 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
     });
   };
 
+  const setAllStageModels = (model: string) => {
+    setStages((current) => {
+      const next = current.map((stage) => ({ ...stage, model }));
+      saveStoredStages(productId, next);
+      return next;
+    });
+  };
+  const uniqueStageModels = new Set(stages.map((stage) => stage.model));
+  const uniformStageModel = uniqueStageModels.size === 1 ? stages[0]?.model ?? "" : "";
+
   const handleRun = async () => {
     setRunning(true);
     setRunError(null);
@@ -416,6 +426,20 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
       </Card>
 
       <Card className="grid gap-2">
+        <label className="grid gap-1 sm:max-w-xs">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-text-muted">Модель для всех этапов</span>
+          <Select
+            value={uniformStageModel}
+            onChange={(event) => setAllStageModels(event.target.value)}
+            aria-label="Выбрать модель для всех этапов"
+          >
+            {!uniformStageModel ? <option value="" disabled>Разные модели по этапам</option> : null}
+            {MODEL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </Select>
+          <span className="text-xs text-text-muted">Задаёт модель сразу для всех 5 этапов. Модель отдельного этапа можно переопределить в его карточке ниже.</span>
+        </label>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" onClick={handleRun} disabled={running || !transcript.trim()}>
             <Play className="size-4" aria-hidden="true" />

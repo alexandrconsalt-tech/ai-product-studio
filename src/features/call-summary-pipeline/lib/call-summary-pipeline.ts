@@ -763,46 +763,63 @@ export async function runCallSummaryPipeline(
   let retryCount = 0;
   let aiQualityReport: QualityReport | undefined;
 
+  // Separate from MAX_SUMMARY_ATTEMPTS below (which re-generates the
+  // summary when its *content* scores REGENERATE_SUMMARY) -- this covers
+  // plain transient call failures (a truncated/empty response, a dropped
+  // connection) on *any* stage, confirmed live: a real AI Tunnel call
+  // once returned valid-looking JSON cut off mid-string at character 113
+  // after 37s, with nothing content-wise wrong to regenerate against --
+  // just a bad call worth retrying once before surfacing TECHNICAL_ERROR.
+  const STAGE_TECHNICAL_RETRIES = 2;
+
   async function runStage(id: CallSummaryStageId, promptVars: Readonly<Record<string, string>>, attempt?: number): Promise<{ ok: boolean; parsed?: unknown }> {
     const stage = byId.get(id);
     if (!stage) return { ok: false };
-    const startedMs = Date.now();
-    setReport(id, { status: "running", attempt });
-    try {
-      const prompt = tmpl(stage.prompt, promptVars);
-      const text = await callModelByName(prompt, stage.model, { maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs });
-      const tokens = estimateTokens(prompt) + estimateTokens(text);
-      const cost = estimateCost(stage.model, tokens);
-      totalTokens += tokens;
-      totalCostUsd += cost;
 
-      const repair = repairAndParseJson(text);
-      if (!repair.ok) {
-        const preview = text.trim().slice(0, 200);
-        setReport(id, {
-          status: "bad",
-          error: `JSON не удалось разобрать: ${repair.error}. Ответ модели (первые 200 символов): «${preview}${text.trim().length > 200 ? "…" : ""}»`,
-          rawResponse: text,
-          attempt,
-          durationMs: Date.now() - startedMs,
-          tokens,
-          costUsd: cost,
-        });
-        return { ok: false };
+    let result: { ok: boolean; parsed?: unknown } = { ok: false };
+    for (let technicalTry = 1; technicalTry <= STAGE_TECHNICAL_RETRIES; technicalTry += 1) {
+      const startedMs = Date.now();
+      setReport(id, { status: "running", attempt });
+      const retrySuffix = technicalTry < STAGE_TECHNICAL_RETRIES ? " Повторяю вызов…" : "";
+      try {
+        const prompt = tmpl(stage.prompt, promptVars);
+        const text = await callModelByName(prompt, stage.model, { maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs });
+        const tokens = estimateTokens(prompt) + estimateTokens(text);
+        const cost = estimateCost(stage.model, tokens);
+        totalTokens += tokens;
+        totalCostUsd += cost;
+
+        const repair = repairAndParseJson(text);
+        if (!repair.ok) {
+          const preview = text.trim().slice(0, 200);
+          setReport(id, {
+            status: "bad",
+            error: `JSON не удалось разобрать: ${repair.error}. Ответ модели (первые 200 символов): «${preview}${text.trim().length > 200 ? "…" : ""}»${retrySuffix}`,
+            rawResponse: text,
+            attempt,
+            durationMs: Date.now() - startedMs,
+            tokens,
+            costUsd: cost,
+          });
+          result = { ok: false };
+          continue;
+        }
+        const schema = STAGE_SCHEMAS[id];
+        const validated = schema.safeParse(repair.value);
+        if (!validated.success) {
+          const issues = validated.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+          setReport(id, { status: "bad", error: `Ответ не соответствует контракту этапа: ${issues}${retrySuffix}`, rawResponse: text, jsonRepaired: repair.repaired, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
+          result = { ok: false };
+          continue;
+        }
+        setReport(id, { status: "ok", output: validated.data, rawResponse: text, jsonRepaired: repair.repaired, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
+        return { ok: true, parsed: validated.data };
+      } catch (error) {
+        setReport(id, { status: "bad", error: `${errorMessage(error)}${retrySuffix}`, attempt, durationMs: Date.now() - startedMs });
+        result = { ok: false };
       }
-      const schema = STAGE_SCHEMAS[id];
-      const validated = schema.safeParse(repair.value);
-      if (!validated.success) {
-        const issues = validated.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
-        setReport(id, { status: "bad", error: `Ответ не соответствует контракту этапа: ${issues}`, rawResponse: text, jsonRepaired: repair.repaired, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
-        return { ok: false };
-      }
-      setReport(id, { status: "ok", output: validated.data, rawResponse: text, jsonRepaired: repair.repaired, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
-      return { ok: true, parsed: validated.data };
-    } catch (error) {
-      setReport(id, { status: "bad", error: errorMessage(error), attempt, durationMs: Date.now() - startedMs });
-      return { ok: false };
     }
+    return result;
   }
 
   const factsResult = await runStage("facts", { transcript });
