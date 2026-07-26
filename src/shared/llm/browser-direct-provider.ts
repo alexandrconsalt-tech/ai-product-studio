@@ -117,7 +117,7 @@ export function maskApiKey(key: string): string {
 
 type AnthropicTextBlock = Readonly<{ type: string; text?: string }>;
 
-async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_MODEL): Promise<string> {
+async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_MODEL, maxTokens: number = 2000): Promise<string> {
   const apiKey = loadAnthropicApiKey();
   if (!apiKey) throw new Error("Не задан API-ключ Anthropic — задайте его в разделе «Настройки».");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -128,7 +128,7 @@ async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_M
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
-    body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
@@ -141,13 +141,13 @@ async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_M
 // Same CORS constraint documented in src/app/api/openai-proxy/route.ts:
 // OpenAI does not send browser-CORS headers, so this goes through that
 // existing stateless relay instead of a direct fetch.
-async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL): Promise<string> {
+async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL, maxTokens?: number): Promise<string> {
   const apiKey = loadOpenAiApiKey();
   if (!apiKey) throw new Error("Не задан API-ключ OpenAI — задайте его в разделе «Настройки».");
   const res = await fetch("/api/openai-proxy", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey, model, prompt }),
+    body: JSON.stringify({ apiKey, model, prompt, ...(maxTokens ? { maxTokens } : {}) }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`OpenAI API ${res.status}${data?.error?.message ? `: ${data.error.message}` : ""}`);
@@ -275,14 +275,15 @@ export const MODEL_OPTIONS: readonly { value: string; label: string }[] = [
  * Pipeline Lab v3's own Check Agent defaults to Claude while the
  * Fact/Need/Outcome/Summary agents default to GPT-5 mini.
  */
-export async function callModelByName(prompt: string, model: string): Promise<string> {
+export async function callModelByName(prompt: string, model: string, options?: Readonly<{ maxTokens?: number }>): Promise<string> {
+  const maxTokens = options?.maxTokens;
   const selectedProvider = loadExplicitSelectedLlmProvider();
-  if (selectedProvider === "ai-tunnel") return callAiTunnel(prompt, model);
-  if (selectedProvider === "openai-direct") return callOpenAi(prompt, model);
-  if (selectedProvider === "anthropic-direct") return callAnthropic(prompt, model);
+  if (selectedProvider === "ai-tunnel") return callAiTunnel(prompt, model, 0.2, maxTokens ?? 2000);
+  if (selectedProvider === "openai-direct") return callOpenAi(prompt, model, maxTokens);
+  if (selectedProvider === "anthropic-direct") return callAnthropic(prompt, model, maxTokens);
   if (selectedProvider === "mock") return JSON.stringify({ mock: true, model, echo: prompt.slice(0, 200) });
   const vendor = MODEL_VENDOR[model] ?? "anthropic";
-  return vendor === "openai" ? callOpenAi(prompt, model) : callAnthropic(prompt, model);
+  return vendor === "openai" ? callOpenAi(prompt, model, maxTokens) : callAnthropic(prompt, model, maxTokens);
 }
 
 /** Same tolerant parsing Pipeline Lab v3's own parseJSON does (strips ```json fences, trims to the outer braces). */

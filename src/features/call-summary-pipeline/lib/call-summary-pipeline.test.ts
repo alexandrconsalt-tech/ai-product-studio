@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeQualityDecision, CRITERION_KEYS, type QualityIssue, type QualityScoresRaw } from "./call-summary-pipeline";
+import { computeQualityDecision, CRITERION_KEYS, defaultCallSummaryStages, stageStatChips, type QualityIssue, type QualityScoresRaw } from "./call-summary-pipeline";
 
 function scores(raw: Record<(typeof CRITERION_KEYS)[number], number>): QualityScoresRaw {
   return Object.fromEntries(CRITERION_KEYS.map((key) => [key, { raw_score: raw[key] }])) as QualityScoresRaw;
@@ -54,5 +54,52 @@ describe("computeQualityDecision", () => {
     const report = computeQualityDecision(scores({ faithfulness: 4, completeness: 4, usefulness: 4, agreements_next_step: 4, format: 4 }), []);
     expect(report.scores.agreements_next_step.raw_score).toBe(4);
     expect(report.scores.agreements_next_step.score).toBe(100);
+  });
+});
+
+describe("defaultCallSummaryStages", () => {
+  it("gives every stage a generous maxTokens budget so structured extraction output isn't silently truncated", () => {
+    for (const stage of defaultCallSummaryStages()) {
+      expect(stage.maxTokens).toBeGreaterThanOrEqual(2000);
+    }
+  });
+});
+
+describe("stageStatChips", () => {
+  it("returns nothing for a stage with no output yet", () => {
+    expect(stageStatChips("facts", undefined)).toEqual([]);
+  });
+
+  it("summarizes facts/quotes/conflicts counts for the facts stage", () => {
+    const chips = stageStatChips("facts", { facts: [{}, {}], quotes: [{}], conflicts: [], missing_critical_facts: ["purchase_timeline"] });
+    expect(chips).toEqual([
+      { label: "Фактов", value: "2" },
+      { label: "Цитат", value: "1" },
+      { label: "Конфликтов", value: "0" },
+      { label: "Не найдено", value: "1" },
+    ]);
+  });
+
+  it("summarizes the quality gate stage by running the same computeQualityDecision as the rest of the app", () => {
+    const chips = stageStatChips("quality_gate", {
+      scores: {
+        faithfulness: { raw_score: 4 },
+        completeness: { raw_score: 4 },
+        usefulness: { raw_score: 4 },
+        agreements_next_step: { raw_score: 4 },
+        format: { raw_score: 4 },
+      },
+      issues: [],
+    });
+    expect(chips).toEqual([
+      { label: "Итог", value: "100%" },
+      { label: "Решение", value: "PASS" },
+      { label: "Блокеров", value: "0" },
+    ]);
+  });
+
+  it("flags an incomplete summary instead of reading fields that don't exist on it", () => {
+    const chips = stageStatChips("summary", { summary_status: "input_data_incomplete", missing_fact: { description: "срок покупки не подтверждён в JSON" } });
+    expect(chips).toEqual([{ label: "Статус", value: "неполные данные" }]);
   });
 });

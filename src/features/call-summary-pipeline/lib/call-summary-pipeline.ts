@@ -432,15 +432,21 @@ export type CallSummaryStageConfig = Readonly<{
   model: string;
   prompt: string;
   outKey: string;
+  // Generous per-stage output budgets -- a real, messy call transcript
+  // needs real room for evidence-heavy structured JSON; the shared BYOK
+  // client's own default (2000) reliably truncates facts/needs/outcome
+  // output on non-trivial calls (confirmed live against AI Tunnel: a
+  // ~2.7k-character transcript produced a response cut off mid-JSON).
+  maxTokens: number;
 }>;
 
 export function defaultCallSummaryStages(): CallSummaryStageConfig[] {
   return [
-    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: "gpt-5-mini", prompt: FACTS_PROMPT, outKey: "facts" },
-    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: "gpt-5-mini", prompt: NEEDS_PROMPT, outKey: "needs" },
-    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: "gpt-5-mini", prompt: OUTCOME_PROMPT, outKey: "outcome" },
-    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: "gpt-5-mini", prompt: SUMMARY_PROMPT, outKey: "summary" },
-    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: "claude-sonnet-4.5", prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate" },
+    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: "gpt-5-mini", prompt: FACTS_PROMPT, outKey: "facts", maxTokens: 4000 },
+    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: "gpt-5-mini", prompt: NEEDS_PROMPT, outKey: "needs", maxTokens: 3000 },
+    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: "gpt-5-mini", prompt: OUTCOME_PROMPT, outKey: "outcome", maxTokens: 3000 },
+    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: "gpt-5-mini", prompt: SUMMARY_PROMPT, outKey: "summary", maxTokens: 2500 },
+    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: "claude-sonnet-4.5", prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate", maxTokens: 2500 },
   ];
 }
 
@@ -632,7 +638,7 @@ export async function runCallSummaryPipeline(
     setReport(id, { status: "running", attempt });
     try {
       const prompt = tmpl(stage.prompt, promptVars);
-      const text = await callModelByName(prompt, stage.model);
+      const text = await callModelByName(prompt, stage.model, { maxTokens: stage.maxTokens });
       const tokens = estimateTokens(prompt) + estimateTokens(text);
       const cost = estimateCost(stage.model, tokens);
       totalTokens += tokens;
@@ -710,5 +716,63 @@ export async function runCallSummaryPipeline(
       totalDurationMs: Date.now() - startAll,
       technicalError,
     };
+  }
+}
+
+// ── Per-stage mini-dashboard (compact numeric summary shown next to each stage card, not just raw JSON) ──
+
+export type StageStatChip = Readonly<{ label: string; value: string }>;
+
+/** Pure function: derives a short, stage-specific row of numbers from that stage's own validated output -- no LLM call, no side effects, safe to compute on every render. */
+export function stageStatChips(stageId: CallSummaryStageId, output: unknown): readonly StageStatChip[] {
+  if (output === undefined || output === null) return [];
+  switch (stageId) {
+    case "facts": {
+      const data = output as Partial<FactsQuotes>;
+      return [
+        { label: "Фактов", value: String(data.facts?.length ?? 0) },
+        { label: "Цитат", value: String(data.quotes?.length ?? 0) },
+        { label: "Конфликтов", value: String(data.conflicts?.length ?? 0) },
+        { label: "Не найдено", value: String(data.missing_critical_facts?.length ?? 0) },
+      ];
+    }
+    case "needs": {
+      const data = output as Partial<Needs>;
+      return [
+        { label: "Уверенность", value: data.confidence !== undefined ? `${Math.round(data.confidence * 100)}%` : "—" },
+        { label: "Параметров", value: String(data.requirements?.object_parameters?.length ?? 0) },
+        { label: "Ограничений", value: String(data.requirements?.limitations?.length ?? 0) },
+        { label: "Локаций", value: String(data.requirements?.locations?.length ?? 0) },
+      ];
+    }
+    case "outcome": {
+      const data = output as Partial<Outcome>;
+      return [
+        { label: "Тип", value: data.conversation_outcome?.type ?? "—" },
+        { label: "Договорённостей", value: String(data.agreements?.length ?? 0) },
+        { label: "Шаг согласован", value: data.next_step?.is_agreed ? "да" : "нет" },
+        { label: "Открытых вопросов", value: String(data.conversation_outcome?.unresolved_questions?.length ?? 0) },
+      ];
+    }
+    case "summary": {
+      const data = output as Summary;
+      if (data.summary_status === "input_data_incomplete") return [{ label: "Статус", value: "неполные данные" }];
+      return [
+        { label: "Ключевых фактов", value: String(data.key_facts?.length ?? 0) },
+        { label: "Цитат", value: String(data.important_quotes?.length ?? 0) },
+        { label: "Символов", value: String(data.conversation_result?.length ?? 0) },
+      ];
+    }
+    case "quality_gate": {
+      const data = output as QualityJudgeRaw;
+      const report = computeQualityDecision(data.scores, data.issues);
+      return [
+        { label: "Итог", value: `${report.overall_score}%` },
+        { label: "Решение", value: report.decision },
+        { label: "Блокеров", value: String(report.blocking_errors.length) },
+      ];
+    }
+    default:
+      return [];
   }
 }

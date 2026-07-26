@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, KeyRound, Play, Quote, ShieldAlert, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, Gauge, KeyRound, Play, Quote, ShieldAlert, XCircle } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, Section, Select, Status, Textarea } from "@/shared/ui";
 import { hasBrowserLlmKeyConfigured, MODEL_OPTIONS } from "@/shared/llm/browser-direct-provider";
+import { downloadJson } from "@/shared/lib/download-json";
 import {
   CALL_SUMMARY_ERROR_LABELS,
   CALL_SUMMARY_ERROR_TYPES,
@@ -12,6 +13,7 @@ import {
   computeQualityDecision,
   defaultCallSummaryStages,
   runCallSummaryPipeline,
+  stageStatChips,
   type CallSummaryErrorType,
   type CallSummaryPipelineResult,
   type CallSummaryStageConfig,
@@ -68,14 +70,35 @@ function stringifyPayload(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
 
+/** Compact label+value chip -- same visual convention as StatChip in ad-copy-test-bench-panel.tsx, reused here for the always-visible per-stage mini-dashboard. */
+function StatChip({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">{label}</span>
+      <span className="text-xs font-semibold text-foreground">{value}</span>
+    </div>
+  );
+}
+
 function StageCard({ stage, report, onModelChange }: Readonly<{ stage: CallSummaryStageConfig; report: CallSummaryStageReport | undefined; onModelChange: (model: string) => void }>) {
   const [expanded, setExpanded] = React.useState(false);
+  const chips = report?.output !== undefined ? stageStatChips(stage.id, report.output) : [];
   return (
     <Card className="grid gap-0 overflow-hidden p-0">
-      <button type="button" className="flex w-full items-center gap-3 p-3 text-left" onClick={() => setExpanded((value) => !value)}>
+      <button type="button" className="flex w-full flex-wrap items-center gap-3 p-3 text-left" onClick={() => setExpanded((value) => !value)}>
         <p className="min-w-0 flex-1 truncate text-sm font-semibold">{stage.name}</p>
         {report ? <Badge tone={statusTone(report.status)}>{STATUS_LABELS[report.status]}{report.attempt && report.attempt > 1 ? ` · попытка ${report.attempt}` : ""}</Badge> : null}
         {expanded ? <ChevronDown className="size-4 shrink-0 text-text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-text-muted" aria-hidden="true" />}
+        {chips.length > 0 || report?.durationMs !== undefined ? (
+          <div className="flex w-full flex-wrap gap-1.5">
+            {chips.map((chip) => (
+              <StatChip key={chip.label} label={chip.label} value={chip.value} />
+            ))}
+            {report?.durationMs !== undefined ? <StatChip label="Время" value={`${report.durationMs} мс`} /> : null}
+            {report?.tokens !== undefined ? <StatChip label="Токены" value={`≈${report.tokens}`} /> : null}
+            {report?.costUsd !== undefined ? <StatChip label="Стоимость" value={`≈$${report.costUsd.toFixed(4)}`} /> : null}
+          </div>
+        ) : null}
       </button>
       {expanded ? (
         <div className="grid gap-3 border-t border-border p-3">
@@ -249,6 +272,48 @@ function HumanEvaluationForm({
   );
 }
 
+/**
+ * "Итог": always shown right after a run finishes (success, failure, or
+ * technical error) -- status, totals, and the AI Quality Gate score/
+ * decision shown directly here (unlike the "Ручная оценка" section
+ * below, whose whole point is to keep a human reviewer blind to the AI
+ * score until they save their own -- this card is the pipeline owner's
+ * run summary, not an evaluation surface), plus a one-click full-report
+ * download.
+ */
+function ResultSummaryCard({ result, onDownload }: Readonly<{ result: CallSummaryPipelineResult; onDownload: () => void }>) {
+  const succeeded = !result.technicalError;
+  const ai = result.aiQualityReport;
+  return (
+    <Card className="grid gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Gauge className="size-4 text-text-muted" aria-hidden="true" />
+          <p className="text-sm font-medium">Итог</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={succeeded ? "success" : "error"}>{succeeded ? "успешно" : "с ошибкой"}</Badge>
+          {ai ? <Badge tone={DECISION_TONE[ai.decision]}>{ai.decision} · {ai.overall_score}%</Badge> : null}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatChip label="Время" value={`${result.totalDurationMs} мс`} />
+        <StatChip label="Токены" value={`≈${result.totalTokensEstimate}`} />
+        <StatChip label="Стоимость" value={`≈$${result.totalCostUsd.toFixed(4)}`} />
+        <StatChip label="Повторов summary" value={String(result.retryCount)} />
+        {result.facts ? <StatChip label="Фактов" value={String(result.facts.facts.length)} /> : null}
+        {result.facts ? <StatChip label="Цитат" value={String(result.facts.quotes.length)} /> : null}
+        {result.outcome ? <StatChip label="Результат звонка" value={result.outcome.conversation_outcome.type} /> : null}
+        {result.outcome ? <StatChip label="Договорённостей" value={String(result.outcome.agreements.length)} /> : null}
+      </div>
+      <Button variant="secondary" onClick={onDownload} className="w-fit">
+        <Download className="size-4" aria-hidden="true" />
+        Скачать отчёт (JSON)
+      </Button>
+    </Card>
+  );
+}
+
 function computeComparison(ai: QualityReport, human: QualityReport): AiVsHumanComparison {
   const perCriterionDiff = Object.fromEntries(CRITERION_KEYS.map((key) => [key, Math.abs(ai.scores[key].score - human.scores[key].score)])) as Record<CriterionKey, number>;
   return { overallDiff: Math.abs(ai.overall_score - human.overall_score), perCriterionDiff, decisionMatches: ai.decision === human.decision };
@@ -310,6 +375,12 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
   const humanReport = humanEvaluation ? computeQualityDecision(humanEvaluation.scores as unknown as QualityScoresRaw, humanEvaluation.issues) : null;
   const comparison = lastResult?.aiQualityReport && humanReport ? computeComparison(lastResult.aiQualityReport, humanReport) : null;
 
+  const handleDownload = () => {
+    if (!lastResult) return;
+    const filename = `call-summary-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    downloadJson(filename, { transcript, ...lastResult, humanEvaluation, humanReport, comparison });
+  };
+
   return (
     <div className="grid gap-4">
       {!keyConfigured ? (
@@ -354,6 +425,8 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
           </Alert>
         ) : null}
       </Card>
+
+      {lastResult ? <ResultSummaryCard result={lastResult} onDownload={handleDownload} /> : null}
 
       <Section>
         <div className="flex items-center gap-2">
