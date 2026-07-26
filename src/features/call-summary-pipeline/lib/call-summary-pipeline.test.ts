@@ -63,6 +63,25 @@ describe("defaultCallSummaryStages", () => {
       expect(stage.maxTokens).toBeGreaterThanOrEqual(2000);
     }
   });
+
+  it("gives every stage a bounded timeout so a hung request fails well under a minute", () => {
+    for (const stage of defaultCallSummaryStages()) {
+      expect(stage.timeoutMs).toBeGreaterThan(0);
+      expect(stage.timeoutMs).toBeLessThanOrEqual(60000);
+    }
+  });
+
+  it("defaults to models this app's own catalog labels as AI Tunnel-verified, not the ambiguous OpenAI/Anthropic-labeled ones", () => {
+    // Regression guard for the real-world failure this defaulting fixed:
+    // "gpt-5-mini"/"claude-sonnet-4.5" are labeled "(OpenAI)"/"(Anthropic)"
+    // in MODEL_OPTIONS, not "(AI Tunnel)" -- a user on the AI Tunnel
+    // provider got a 48s hang then an unparseable empty response from
+    // "gpt-5-mini" specifically.
+    for (const stage of defaultCallSummaryStages()) {
+      expect(stage.model).not.toBe("gpt-5-mini");
+      expect(stage.model).not.toBe("claude-sonnet-4.5");
+    }
+  });
 });
 
 describe("stageStatChips", () => {

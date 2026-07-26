@@ -438,15 +438,30 @@ export type CallSummaryStageConfig = Readonly<{
   // output on non-trivial calls (confirmed live against AI Tunnel: a
   // ~2.7k-character transcript produced a response cut off mid-JSON).
   maxTokens: number;
+  // A hung request should fail loudly in well under a minute, not leave
+  // the user staring at "выполняется…" -- confirmed live one such call
+  // took 48.8s before failing anyway.
+  timeoutMs: number;
 }>;
+
+// Defaults picked from MODEL_OPTIONS' own "(AI Tunnel)"-labeled entries
+// -- unlike "gpt-5-mini"/"claude-sonnet-4.5" (labeled "(OpenAI)"/
+// "(Anthropic)"), these are the models this app's own catalog marks as
+// verified against the AI Tunnel proxy, which every stage gets routed
+// through unconditionally once "AI Tunnel" is the selected provider in
+// Настройки (callModelByName forwards whatever model string a stage is
+// configured with, regardless of that model's own label/vendor). Still
+// fully editable per stage in the panel regardless of provider.
+const DEFAULT_EXTRACTION_MODEL = "gpt-4o-mini";
+const DEFAULT_JUDGE_MODEL = "deepseek-v3.2-exp";
 
 export function defaultCallSummaryStages(): CallSummaryStageConfig[] {
   return [
-    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: "gpt-5-mini", prompt: FACTS_PROMPT, outKey: "facts", maxTokens: 4000 },
-    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: "gpt-5-mini", prompt: NEEDS_PROMPT, outKey: "needs", maxTokens: 3000 },
-    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: "gpt-5-mini", prompt: OUTCOME_PROMPT, outKey: "outcome", maxTokens: 3000 },
-    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: "gpt-5-mini", prompt: SUMMARY_PROMPT, outKey: "summary", maxTokens: 2500 },
-    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: "claude-sonnet-4.5", prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate", maxTokens: 2500 },
+    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: FACTS_PROMPT, outKey: "facts", maxTokens: 4000, timeoutMs: 45000 },
+    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: NEEDS_PROMPT, outKey: "needs", maxTokens: 3000, timeoutMs: 45000 },
+    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: OUTCOME_PROMPT, outKey: "outcome", maxTokens: 3000, timeoutMs: 45000 },
+    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: SUMMARY_PROMPT, outKey: "summary", maxTokens: 2500, timeoutMs: 45000 },
+    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: DEFAULT_JUDGE_MODEL, prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate", maxTokens: 2500, timeoutMs: 45000 },
   ];
 }
 
@@ -638,7 +653,7 @@ export async function runCallSummaryPipeline(
     setReport(id, { status: "running", attempt });
     try {
       const prompt = tmpl(stage.prompt, promptVars);
-      const text = await callModelByName(prompt, stage.model, { maxTokens: stage.maxTokens });
+      const text = await callModelByName(prompt, stage.model, { maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs });
       const tokens = estimateTokens(prompt) + estimateTokens(text);
       const cost = estimateCost(stage.model, tokens);
       totalTokens += tokens;
@@ -646,7 +661,16 @@ export async function runCallSummaryPipeline(
 
       const repair = repairAndParseJson(text);
       if (!repair.ok) {
-        setReport(id, { status: "bad", error: `JSON не удалось разобрать: ${repair.error}`, rawResponse: text, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
+        const preview = text.trim().slice(0, 200);
+        setReport(id, {
+          status: "bad",
+          error: `JSON не удалось разобрать: ${repair.error}. Ответ модели (первые 200 символов): «${preview}${text.trim().length > 200 ? "…" : ""}»`,
+          rawResponse: text,
+          attempt,
+          durationMs: Date.now() - startedMs,
+          tokens,
+          costUsd: cost,
+        });
         return { ok: false };
       }
       const schema = STAGE_SCHEMAS[id];

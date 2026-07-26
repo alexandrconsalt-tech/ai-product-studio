@@ -117,7 +117,17 @@ export function maskApiKey(key: string): string {
 
 type AnthropicTextBlock = Readonly<{ type: string; text?: string }>;
 
-async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_MODEL, maxTokens: number = 2000): Promise<string> {
+function timeoutSignal(timeoutMs?: number): AbortSignal | undefined {
+  return timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+}
+
+/** A 200 with no usable text is worse than an HTTP error -- it silently produces "Unexpected end of JSON input" three layers downstream (JSON-repair sees an empty string, finds no `{`, and JSON.parse("") throws that exact message) with zero indication the *model*, not the parser, is at fault. Failing loudly here instead. */
+function requireNonEmpty(text: string, vendorLabel: string): string {
+  if (text.trim()) return text;
+  throw new Error(`${vendorLabel} вернул пустой ответ (0 символов) — модель не сгенерировала текст. Попробуйте другую модель в выпадающем списке этапа или повторите запуск.`);
+}
+
+async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_MODEL, maxTokens: number = 2000, timeoutMs?: number): Promise<string> {
   const apiKey = loadAnthropicApiKey();
   if (!apiKey) throw new Error("Не задан API-ключ Anthropic — задайте его в разделе «Настройки».");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -129,36 +139,39 @@ async function callAnthropic(prompt: string, model: string = DEFAULT_ANTHROPIC_M
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+    signal: timeoutSignal(timeoutMs),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
     throw new Error(`Anthropic API ${res.status}${detail?.error?.message ? `: ${detail.error.message}` : ""}`);
   }
   const data = await res.json();
-  return ((data.content ?? []) as AnthropicTextBlock[]).filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n");
+  const text = ((data.content ?? []) as AnthropicTextBlock[]).filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n");
+  return requireNonEmpty(text, "Anthropic");
 }
 
 // Same CORS constraint documented in src/app/api/openai-proxy/route.ts:
 // OpenAI does not send browser-CORS headers, so this goes through that
 // existing stateless relay instead of a direct fetch.
-async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL, maxTokens?: number): Promise<string> {
+async function callOpenAi(prompt: string, model: string = DEFAULT_OPENAI_MODEL, maxTokens?: number, timeoutMs?: number): Promise<string> {
   const apiKey = loadOpenAiApiKey();
   if (!apiKey) throw new Error("Не задан API-ключ OpenAI — задайте его в разделе «Настройки».");
   const res = await fetch("/api/openai-proxy", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ apiKey, model, prompt, ...(maxTokens ? { maxTokens } : {}) }),
+    signal: timeoutSignal(timeoutMs),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`OpenAI API ${res.status}${data?.error?.message ? `: ${data.error.message}` : ""}`);
-  return data?.choices?.[0]?.message?.content ?? "";
+  return requireNonEmpty(data?.choices?.[0]?.message?.content ?? "", "OpenAI");
 }
 
 type OpenAiCompatibleResponse = Readonly<{
   choices?: readonly { message?: { content?: string } }[];
 }>;
 
-async function callAiTunnel(prompt: string, model: string, temperature = 0.2, maxTokens = 2000): Promise<string> {
+async function callAiTunnel(prompt: string, model: string, temperature = 0.2, maxTokens = 2000, timeoutMs?: number): Promise<string> {
   const apiKey = loadAiTunnelApiKey();
   if (!apiKey) throw new Error("Не задан API-ключ AI Tunnel — задайте его в разделе «Настройки».");
   const baseUrl = loadAiTunnelBaseUrl().replace(/\/+$/, "");
@@ -166,10 +179,11 @@ async function callAiTunnel(prompt: string, model: string, temperature = 0.2, ma
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature, max_tokens: maxTokens }),
+    signal: timeoutSignal(timeoutMs),
   });
   const data = (await res.json().catch(() => ({}))) as OpenAiCompatibleResponse & { error?: { message?: string } };
   if (!res.ok) throw new Error(`AI Tunnel API ${res.status}${data.error?.message ? `: ${data.error.message}` : ""}`);
-  return data.choices?.[0]?.message?.content ?? "";
+  return requireNonEmpty(data.choices?.[0]?.message?.content ?? "", "AI Tunnel");
 }
 
 export type AiTunnelConnectionResult = "success" | "invalid-key" | "insufficient-funds" | "model-unavailable" | "rate-limit" | "network-error" | "unknown-error";
@@ -275,15 +289,16 @@ export const MODEL_OPTIONS: readonly { value: string; label: string }[] = [
  * Pipeline Lab v3's own Check Agent defaults to Claude while the
  * Fact/Need/Outcome/Summary agents default to GPT-5 mini.
  */
-export async function callModelByName(prompt: string, model: string, options?: Readonly<{ maxTokens?: number }>): Promise<string> {
+export async function callModelByName(prompt: string, model: string, options?: Readonly<{ maxTokens?: number; timeoutMs?: number }>): Promise<string> {
   const maxTokens = options?.maxTokens;
+  const timeoutMs = options?.timeoutMs;
   const selectedProvider = loadExplicitSelectedLlmProvider();
-  if (selectedProvider === "ai-tunnel") return callAiTunnel(prompt, model, 0.2, maxTokens ?? 2000);
-  if (selectedProvider === "openai-direct") return callOpenAi(prompt, model, maxTokens);
-  if (selectedProvider === "anthropic-direct") return callAnthropic(prompt, model, maxTokens);
+  if (selectedProvider === "ai-tunnel") return callAiTunnel(prompt, model, 0.2, maxTokens ?? 2000, timeoutMs);
+  if (selectedProvider === "openai-direct") return callOpenAi(prompt, model, maxTokens, timeoutMs);
+  if (selectedProvider === "anthropic-direct") return callAnthropic(prompt, model, maxTokens, timeoutMs);
   if (selectedProvider === "mock") return JSON.stringify({ mock: true, model, echo: prompt.slice(0, 200) });
   const vendor = MODEL_VENDOR[model] ?? "anthropic";
-  return vendor === "openai" ? callOpenAi(prompt, model, maxTokens) : callAnthropic(prompt, model, maxTokens);
+  return vendor === "openai" ? callOpenAi(prompt, model, maxTokens, timeoutMs) : callAnthropic(prompt, model, maxTokens, timeoutMs);
 }
 
 /** Same tolerant parsing Pipeline Lab v3's own parseJSON does (strips ```json fences, trims to the outer braces). */

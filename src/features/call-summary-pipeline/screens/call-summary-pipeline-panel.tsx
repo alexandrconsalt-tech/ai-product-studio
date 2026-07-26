@@ -117,6 +117,14 @@ function StageCard({ stage, report, onModelChange }: Readonly<{ stage: CallSumma
               <pre className="max-h-56 overflow-auto rounded-md bg-muted p-3 text-xs text-foreground">{stringifyPayload(report.output)}</pre>
             </div>
           ) : null}
+          {report?.rawResponse !== undefined ? (
+            <details className="rounded-md border border-border bg-muted p-2 text-xs">
+              <summary className="cursor-pointer select-none font-medium text-text-muted">
+                RAW-ответ модели{report.jsonRepaired ? <Badge tone="warning" className="ml-2">JSON исправлен</Badge> : null}
+              </summary>
+              <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-foreground">{report.rawResponse || "(пустая строка)"}</pre>
+            </details>
+          ) : null}
         </div>
       ) : null}
     </Card>

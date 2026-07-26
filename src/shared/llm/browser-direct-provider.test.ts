@@ -131,6 +131,48 @@ describe("AI Tunnel browser provider", () => {
     expect(JSON.parse(request.body as string)).toEqual({ model, messages: [{ role: "user", content: "prompt" }], temperature: 0.2, max_tokens: 2000 });
   });
 
+  it("throws a clear error instead of silently returning an empty string when AI Tunnel returns a 200 with no usable content", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse(""));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(callModelByName("prompt", "gpt-4o-mini")).rejects.toThrow("AI Tunnel вернул пустой ответ");
+  });
+
+  it("treats whitespace-only content the same as empty", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("   \n  "));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(callModelByName("prompt", "gpt-4o-mini")).rejects.toThrow("AI Tunnel вернул пустой ответ");
+  });
+
+  it("forwards a caller-supplied timeoutMs through callModelByName as an AbortSignal on the AI Tunnel request", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-4o-mini", { timeoutMs: 45000 });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(request.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("omits the AbortSignal when timeoutMs is not supplied, matching pre-existing behavior", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-4o-mini");
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(request.signal).toBeUndefined();
+  });
+
   it("forwards a caller-supplied maxTokens through callModelByName to the AI Tunnel request, without changing the default when omitted", async () => {
     saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
     saveSelectedLlmProvider("ai-tunnel");
