@@ -190,10 +190,25 @@
 **Правило расхождения.** Если транскрибация содержит важный факт, которого нет в JSON:
 
 ```json
-{ "summary_status": "input_data_incomplete", "missing_fact": { "description": "В транскрибации указан срок покупки, но он отсутствует в needs.json", "turn_id": 42 } }
+{ "status": "INPUT_DATA_INCOMPLETE", "conversation_result": "", "key_facts": [], "quotes": [], "next_step": "", "error": "В транскрибации указан срок покупки (реплика №42), но он отсутствует в needs.json" }
 ```
 
 Summary Agent не должен молча использовать такой факт — иначе исчезает управляемость pipeline.
+
+**Реальный контракт JSON** (`src/features/call-summary-pipeline/lib/call-summary-pipeline.ts`, промт `SUMMARY_PROMPT`), актуализирован 2026-07-26 по доработанной версии промта:
+
+```json
+{
+  "status": "GENERATED",
+  "conversation_result": "краткий итог разговора",
+  "key_facts": [{ "label": "Бюджет", "value": "до 5,5 млн ₽" }],
+  "quotes": ["точная цитата клиента"],
+  "next_step": "согласованный следующий шаг или ровно \"Следующий шаг не согласован.\"",
+  "error": ""
+}
+```
+
+`key_facts` — объекты `{label, value}` (короткий деловой ярлык + телеграфное значение), а не произвольные строки — так следующему агенту не нужно парсить предложение, чтобы понять факт. Ограничения: `key_facts` ≤ 4, `quotes` ≤ 2, весь пользовательский текст ≤ 1200 символов. `conversation_result` и `next_step` обязательны при `status:"GENERATED"`.
 
 ---
 

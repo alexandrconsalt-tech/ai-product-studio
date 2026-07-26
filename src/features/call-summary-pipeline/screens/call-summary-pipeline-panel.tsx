@@ -132,14 +132,14 @@ function StageCard({ stage, report, onModelChange }: Readonly<{ stage: CallSumma
 }
 
 function SummaryCard({ summary }: Readonly<{ summary: NonNullable<CallSummaryPipelineResult["summary"]> }>) {
-  if (summary.summary_status === "input_data_incomplete") {
+  if (summary.status === "INPUT_DATA_INCOMPLETE") {
     return (
       <Card className="grid gap-2">
         <div className="flex items-center gap-2">
           <AlertTriangle className="size-4 text-warning" aria-hidden="true" />
           <p className="text-sm font-medium">Данных недостаточно для summary</p>
         </div>
-        <p className="text-sm text-text-muted">{summary.missing_fact.description}{summary.missing_fact.turn_id !== undefined ? ` (реплика №${summary.missing_fact.turn_id})` : ""}</p>
+        <p className="text-sm text-text-muted">{summary.error || "Модель не уточнила, какого факта не хватает."}</p>
       </Card>
     );
   }
@@ -154,22 +154,25 @@ function SummaryCard({ summary }: Readonly<{ summary: NonNullable<CallSummaryPip
           <p className="text-sm font-medium">Ключевые факты</p>
           <ul className="grid gap-0.5 text-sm text-foreground">
             {summary.key_facts.map((fact, index) => (
-              <li key={index} className="flex gap-2"><span className="text-text-muted">•</span>{fact}</li>
+              <li key={index} className="flex gap-2">
+                <span className="text-text-muted">•</span>
+                {fact.label ? <span className="font-medium">{fact.label}:</span> : null} {fact.value}
+              </li>
             ))}
           </ul>
         </div>
       ) : null}
-      {summary.important_quotes.length > 0 ? (
+      {summary.quotes.length > 0 ? (
         <div className="grid gap-1">
           <p className="text-sm font-medium">Важные цитаты</p>
-          {summary.important_quotes.map((quote, index) => (
+          {summary.quotes.map((quote, index) => (
             <p key={index} className="flex items-start gap-1.5 text-sm text-text-muted"><Quote className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />«{quote}»</p>
           ))}
         </div>
       ) : null}
       <div className="grid gap-1">
         <p className="text-sm font-medium">Договорённости / следующий шаг</p>
-        <p className="text-sm text-foreground">{summary.agreements_next_step}</p>
+        <p className="text-sm text-foreground">{summary.next_step}</p>
       </div>
     </Card>
   );

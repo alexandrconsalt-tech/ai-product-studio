@@ -130,7 +130,7 @@ describe("stageStatChips", () => {
   });
 
   it("flags an incomplete summary instead of reading fields that don't exist on it", () => {
-    const chips = stageStatChips("summary", { summary_status: "input_data_incomplete", missing_fact: { description: "срок покупки не подтверждён в JSON" } });
+    const chips = stageStatChips("summary", { status: "INPUT_DATA_INCOMPLETE", error: "срок покупки не подтверждён в JSON" });
     expect(chips).toEqual([{ label: "Статус", value: "неполные данные" }]);
   });
 });
@@ -193,32 +193,39 @@ describe("schema tolerance against real-world model output variance", () => {
     expect(result.data.conversation_outcome.type).toBe("viewing scheduled");
   });
 
-  it("SummarySchema treats a missing summary_status discriminator as the 'ok' branch instead of failing the union", () => {
-    const result = SummarySchema.safeParse({ conversation_result: "Итог разговора.", key_facts: ["Факт 1"], important_quotes: [], agreements_next_step: "Согласован просмотр." });
+  it("SummarySchema treats a missing status discriminator as the 'GENERATED' branch instead of failing the union", () => {
+    const result = SummarySchema.safeParse({ conversation_result: "Итог разговора.", key_facts: [{ label: "Факт", value: "1" }], quotes: [], next_step: "Согласован просмотр." });
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.summary_status).toBe("ok");
+    expect(result.data.status).toBe("GENERATED");
   });
 
-  it("SummarySchema still recognizes the genuine input_data_incomplete escape hatch", () => {
-    const result = SummarySchema.safeParse({ summary_status: "input_data_incomplete", missing_fact: { description: "срок не подтверждён" } });
+  it("SummarySchema still recognizes the genuine INPUT_DATA_INCOMPLETE escape hatch", () => {
+    const result = SummarySchema.safeParse({ status: "INPUT_DATA_INCOMPLETE", error: "срок не подтверждён" });
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.summary_status).toBe("input_data_incomplete");
+    expect(result.data.status).toBe("INPUT_DATA_INCOMPLETE");
   });
 
-  it("SummarySchema caps key_facts/important_quotes at their limits instead of failing when the model returns too many", () => {
+  it("SummarySchema caps key_facts/quotes at their limits instead of failing when the model returns too many", () => {
     const result = SummarySchema.safeParse({
-      summary_status: "ok",
+      status: "GENERATED",
       conversation_result: "Итог.",
-      key_facts: ["1", "2", "3", "4", "5", "6"],
-      important_quotes: ["a", "b", "c"],
-      agreements_next_step: "Шаг.",
+      key_facts: [{ label: "1", value: "a" }, { label: "2", value: "b" }, { label: "3", value: "c" }, { label: "4", value: "d" }, { label: "5", value: "e" }],
+      quotes: ["a", "b", "c"],
+      next_step: "Шаг.",
     });
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.key_facts).toHaveLength(4);
-    expect(result.data.important_quotes).toHaveLength(2);
+    expect(result.data.quotes).toHaveLength(2);
+  });
+
+  it("SummarySchema normalizes a legacy plain-string key_fact into {label, value} instead of rejecting it", () => {
+    const result = SummarySchema.safeParse({ status: "GENERATED", conversation_result: "Итог.", key_facts: ["Бюджет до 5 млн ₽"], quotes: [], next_step: "Шаг." });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.key_facts[0]).toEqual({ label: "", value: "Бюджет до 5 млн ₽" });
   });
 
   it("QualityJudgeRawSchema clamps a string/out-of-range raw_score and an unrecognized issue type instead of failing the whole judge output", () => {

@@ -319,7 +319,7 @@ export function PlaygroundScreen() {
           decision: result.aiQualityReport?.decision ?? (result.technicalError ? "TECHNICAL_ERROR" : undefined),
           transcript,
           report: { facts: result.facts, needs: result.needs, outcome: result.outcome, summary: result.summary, aiQualityReport: result.aiQualityReport, retryCount: result.retryCount, reports: result.reports },
-          summary: result.summary && result.summary.summary_status === "ok" ? result.summary.conversation_result : undefined,
+          summary: result.summary && result.summary.status === "GENERATED" ? result.summary.conversation_result : undefined,
           startedAt,
           finishedAt: new Date().toISOString(),
         }),
