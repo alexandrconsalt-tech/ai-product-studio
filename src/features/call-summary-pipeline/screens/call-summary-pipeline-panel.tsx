@@ -189,11 +189,14 @@ function QualityReportCard({ title, report }: Readonly<{ title: string; report: 
         <p className="text-sm font-medium">{title}</p>
         <Badge tone={DECISION_TONE[report.decision]}>{report.decision} · {report.overall_score}%</Badge>
       </div>
-      <div className="grid gap-1">
+      <div className="grid gap-1.5">
         {CRITERION_KEYS.map((key) => (
-          <div key={key} className="grid grid-cols-[1fr_auto] gap-2 text-xs">
-            <span className="text-text-muted">{CRITERION_LABELS[key]}</span>
-            <span className="font-medium">{report.scores[key].raw_score}/4 · {Math.round(report.scores[key].score)}%</span>
+          <div key={key} className="grid gap-0.5 text-xs">
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <span className="text-text-muted">{CRITERION_LABELS[key]}</span>
+              <span className="font-medium">{report.scores[key].raw_score}/4 · {Math.round(report.scores[key].score)}%</span>
+            </div>
+            {report.scores[key].comment ? <p className="text-text-muted">{report.scores[key].comment}</p> : null}
           </div>
         ))}
       </div>
