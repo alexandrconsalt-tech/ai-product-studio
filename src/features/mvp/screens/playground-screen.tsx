@@ -22,9 +22,16 @@ import { getProjectBundle } from "../selectors";
 import { PipelineLabV3Screen } from "./pipeline-lab-v3-screen";
 import { AdCopyTestBenchPanel } from "./ad-copy-test-bench-panel";
 import type { AdCopyPipelineResult } from "../lib/ad-copy-test-bench";
+import { CallSummaryPipelinePanel } from "../../call-summary-pipeline/screens/call-summary-pipeline-panel";
+import type { CallSummaryPipelineResult } from "../../call-summary-pipeline/lib/call-summary-pipeline";
 
 const IFRAME_SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
+// Second, fully isolated product -- src/features/call-summary-pipeline/,
+// see docs/NEW_SUMMARY_PIPELINE_SPEC.md. Never touches pipeline-lab-v3.html
+// or its stages/prompts/schemas.
+const CALL_SUMMARY_SOURCE: PlaygroundTestRunSource = "call-summary-pipeline";
+const CALL_SUMMARY_PIPELINE_ID = "pipeline_call_summary_v2";
 // Same id local-storage-repository.ts's withTranscriptionSummaryModule() injects.
 // This product has no domain Pipeline entity (falls into the `!pipeline` branch
 // below, same as any hypothetical future no-pipeline product), but -- unlike a
@@ -289,6 +296,38 @@ export function PlaygroundScreen() {
     [selectedProjectId, recordRun],
   );
 
+  const handleCallSummaryRunComplete = React.useCallback(
+    (result: CallSummaryPipelineResult, transcript: string) => {
+      if (!selectedProjectId) return;
+      const reportList = Object.values(result.reports);
+      const errorCount = reportList.filter((report) => report.status === "bad").length;
+      const startedAt = new Date(Date.now() - result.totalDurationMs).toISOString();
+      recordRun(
+        createPlaygroundTestRun({
+          projectId: selectedProjectId,
+          source: CALL_SUMMARY_SOURCE,
+          status: result.technicalError || errorCount > 0 ? "failed" : "succeeded",
+          stageCount: reportList.length,
+          errorCount,
+          warningCount: 0,
+          tokens: result.totalTokensEstimate,
+          costUsd: result.totalCostUsd,
+          durationMs: result.totalDurationMs,
+          productName: selectedProject?.name,
+          confidence: result.aiQualityReport ? result.aiQualityReport.overall_score / 100 : undefined,
+          qualityScore: result.aiQualityReport?.overall_score,
+          decision: result.aiQualityReport?.decision ?? (result.technicalError ? "TECHNICAL_ERROR" : undefined),
+          transcript,
+          report: { facts: result.facts, needs: result.needs, outcome: result.outcome, summary: result.summary, aiQualityReport: result.aiQualityReport, retryCount: result.retryCount, reports: result.reports },
+          summary: result.summary && result.summary.summary_status === "ok" ? result.summary.conversation_result : undefined,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+        }),
+      );
+    },
+    [selectedProjectId, selectedProject, recordRun],
+  );
+
   const handleRunPipeline = async () => {
     if (!pipeline) return;
     setExecuting(true);
@@ -391,6 +430,15 @@ export function PlaygroundScreen() {
           </div>
           <p className="text-sm text-text-muted">Загрузите входные данные и нажмите «Прогнать пайплайн». Каждый этап реально выполняется — с реальными вызовами модели (ключ из «Настройки») и реальной детерминированной логикой.</p>
           <AdCopyTestBenchPanel productId={selectedProject.id} onRunComplete={handleAdCopyRunComplete} />
+        </Section>
+      ) : pipeline.id === CALL_SUMMARY_PIPELINE_ID ? (
+        <Section>
+          <div className="flex items-center gap-2">
+            <Layers className="size-4 text-text-muted" aria-hidden="true" />
+            <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
+          </div>
+          <p className="text-sm text-text-muted">Вставьте транскрибацию звонка и нажмите «Запустить pipeline». Пять этапов выполняются реальными вызовами модели (ключ из «Настройки»): факты и цитаты, потребности, результат и следующий шаг, генерация summary, Summary Quality Gate.</p>
+          <CallSummaryPipelinePanel productId={selectedProject.id} onRunComplete={handleCallSummaryRunComplete} />
         </Section>
       ) : (
         <>

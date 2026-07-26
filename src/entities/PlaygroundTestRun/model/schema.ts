@@ -8,9 +8,14 @@ import { EntityIdSchema, IsoDateTimeSchema, VersionSchema } from "@/entities/sha
 // bridge). "product-test-bench" (added same day, follow-up) is a real,
 // product-specific stage orchestrator with a genuine confidence-gated
 // retry loop (src/features/mvp/lib/ad-copy-test-bench.ts) -- something
-// the domain Pipeline's DAG-based executor cannot do at all. All three
-// feed the same Dashboard history uniformly.
-export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor", "product-test-bench"]);
+// the domain Pipeline's DAG-based executor cannot do at all.
+// "call-summary-pipeline" (added 2026-07-26) is the second, fully
+// isolated call-summary product's own engine
+// (src/features/call-summary-pipeline/lib/call-summary-pipeline.ts) --
+// same "product-specific stage orchestrator" shape as product-test-bench,
+// own stages/schemas/quality gate, zero shared code with pipeline-lab-v3.
+// All four feed the same Dashboard history uniformly.
+export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor", "product-test-bench", "call-summary-pipeline"]);
 export const PlaygroundTestRunStatusSchema = z.enum(["succeeded", "failed"]);
 
 export const PlaygroundTestRunSchema = z.object({
