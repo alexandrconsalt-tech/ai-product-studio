@@ -29,6 +29,28 @@ const optionClasses: Record<CriterionValue, string> = {
   na: "border-border bg-muted text-text-muted",
 };
 
+// Display-only translation -- the underlying codes (AiDecision/HumanDecision)
+// stay untouched in storage/filtering logic, only the label shown to the
+// reviewer is Russian.
+const AI_DECISION_LABELS: Record<string, string> = {
+  AUTO_SAVE: "Автосохранение",
+  MANUAL_REVIEW: "Ручная проверка",
+  RETRY: "Повтор",
+};
+function aiDecisionLabel(value: string): string {
+  return AI_DECISION_LABELS[value] ?? value;
+}
+
+const HUMAN_DECISION_LABELS: Record<string, string> = {
+  EXCELLENT: "Отлично",
+  GOOD: "Хорошо",
+  ACCEPTABLE: "Приемлемо",
+  NEEDS_REWORK: "Требует доработки",
+};
+function humanDecisionLabel(value: string): string {
+  return HUMAN_DECISION_LABELS[value] ?? value;
+}
+
 function decodePayload(payload: string | null): unknown | null {
   if (!payload) return null;
   try {
@@ -173,7 +195,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
             </Button>
           ) : null}
           <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm">
-            Human Score: <span className="font-semibold">{humanScore.toFixed(1)}</span> · {humanDecision}
+            Оценка человека: <span className="font-semibold">{humanScore.toFixed(1)}</span> · {humanDecisionLabel(humanDecision)}
           </div>
         </div>
       </div>
@@ -206,8 +228,8 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
             <p className="mt-3 whitespace-pre-wrap rounded-md bg-muted/50 p-3 text-sm leading-6">{run.summary}</p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <div className="rounded-md border border-border p-3">AI Score<br /><span className="text-xl font-semibold">{run.aiScore}</span></div>
-            <div className="rounded-md border border-border p-3">AI Decision<br /><span className="text-base font-semibold">{run.aiDecision}</span></div>
+            <div className="rounded-md border border-border p-3">Оценка AI<br /><span className="text-xl font-semibold">{run.aiScore}</span></div>
+            <div className="rounded-md border border-border p-3">Решение AI<br /><span className="text-base font-semibold">{aiDecisionLabel(run.aiDecision)}</span></div>
           </div>
           <div>
             <h3 className="text-sm font-semibold">Краткие AI-проблемы</h3>
