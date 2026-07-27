@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, Gauge, KeyRound, Play, Quote, ShieldAlert, XCircle } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, Section, Select, Status, Textarea } from "@/shared/ui";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gauge, KeyRound, Play, Quote, ShieldAlert, X, XCircle } from "lucide-react";
+import { Alert, Badge, Button, Card, Checkbox, Dialog, Section, Select, Status, Textarea } from "@/shared/ui";
 import { hasBrowserLlmKeyConfigured, MODEL_OPTIONS } from "@/shared/llm/browser-direct-provider";
 import { downloadJson } from "@/shared/lib/download-json";
 import {
@@ -10,6 +10,7 @@ import {
   CALL_SUMMARY_ERROR_TYPES,
   CRITERION_KEYS,
   CRITERION_LABELS,
+  CRITERION_WEIGHT,
   ERROR_TYPE_GROUPS,
   QUALITY_DECISION_LABELS,
   computeQualityDecision,
@@ -204,7 +205,7 @@ function QualityReportCard({ title, report }: Readonly<{ title: string; report: 
         {CRITERION_KEYS.map((key) => (
           <div key={key} className="grid gap-0.5 text-xs">
             <div className="grid grid-cols-[1fr_auto] gap-2">
-              <span className="text-text-muted">{CRITERION_LABELS[key]}</span>
+              <span className="text-text-muted">{CRITERION_LABELS[key]} <span className="text-[10px]">(вес {Math.round(report.scores[key].weight * 100)}%)</span></span>
               <span className="font-medium">{report.scores[key].raw_score}/4 · {Math.round(report.scores[key].score)}%</span>
             </div>
             {report.scores[key].comment ? <p className="text-text-muted">{report.scores[key].comment}</p> : null}
@@ -248,13 +249,13 @@ function HumanEvaluationForm({
   return (
     <Card className="grid gap-3">
       <p className="text-sm font-medium">Ручная оценка</p>
-      <p className="text-xs text-text-muted">Оцените текст summary по каждому критерию: 4 — полностью соответствует, 3 — несущественное замечание, 2 — существенный недостаток, 1 — серьёзная ошибка, 0 — критерий не выполнен. AI-оценка станет видна только после сохранения.</p>
+      <p className="text-xs text-text-muted">Оцените текст summary по каждому критерию: 4 — полностью соответствует, 3 — несущественное замечание, 2 — существенный недостаток, 1 — серьёзная ошибка, 0 — критерий не выполнен. Все 5 критериев оцениваются с равным весом {Math.round(CRITERION_WEIGHT * 100)}%.</p>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="grid content-start gap-2">
           {CRITERION_KEYS.map((key) => (
             <div key={key} className="grid gap-1 border-t border-border pt-2 first:border-t-0 first:pt-0">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm">{CRITERION_LABELS[key]}</span>
+                <span className="text-sm">{CRITERION_LABELS[key]} <span className="text-[10px] font-normal text-text-muted">(вес {Math.round(CRITERION_WEIGHT * 100)}%)</span></span>
                 <div className="flex gap-1">
                   {RAW_SCORE_OPTIONS.map((value) => (
                     <button
@@ -377,6 +378,7 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEval
   const [lastResult, setLastResult] = React.useState<CallSummaryPipelineResult | null>(null);
   const [humanEvaluation, setHumanEvaluation] = React.useState<HumanEvaluation | null>(null);
   const [currentRunId, setCurrentRunId] = React.useState<string | null>(null);
+  const [transcriptModalOpen, setTranscriptModalOpen] = React.useState(false);
   const keyConfigured = hasBrowserLlmKeyConfigured();
 
   React.useEffect(() => {
@@ -451,19 +453,41 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEval
         </Alert>
       ) : null}
 
-      <Card className="grid gap-2">
+      <Card className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium">Транскрибация звонка</p>
-        <Textarea
-          className="min-h-48 font-mono text-xs"
-          value={transcript}
-          onChange={(event) => setTranscript(event.target.value)}
-          placeholder="Вставьте текст транскрибации"
-        />
-        <div className="flex items-center justify-between gap-2">
-          <Button variant="ghost" onClick={() => setTranscript(EXAMPLE_TRANSCRIPT)}>Вставить пример</Button>
-          <span className="text-xs text-text-muted">{transcript.length} символов</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-muted">{transcript.trim() ? `${transcript.length} символов` : "не заполнено"}</span>
+          <Button variant="secondary" onClick={() => setTranscriptModalOpen(true)}>
+            <FileText className="size-4" aria-hidden="true" />
+            {transcript.trim() ? "Открыть транскрибацию" : "Вставить транскрибацию"}
+          </Button>
         </div>
       </Card>
+
+      {transcriptModalOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4 backdrop-blur-sm" onClick={() => setTranscriptModalOpen(false)}>
+          <Dialog className="grid max-h-[85vh] w-full max-w-2xl gap-3 overflow-hidden" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">Транскрибация звонка</p>
+              <Button variant="ghost" onClick={() => setTranscriptModalOpen(false)} aria-label="Закрыть">
+                <X className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+            <Textarea
+              className="min-h-64 font-mono text-xs"
+              value={transcript}
+              onChange={(event) => setTranscript(event.target.value)}
+              placeholder="Вставьте текст транскрибации"
+              autoFocus
+            />
+            <div className="flex items-center justify-between gap-2">
+              <Button variant="ghost" onClick={() => setTranscript(EXAMPLE_TRANSCRIPT)}>Вставить пример</Button>
+              <span className="text-xs text-text-muted">{transcript.length} символов</span>
+            </div>
+            <Button variant="primary" onClick={() => setTranscriptModalOpen(false)} className="w-fit justify-self-end">Готово</Button>
+          </Dialog>
+        </div>
+      ) : null}
 
       <Card className="grid gap-2">
         <label className="grid gap-1 sm:max-w-xs">
@@ -518,20 +542,20 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEval
         </div>
       </Section>
 
-      {lastResult?.summary ? <SummaryCard summary={lastResult.summary} /> : null}
-
-      {lastResult?.aiQualityReport ? (
+      {lastResult?.summary ? (
         <Section>
           <div className="flex items-center gap-2">
             <Status tone="info">Quality Gate</Status>
-            <h3 className="text-lg font-semibold">Оценка качества</h3>
+            <h3 className="text-lg font-semibold">Оценка качества Summary</h3>
           </div>
-          {!humanEvaluation ? (
-            <Alert tone="info">AI-оценка скрыта до сохранения вашей ручной оценки — так ручная оценка остаётся независимой.</Alert>
-          ) : null}
+          <SummaryCard summary={lastResult.summary} />
+          {lastResult.aiQualityReport ? (
+            <QualityReportCard title="Итоговые оценки AI" report={lastResult.aiQualityReport} />
+          ) : (
+            <Alert tone="warning">Этап Summary Quality Gate завершился с ошибкой — AI-оценка для этого прогона недоступна.</Alert>
+          )}
           <HumanEvaluationForm onSave={handleHumanEvaluationSave} />
           {humanReport ? <QualityReportCard title="Ручная оценка" report={humanReport} /> : null}
-          {humanReport ? <QualityReportCard title="AI-оценка" report={lastResult.aiQualityReport} /> : null}
           {comparison ? (
             <Card className="grid gap-2">
               <p className="text-sm font-medium">AI vs Человек</p>
