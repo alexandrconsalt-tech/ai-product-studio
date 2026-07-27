@@ -305,14 +305,25 @@ const CALL_SUMMARY_STAGE_DEFS = [
  * playground-screen.tsx's `pipeline.id === CALL_SUMMARY_PIPELINE_ID`
  * branch can route it to its own React panel instead of Pipeline Lab v3.
  */
+// The project's description shipped with this text in the very first
+// version of this injection; superseded below, but already-persisted
+// snapshots keep whatever they got on first load since this function is
+// otherwise additive-only (see the "Appended at the end" note near the
+// return statement) -- so it has to be migrated explicitly here, not just
+// changed in the `project` literal, or existing users would keep seeing
+// this line forever.
+const STALE_CALL_SUMMARY_DESCRIPTION =
+  "Второй, полностью изолированный продукт: pipeline из пяти AI-этапов для анализа звонков и генерации проверяемого summary. Не использует промты, схемы или историю старого Pipeline Lab v3.";
+
 function withCallSummaryPipelineModule(snapshot: RepositorySnapshot): RepositorySnapshot {
   const existingProject = snapshot.projects.find((project) => project.id === CALL_SUMMARY_PROJECT_ID);
   const hasProject = Boolean(existingProject);
+  const hasStaleDescription = existingProject?.description === STALE_CALL_SUMMARY_DESCRIPTION;
   const hasProduct = snapshot.products.some((product) => product.id === CALL_SUMMARY_PRODUCT_ID);
   const hasArchitecture = snapshot.architectures.some((architecture) => architecture.id === CALL_SUMMARY_ARCHITECTURE_ID);
   const hasPipeline = snapshot.pipelines.some((pipeline) => pipeline.id === CALL_SUMMARY_PIPELINE_ID);
 
-  if (hasProject && hasProduct && hasArchitecture && hasPipeline) return snapshot;
+  if (hasProject && hasProduct && hasArchitecture && hasPipeline && !hasStaleDescription) return snapshot;
 
   const project = {
     id: CALL_SUMMARY_PROJECT_ID,
@@ -431,7 +442,11 @@ function withCallSummaryPipelineModule(snapshot: RepositorySnapshot): Repository
   // effective default are both preserved.
   return {
     ...snapshot,
-    projects: hasProject ? snapshot.projects : [...snapshot.projects, project],
+    projects: !hasProject
+      ? [...snapshot.projects, project]
+      : hasStaleDescription
+        ? snapshot.projects.map((item) => (item.id === CALL_SUMMARY_PROJECT_ID ? { ...item, description: project.description } : item))
+        : snapshot.projects,
     products: hasProduct ? snapshot.products : [...snapshot.products, product],
     architectures: hasArchitecture ? snapshot.architectures : [...snapshot.architectures, architecture],
     pipelines: hasPipeline ? snapshot.pipelines : [...snapshot.pipelines, pipeline],
