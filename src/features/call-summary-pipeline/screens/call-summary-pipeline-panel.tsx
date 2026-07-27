@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gauge, KeyRound, Play, Quote, ShieldAlert, X, XCircle } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, Dialog, Section, Select, Status, Textarea } from "@/shared/ui";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, Gauge, KeyRound, Play, Quote, ShieldAlert, XCircle } from "lucide-react";
+import { Alert, Badge, Button, Card, Checkbox, Section, Select, Status, Textarea } from "@/shared/ui";
 import { hasBrowserLlmKeyConfigured, MODEL_OPTIONS } from "@/shared/llm/browser-direct-provider";
 import { downloadJson } from "@/shared/lib/download-json";
 import {
@@ -378,7 +378,6 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEval
   const [lastResult, setLastResult] = React.useState<CallSummaryPipelineResult | null>(null);
   const [humanEvaluation, setHumanEvaluation] = React.useState<HumanEvaluation | null>(null);
   const [currentRunId, setCurrentRunId] = React.useState<string | null>(null);
-  const [transcriptModalOpen, setTranscriptModalOpen] = React.useState(false);
   const keyConfigured = hasBrowserLlmKeyConfigured();
 
   React.useEffect(() => {
@@ -453,41 +452,19 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEval
         </Alert>
       ) : null}
 
-      <Card className="flex flex-wrap items-center justify-between gap-2">
+      <Card className="grid gap-2">
         <p className="text-sm font-medium">Транскрибация звонка</p>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-text-muted">{transcript.trim() ? `${transcript.length} символов` : "не заполнено"}</span>
-          <Button variant="secondary" onClick={() => setTranscriptModalOpen(true)}>
-            <FileText className="size-4" aria-hidden="true" />
-            Транскрибация
-          </Button>
+        <Textarea
+          className="min-h-48 font-mono text-xs"
+          value={transcript}
+          onChange={(event) => setTranscript(event.target.value)}
+          placeholder="Вставьте текст транскрибации"
+        />
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="ghost" onClick={() => setTranscript(EXAMPLE_TRANSCRIPT)}>Вставить пример</Button>
+          <span className="text-xs text-text-muted">{transcript.length} символов</span>
         </div>
       </Card>
-
-      {transcriptModalOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4 backdrop-blur-sm" onClick={() => setTranscriptModalOpen(false)}>
-          <Dialog className="grid max-h-[85vh] w-full max-w-2xl gap-3 overflow-hidden" onClick={(event) => event.stopPropagation()}>
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium">Транскрибация звонка</p>
-              <Button variant="ghost" onClick={() => setTranscriptModalOpen(false)} aria-label="Закрыть">
-                <X className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
-            <Textarea
-              className="min-h-64 font-mono text-xs"
-              value={transcript}
-              onChange={(event) => setTranscript(event.target.value)}
-              placeholder="Вставьте текст транскрибации"
-              autoFocus
-            />
-            <div className="flex items-center justify-between gap-2">
-              <Button variant="ghost" onClick={() => setTranscript(EXAMPLE_TRANSCRIPT)}>Вставить пример</Button>
-              <span className="text-xs text-text-muted">{transcript.length} символов</span>
-            </div>
-            <Button variant="primary" onClick={() => setTranscriptModalOpen(false)} className="w-fit justify-self-end">Готово</Button>
-          </Dialog>
-        </div>
-      ) : null}
 
       <Card className="grid gap-2">
         <label className="grid gap-1 sm:max-w-xs">
@@ -544,15 +521,9 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEval
 
       {lastResult?.summary ? (
         <Section>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Status tone="info">Quality Gate</Status>
-              <h3 className="text-lg font-semibold">Оценка качества Summary</h3>
-            </div>
-            <Button variant="secondary" onClick={() => setTranscriptModalOpen(true)}>
-              <FileText className="size-4" aria-hidden="true" />
-              Транскрибация
-            </Button>
+          <div className="flex items-center gap-2">
+            <Status tone="info">Quality Gate</Status>
+            <h3 className="text-lg font-semibold">Оценка качества Summary</h3>
           </div>
           <SummaryCard summary={lastResult.summary} />
           {lastResult.aiQualityReport ? (
