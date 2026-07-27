@@ -22,13 +22,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: { message: "Expected JSON body with apiKey, model, prompt (all strings)." } }, { status: 400 });
   }
 
+  const maxTokens = typeof body.maxTokens === "number" && body.maxTokens > 0 ? body.maxTokens : undefined;
   const upstream = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${body.apiKey}`,
     },
-    body: JSON.stringify({ model: body.model, messages: [{ role: "user", content: body.prompt }] }),
+    body: JSON.stringify({ model: body.model, messages: [{ role: "user", content: body.prompt }], ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
   });
 
   const payload = await upstream.json().catch(() => ({}));

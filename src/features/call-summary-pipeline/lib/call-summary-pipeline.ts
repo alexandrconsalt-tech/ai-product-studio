@@ -1,0 +1,999 @@
+/**
+ * Engine for the "Анализ звонков v2" product -- a second, fully isolated
+ * call-summary pipeline living alongside (never touching) the original
+ * `public/pipeline-lab-v3.html` product. Follows the same architectural
+ * pattern as `src/features/mvp/lib/ad-copy-test-bench.ts` (the repo's
+ * existing precedent for a second product-specific pipeline engine):
+ * data-driven stage config, real LLM calls via
+ * `@/shared/llm/browser-direct-provider`, Zod-validated stage contracts,
+ * own JSON-repair pass (duplicated here rather than importing from
+ * ad-copy-test-bench.ts, which is itself out of scope for this task).
+ *
+ * Five stages per `docs/NEW_SUMMARY_PIPELINE_SPEC.md` (the authoritative
+ * spec for this product -- read it before changing any prompt/schema
+ * here): Facts & Quotes -> Needs -> Outcome & Next Step -> Summary
+ * Generator -> Summary Quality Gate. Stages 1-3 extract independently
+ * from the transcript; Summary Generator consumes all three JSONs plus
+ * the transcript; Quality Gate scores the summary using the exact same
+ * five-criterion/0-4 rubric a human reviewer uses (`computeQualityDecision`
+ * is the single deterministic function both paths call).
+ */
+
+import { z } from "zod";
+import { callModelByName, parseJsonResponse } from "@/shared/llm/browser-direct-provider";
+
+// ── Lenient parsing helpers ──
+// Real model output is occasionally "almost right" (a score as "4" instead
+// of 4, a boolean as "true", an enum value translated/mis-cased, a
+// discriminator field omitted) -- with plain Zod that invalidates the
+// *entire* stage and produces a TECHNICAL_ERROR over what is otherwise a
+// perfectly usable response. Every field built with these helpers instead
+// falls back to a safe default and lets the rest of the object through.
+// Fields that actually drive scoring math (Quality Gate raw_score) are
+// still range-clamped, never silently zeroed.
+
+function looseConfidence(fallback: number) {
+  return z.preprocess((value) => {
+    const n = typeof value === "string" ? Number(value) : value;
+    return typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback;
+  }, z.number());
+}
+
+function looseNullableNumber() {
+  return z.preprocess((value) => {
+    if (value === null || value === undefined) return value;
+    const n = typeof value === "string" ? Number(value) : value;
+    return typeof n === "number" && Number.isFinite(n) ? n : null;
+  }, z.number().nullable().optional());
+}
+
+function looseBool(fallback: boolean) {
+  return z.preprocess((value) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") return value.trim().toLowerCase() === "true";
+    return fallback;
+  }, z.boolean());
+}
+
+/** Like the others, but preserves the strict literal-union TS type (via z.enum) for downstream consumers like CALL_SUMMARY_ERROR_LABELS[...] -- only the runtime *validation* is lenient. */
+function looseEnum<T extends readonly [string, ...string[]]>(values: T, fallback: T[number]) {
+  return z.preprocess((value) => ((values as readonly string[]).includes(value as string) ? value : fallback), z.enum(values));
+}
+
+function looseScore04(fallback: number) {
+  return z.preprocess((value) => {
+    const n = typeof value === "string" ? Number(value) : value;
+    return typeof n === "number" && Number.isFinite(n) ? Math.min(4, Math.max(0, Math.round(n))) : fallback;
+  }, z.number().int().min(0).max(4));
+}
+
+// ── Error taxonomy (spec §17) -- shared by the AI judge and the human evaluation form ──
+
+export const CALL_SUMMARY_ERROR_TYPES = [
+  "FACT_INVENTED",
+  "FACT_DISTORTED",
+  "ROLE_CONFUSION",
+  "CRITICAL_FACT_MISSING",
+  "WRONG_CLIENT_NEED",
+  "WRONG_OUTCOME",
+  "WRONG_NEXT_STEP",
+  "QUOTE_INACCURATE",
+  "CRM_DATA_DUPLICATION",
+  "VERBOSE",
+  "UNCLEAR_LANGUAGE",
+  "FORMAT_VIOLATION",
+] as const;
+export type CallSummaryErrorType = (typeof CALL_SUMMARY_ERROR_TYPES)[number];
+
+export const CALL_SUMMARY_ERROR_LABELS: Record<CallSummaryErrorType, string> = {
+  FACT_INVENTED: "Придуман факт",
+  FACT_DISTORTED: "Факт искажён",
+  ROLE_CONFUSION: "Перепутаны роли клиента и агента",
+  CRITICAL_FACT_MISSING: "Пропущен критически важный факт",
+  WRONG_CLIENT_NEED: "Неверно определена потребность клиента",
+  WRONG_OUTCOME: "Неверно определён результат разговора",
+  WRONG_NEXT_STEP: "Неверно определён следующий шаг",
+  QUOTE_INACCURATE: "Цитата искажает смысл сказанного",
+  CRM_DATA_DUPLICATION: "Дублирование данных, уже видимых в карточке CRM",
+  VERBOSE: "Многословно / есть повторы",
+  UNCLEAR_LANGUAGE: "Неясная формулировка",
+  FORMAT_VIOLATION: "Нарушен формат",
+};
+
+// ── Stage 1: Facts & Quotes (spec §2) ──
+
+const EvidenceSchema = z.object({ turn_id: z.number().optional(), quote: z.string().catch("") });
+
+const FactSchema = z.object({
+  id: z.string().catch(""),
+  category: z.string().catch(""),
+  value: z.unknown().optional(),
+  normalized_text: z.string().catch(""),
+  speaker: z.string().optional(),
+  evidence: z.array(EvidenceSchema).catch([]),
+  confidence: looseConfidence(0.8),
+  status: z.string().catch("confirmed"),
+});
+
+const QuoteSchema = z.object({
+  id: z.string().catch(""),
+  category: z.string().catch(""),
+  speaker: z.string().optional(),
+  text: z.string().catch(""),
+  turn_id: z.number().optional(),
+  importance: z.string().catch("medium"),
+});
+
+export const FactsQuotesSchema = z.object({
+  facts: z.array(FactSchema).catch([]),
+  quotes: z.array(QuoteSchema).catch([]),
+  conflicts: z.array(z.object({ description: z.string().catch(""), values: z.array(z.unknown()).optional() })).catch([]),
+  missing_critical_facts: z.array(z.string()).catch([]),
+});
+export type FactsQuotes = z.infer<typeof FactsQuotesSchema>;
+
+const FACTS_PROMPT = `Ты — аналитик, который извлекает из транскрибации звонка только подтверждённые факты и важные цитаты. Это не пересказ разговора и не summary.
+
+ЧТО ИЗВЛЕКАТЬ
+Факты о клиенте и запросе: цель обращения, объект/тип объекта, назначение покупки, бюджет, способ финансирования, срок покупки, локации, параметры объекта, готовность к просмотру, возражения, ограничения, важные обстоятельства, предпочитаемый канал связи.
+Цитаты: только те, что подтверждают ключевую потребность, бюджет/финансирование, срок, мотивацию, возражение, готовность к действию или договорённость. Не извлекай цитаты с адресом объекта, приветствиями или техническими деталями без продуктовой ценности.
+
+ПРАВИЛА
+- Не добавляй факты по логике или домыслу — только то, что реально прозвучало.
+- Слова агента не считаются потребностью клиента без подтверждения клиента.
+- Строго различай: подтверждённый факт / предположение / предложение агента / незакрытый вопрос — в facts попадают только подтверждённые факты.
+- Каждому важному факту — evidence (turn_id + дословная цитата).
+- Если информация не определена — не угадывай, просто не включай её (или отметь в missing_critical_facts).
+- Если есть конфликтующие значения одного и того же факта — сохрани оба варианта в conflicts, не выбирай один произвольно.
+- НЕ ПУТАЙ БЮДЖЕТ КЛИЕНТА С ЦЕНОЙ ОБСУЖДАЕМОГО ОБЪЕКТА (частая ошибка). Бюджет — сумма, которую клиент сам называет как свой финансовый предел на покупку в целом ("у меня бюджет до…", "рассматриваю варианты в пределах…", "могу потратить максимум…"), обычно до того, как разговор сузился до конкретного объекта, или явно про диапазон поиска. Цена/стоимость объекта — это цена ТОГО КОНКРЕТНОГО объекта, по которому звонит клиент (её называет оператор или агент, например уточняя объект: "стоимость 6 500 000, всё верно?"; то, что клиент сам называет эту же цифру, называя объект по объявлению, или просто подтверждает "да" — это не заявление бюджета, это идентификация объекта). Если сумма всплыла в контексте подтверждения/уточнения конкретного объявления — категория факта "object_price" (или аналогичная), НЕ "budget". Категория "budget" — только если клиент явно обозначил это как свой финансовый предел, а не цену конкретного объекта.
+
+ТРАНСКРИБАЦИЯ
+{{transcript}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений по схеме:
+{
+  "facts": [{"id": "fact_001", "category": string, "value": любое значение (число/строка/объект — по природе факта), "normalized_text": string, "speaker": "client"|"agent", "evidence": [{"turn_id": number, "quote": string}], "confidence": number 0-1, "status": "confirmed"|"assumed"|"conflict"|"not_found"}],
+  "quotes": [{"id": "quote_001", "category": string, "speaker": "client"|"agent", "text": string, "turn_id": number, "importance": "high"|"medium"|"low"}],
+  "conflicts": [{"description": string, "values": [любые конфликтующие значения]}],
+  "missing_critical_facts": [string]
+}`;
+
+// ── Stage 2: Needs (spec §3) ──
+
+export const NeedsSchema = z.object({
+  primary_need: z
+    .object({
+      intent: z.string().optional(),
+      object_type: z.string().optional(),
+      purpose: z.string().optional(),
+      summary: z.string().catch(""),
+    })
+    .catch({ summary: "" }),
+  requirements: z
+    .object({
+      locations: z.array(z.string()).catch([]),
+      budget: z.object({ min: looseNullableNumber(), max: looseNullableNumber(), currency: z.string().optional() }).optional().catch(undefined),
+      object_parameters: z
+        .array(z.object({ parameter: z.string().catch(""), operator: z.string().optional(), value: z.unknown(), unit: z.string().optional(), priority: z.string().optional() }))
+        .catch([]),
+      preferences: z.array(z.string()).catch([]),
+      limitations: z.array(z.string()).catch([]),
+    })
+    .catch({ locations: [], object_parameters: [], preferences: [], limitations: [] }),
+  decision_context: z
+    .object({
+      motivation: z.string().nullable().optional(),
+      purchase_timeline: z.string().optional(),
+      funding_source: z.string().optional(),
+      readiness: z.string().optional(),
+      decision_stage: z.string().optional(),
+    })
+    .catch({}),
+  canonical_attributes: z
+    .object({
+      needs: z.array(z.string()).catch([]),
+      funding_source: z.string().optional(),
+      purchase_timeline: z.string().optional(),
+    })
+    .catch({ needs: [] }),
+  evidence_links: z.array(z.string()).catch([]),
+  confidence: looseConfidence(0.7),
+});
+export type Needs = z.infer<typeof NeedsSchema>;
+
+const NEEDS_PROMPT = `Ты собираешь полноценную модель клиентского запроса из транскрибации звонка и уже извлечённых фактов. Отвечаешь на вопрос: что клиент реально хочет, что для него важно и что мешает двигаться дальше?
+
+КРИТИЧЕСКИ ВАЖНО РАЗЛИЧАТЬ (частая ошибка):
+- Потребность клиента ("Нужен участок от шести соток") — идёт в requirements.
+- Предложение агента ("Могу предложить участок на пять соток") — НЕ потребность, игнорировать.
+- Характеристика обсуждаемого объекта ("Этот участок — 6 соток") — НЕ потребность клиента, это факт про конкретный объект.
+- Цена конкретного обсуждаемого объекта (например, факт с категорией вроде "object_price", или цифра, которую называет оператор/агент при уточнении объявления, а клиент лишь подтверждает) — это НЕ requirements.budget. requirements.budget заполняй только из факта, где клиент сам явно называет свой финансовый предел на покупку в целом ("бюджет до…", "могу потратить максимум…"), а не цену того объекта, по которому он звонит. Если в facts.json нет отдельного факта именно с бюджетом клиента (только цена объекта) — оставь requirements.budget пустым (min/max: null), не подставляй туда цену объекта.
+- Условие клиента ("Если взнос меньше, готов рассматривать") — идёт в limitations/preferences с точной формулировкой условия.
+- Незакрытый вопрос ("Надо уточнить, входит ли НДС") — НЕ потребность, не включать в requirements.
+
+Канонические атрибуты (canonical_attributes) заполняй строго по факту разговора, не изобретай значения.
+
+ТРАНСКРИБАЦИЯ
+{{transcript}}
+
+ИЗВЛЕЧЁННЫЕ ФАКТЫ (facts.json)
+{{facts}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений по схеме:
+{
+  "primary_need": {"intent": string, "object_type": string, "purpose": string, "summary": string},
+  "requirements": {"locations": [string], "budget": {"min": number|null, "max": number|null, "currency": string}, "object_parameters": [{"parameter": string, "operator": string, "value": любое, "unit": string, "priority": "must_have"|"nice_to_have"}], "preferences": [string], "limitations": [string]},
+  "decision_context": {"motivation": string|null, "purchase_timeline": string, "funding_source": string, "readiness": string, "decision_stage": string},
+  "canonical_attributes": {"needs": [string], "funding_source": string, "purchase_timeline": string},
+  "evidence_links": [string (id факта или цитаты из facts.json)],
+  "confidence": number 0-1
+}`;
+
+// ── Stage 3: Outcome & Next Step (spec §4) ──
+
+export const OUTCOME_TYPES = [
+  "viewing_agreed",
+  "meeting_agreed",
+  "follow_up_required",
+  "information_sent",
+  "selection_preparation",
+  "client_will_decide",
+  "client_not_ready",
+  "object_not_suitable",
+  "request_closed",
+  "no_agreement",
+] as const;
+
+const OUTCOME_TYPE_LABELS: Record<string, string> = {
+  viewing_agreed: "Просмотр согласован",
+  meeting_agreed: "Встреча согласована",
+  follow_up_required: "Нужен повторный контакт",
+  information_sent: "Информация отправлена",
+  selection_preparation: "Готовится подборка",
+  client_will_decide: "Клиент принимает решение",
+  client_not_ready: "Клиент не готов",
+  object_not_suitable: "Объект не подошёл",
+  request_closed: "Заявка закрыта",
+  no_agreement: "Договорённости нет",
+};
+
+/** conversation_outcome.type is intentionally a plain, catch-all string in the schema (a model's near-miss shouldn't fail the whole stage -- see OutcomeSchema below), so this falls back to the raw value itself for anything outside the 10-item catalog rather than showing a blank label. */
+export function outcomeTypeLabel(type: string): string {
+  return OUTCOME_TYPE_LABELS[type] ?? type;
+}
+
+export const OutcomeSchema = z.object({
+  conversation_outcome: z
+    .object({
+      // A plain, catch-all string rather than a strict OUTCOME_TYPES enum
+      // -- the prompt still asks the model for exactly one of those 10
+      // values (kept as guidance, not a hard gate), but a near-miss
+      // (wrong case, a synonym) should degrade to an unexpected label
+      // here, not blow up the entire stage.
+      type: z.string().catch("no_agreement"),
+      summary: z.string().catch(""),
+      client_status: z.string().optional(),
+      resolved_questions: z.array(z.string()).catch([]),
+      unresolved_questions: z.array(z.string()).catch([]),
+    })
+    .catch({ type: "no_agreement", summary: "", resolved_questions: [], unresolved_questions: [] }),
+  agreements: z
+    .array(
+      z.object({
+        id: z.string().catch(""),
+        owner: z.string().catch("agent"),
+        action: z.string().catch(""),
+        deadline: z.object({ value: z.string().optional(), normalized: z.string().nullable().optional() }).optional().catch(undefined),
+        channel: z.string().optional(),
+        status: z.string().catch("agreed"),
+        evidence: EvidenceSchema.optional().catch(undefined),
+      }),
+    )
+    .catch([]),
+  next_step: z
+    .object({
+      primary: z
+        .object({ owner: z.string().optional(), action: z.string().optional(), deadline: z.string().optional(), channel: z.string().optional() })
+        .nullable()
+        .catch(null),
+      client_commitment: z.string().nullable().optional(),
+      is_specific: looseBool(false),
+      is_agreed: looseBool(false),
+    })
+    .catch({ primary: null, is_specific: false, is_agreed: false }),
+  conversation_closed: looseBool(false),
+  confidence: looseConfidence(0.7),
+});
+export type Outcome = z.infer<typeof OutcomeSchema>;
+
+const OUTCOME_PROMPT = `Ты определяешь итог звонка: чем разговор фактически закончился, что было согласовано, кто должен выполнить действие и что происходит дальше с заявкой.
+
+КРИТИЧЕСКИ ВАЖНО НЕ ОБЪЕДИНЯТЬ В ОДНО ПОЛЕ:
+- Результат разговора (conversation_outcome) — что изменилось по итогам звонка.
+- Договорённость (agreements) — что стороны согласовали.
+- Следующий шаг (next_step) — что конкретно должно произойти дальше, кто и когда.
+
+Тип результата (conversation_outcome.type) — выбери ровно один из справочника: ${OUTCOME_TYPES.join(", ")}.
+Если в разговоре не было согласованного следующего шага — next_step.primary должен быть null, is_agreed:false. За честное "шаг не согласован" оценка не снижается.
+
+ТРАНСКРИБАЦИЯ
+{{transcript}}
+
+ИЗВЛЕЧЁННЫЕ ФАКТЫ (facts.json)
+{{facts}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений по схеме:
+{
+  "conversation_outcome": {"type": "${OUTCOME_TYPES[0]}"|..., "summary": string, "client_status": string, "resolved_questions": [string], "unresolved_questions": [string]},
+  "agreements": [{"id": "agreement_001", "owner": "agent"|"client"|"both", "action": string, "deadline": {"value": string, "normalized": string|null}, "channel": string, "status": "agreed"|"proposed"|"rejected", "evidence": {"turn_id": number, "quote": string}}],
+  "next_step": {"primary": {"owner": string, "action": string, "deadline": string, "channel": string}|null, "client_commitment": string|null, "is_specific": boolean, "is_agreed": boolean},
+  "conversation_closed": boolean,
+  "confidence": number 0-1
+}`;
+
+// ── Stage 4: Summary Generator (spec §5-§8) ──
+
+function clampedStringArray(limit: number) {
+  return z
+    .array(z.unknown())
+    .optional()
+    .transform((arr) => (arr ?? []).slice(0, limit).map((item) => (typeof item === "string" ? item : JSON.stringify(item))));
+}
+
+/** Tolerates the richer {label, value} shape the prompt asks for, but also a plain string (in case a model regresses to the older flat style) -- either way normalizes to {label, value}. */
+function clampedKeyFacts(limit: number) {
+  return z
+    .array(z.unknown())
+    .optional()
+    .transform((arr) =>
+      (arr ?? []).slice(0, limit).map((item) => {
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          const label = typeof record.label === "string" ? record.label : "";
+          const value = typeof record.value === "string" ? record.value : record.value !== undefined ? JSON.stringify(record.value) : "";
+          return { label, value };
+        }
+        return { label: "", value: typeof item === "string" ? item : JSON.stringify(item) };
+      }),
+    );
+}
+
+const SummaryGeneratedSchema = z.object({
+  status: z.literal("GENERATED"),
+  conversation_result: z.string().catch(""),
+  key_facts: clampedKeyFacts(4),
+  quotes: clampedStringArray(2),
+  next_step: z.string().catch(""),
+  error: z.string().optional(),
+});
+const SummaryIncompleteSchema = z.object({
+  status: z.literal("INPUT_DATA_INCOMPLETE"),
+  conversation_result: z.string().optional(),
+  key_facts: clampedKeyFacts(4),
+  quotes: clampedStringArray(2),
+  next_step: z.string().optional(),
+  error: z.string().catch("Входные данные неполны."),
+});
+
+// Only "INPUT_DATA_INCOMPLETE" (the deliberate, narrow escape hatch from
+// spec §5) is treated as that branch; anything else -- including a
+// missing/mistyped/translated status -- normalizes to "GENERATED" before
+// validation, so a model that forgot the discriminator field entirely
+// still produces a usable summary instead of failing the whole stage.
+export const SummarySchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && (value as Record<string, unknown>).status !== "INPUT_DATA_INCOMPLETE") {
+    return { ...(value as Record<string, unknown>), status: "GENERATED" };
+  }
+  return value;
+}, z.union([SummaryGeneratedSchema, SummaryIncompleteSchema]));
+export type Summary = z.infer<typeof SummarySchema>;
+
+const SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентства недвижимости.
+
+Единственный источник фактов — JSON предыдущих этапов (facts.json, needs.json, outcome.json). Транскрипция передаётся только как вспомогательный материал для проверки точности цитат и связности изложения и не разрешает добавлять сведения, отсутствующие в этих трёх JSON.
+
+Цель — не пересказ разговора, а рабочий бриф: что следующему агенту нужно знать, чтобы продолжить работу с клиентом без прослушивания записи.
+
+СТИЛЬ (частая ошибка — проверяй перед ответом). Пиши так, как реальный агент по недвижимости рассказывает коллеге о звонке своими словами по телефону: простым живым деловым языком, короткими естественными предложениями. Это не протокол и не канцелярский отчёт. Запрещены канцелярские и машинные обороты: «было сообщено», «клиенту сообщено, что», «предназначен для», «используется система», «на данный момент», «в связи с тем что», «следует отметить», «данный», «вышеуказанный». Пиши прямо, как человек человеку: не «клиенту было сообщено, что дом не утеплён и предназначен для летнего проживания», а «дом не утеплён — жить можно только летом»; не «клиент уточнил информацию относительно...», а «клиент спросил, ...». Если формулировка получилась длинной или наукообразной — сократи и упрости её перед ответом.
+
+СТРОГИЙ ЗАПРЕТ НА ДУБЛИРОВАНИЕ КАРТОЧКИ (частая ошибка — проверяй перед ответом). Ни в conversation_result, ни в key_facts, ни в quotes, ни в next_step никогда не упоминай: {{crm_fields_visible}}. Это правило действует, даже если эти данные есть в facts.json/needs.json/outcome.json (например, потому что их произнёс клиент или агент по телефону) — они уже отдельно показаны в карточке CRM, и упоминание их в тексте summary — это дублирование, а не полезная информация. Единственное исключение: если возражение или сомнение клиента касается одного из этих полей (например, цена или взнос кажутся клиенту высокими) — само возражение указывай, но не как отдельное упоминание значения поля, а как суть сомнения.
+
+НЕ ПУТАЙ БЮДЖЕТ КЛИЕНТА СО СТОИМОСТЬЮ ОБЪЕКТА (частая ошибка — проверяй перед ответом). Бюджет — это максимальная сумма, которую сам клиент готов и может потратить на покупку; её называет сам клиент как свой финансовый предел ("у меня бюджет до…", "рассматриваю варианты в пределах…", "могу потратить максимум…"). Стоимость/цена объекта — это цена конкретного объекта, по которому звонит клиент; её обычно называет оператор или агент ("стоимость составляет…", "цена объекта — …", "указана цена…"). Это разные вещи, даже если needs.json → requirements.budget или facts.json содержат эту сумму под ярлыком "бюджет" — сам ярлык поля не доказывает, что это заявленный клиентом бюджет. Перед тем как написать "бюджет" в conversation_result или key_facts, сверься с транскрибацией: кто произнёс эту сумму и в каком контексте. Если сумму назвал оператор/агент как цену конкретного объекта (а не сам клиент как свой финансовый предел на будущие варианты) — пиши "стоимость объекта" или "цена объекта", а не "бюджет". Если из транскрибации не очевидно, кто и в каком смысле назвал сумму, используй нейтральную формулировку "стоимость объекта" — не домысливай, что это бюджет клиента.
+
+Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование или стоимость объекта; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. Если среди фактов (facts.json) есть подтверждённое имя клиента, это НЕ карточный шум — начинай conversation_result с «Клиент {Имя}» (используй имя как есть в JSON, без домысливания); если такого факта нет, начинай просто с «Клиент». В «нужно уточнить» включай только вопросы из outcome.json → conversation_outcome.unresolved_questions; вопросы, уже попавшие в resolved_questions, — закрытые, их не поднимай.
+
+Связность текста обязательна: conversation_result и next_step — это связный деловой текст, а не цепочка отдельных коротких предложений по одному на факт. Объединяй логически связанные факты в одну фразу (кто клиент + что хочет + ключевое требование + бюджет — одним предложением), как в примере ниже. При этом каждое предложение должно оставаться грамматически самостоятельным: не обрывай его без подлежащего и не начинай со строчной буквы. Связность — не то же самое, что перечисление: если у клиента 3 и более мелких открытых вопроса (например, про управляющую компанию, расходы, коммунальные платежи и НДС), не перечисляй каждый через запятую в одном предложении-простыне — сверни их в одну компактную формулировку по общему смыслу («уточнить размер расходов и НДС»), опуская темы, которые не критичны для следующего шага. Итоговый conversation_result должен быть короче, а не длиннее черновика: старайся уложиться в 2 предложения там, где разговор не содержит явного конфликта интересов или множества договорённостей.
+
+Не пиши next_step как техническую карточку с ярлыками поля ("владелец:", "срок:", "статус:", "Шаги в порядке:") — это нечитаемо. Формулируй его одной естественной фразой от лица агента: кто, что именно и когда делает, через какой канал (используй outcome.json → agreements и next_step.primary). Если next_step.primary объединяет несколько связанных действий, перечисли их через запятые и союзы в том порядке, в котором они даны в outcome.json ("сначала… затем…" или через запятую), а не нумерованным списком с подписанными полями. Если outcome.json → next_step.primary пуст (null) или next_step.is_agreed:false, next_step в твоём ответе должен быть ровно "Следующий шаг не согласован." — не восстанавливай обещания из facts.json или транскрипции.
+
+key_facts — не квота, которую нужно заполнить до 4 пунктов любой ценой: один по-настоящему значимый факт лучше четырёх второстепенных. Перед каждым пунктом проверь, что без него следующий агент реально потеряет важную информацию для продолжения работы; факт, который лишь дублирует conversation_result без новой пользы или сам по себе малозначим (например, отказ клиента от опции, которая и так не нужна), не включай — верни столько пунктов, сколько оправдано, вплоть до одного. Формат каждого пункта — короткий деловой ярлык (label, 1–3 слова) и телеграфное значение (value) без пояснений в скобках и без придаточных предложений: {"label":"Бюджет","value":"до 5,5 млн ₽"}, а не {"label":"Бюджет","value":"клиент сказал в начале разговора, что рассматривает где-то до 5,5 млн рублей"}. Никогда не заполняй пункт слабым фактом только чтобы набрать больше строк: общая причина звонка («консультация», «вопрос по объекту») и общее назначение покупки («для проживания», «для сдачи в аренду») сами по себе почти не помогают следующему агенту и не должны становиться key_fact, если конкретика уже ясна из conversation_result, — вместо них выбери то, что реально двигает сделку: главный открытый вопрос, ключевое сомнение/возражение или срок. Если один и тот же факт уже раскрыт в conversation_result, не создавай под него ещё и key_fact той же сути другими словами — выбери одно место, где эта мысль появится единственный раз. Перед тем как добавить пункт, прогони по нему проверку: перечитай уже написанный conversation_result и спроси себя «эта же мысль там уже сказана?» — если да, пункт удали, даже если формулировка отличается.
+
+Используй значения из facts.json/needs.json/outcome.json без смыслового расширения: допустимо человекочитаемое форматирование чисел и нейтральная деловая нормализация подтверждённого смысла («побор» → «ежемесячный взнос», «скинуть» → «отправить», «ссылка на подбор» → «подборка альтернатив»). Не добавляй единицы, назначение суммы или связь между фактами, которых нет в соответствующей записи JSON или её evidence. Канал MAX означает только MAX: не расшифровывай и не заменяй его Telegram/«Телеграмом». В conversation_result пиши 2–4 связных предложения: что хочет клиент (со всеми ключевыми требованиями и бюджетом в одной фразе), что для него важно или в чём сомнение, чем закончился разговор. Если разговор завершился договорённостью, заверши conversation_result кратким упоминанием сути в прошедшем времени (в духе «Агент предложил отправить видеообзор и подобрать альтернативные варианты.») — операционные детали (канал связи, точный порядок действий, сроки) оставляй только в next_step, не дублируй их здесь дословно. Если «что хочет клиент» и «что для него важно» — один и тот же факт, сформулируй его один раз одной фразой — не разбивай один факт на два соседних предложения, пересказывающих друг друга разными словами.
+
+Не усиливай модальность источника: если JSON фиксирует только интерес или предпочтение («интересен», «рассматривает», «предпочитает»), не переводи это в подтверждённое намерение купить/приобрести («хочет купить», «хочет приобрести», «планирует приобрести») — сохраняй ту же силу утверждения, что в источнике. Не приписывай факту или требованию приоритет («наиболее важно», «в первую очередь», «прежде всего»), если в JSON нет отдельного явного указания на приоритетность.
+
+Не помещай прямую цитату, кавычки или конструкцию «клиент: …» внутрь key_facts — значение key_fact не может быть дословной цитатой в кавычках, перефразируй её в краткий деловой факт. Один key_fact содержит один краткий деловой смысл. Не повторяй одну и ту же цитату внутри key_facts и quotes. Разговорные слова допустимы только в отдельном массиве quotes. Для quotes применяй общий тест: цитата должна быть понятна сама по себе, без знания вопроса собеседника — короткие изолированные подтверждения/отрицания ("да", "нет", "хорошо", "поняла", "не нужна" и подобные обрывки без своего смыслового наполнения) не выбирай, даже если они дословно подтверждают важный факт. По умолчанию выбирай ОДНУ самую сильную цитату — ту, что раскрывает решающее сомнение, ограничение или мотивацию клиента. Добавляй вторую только если она раскрывает совершенно другое измерение (не просто ещё один вопрос из того же списка уточнений, уже охваченного conversation_result или key_facts): если вторая цитата лишь повторяет ту же тему другими словами, не добавляй её.
+
+Пример эталонного стиля (используй только для формата и тона — факты бери исключительно из своего facts.json/needs.json/outcome.json):
+conversation_result: "Клиент Николай рассматривает покупку участка ИЖС от 6 соток в районе Мистолово с бюджетом до 5,5 млн ₽. Обсудили участок 6 соток в КП «Охтинское Раздолье»; клиента смущает ежемесячный взнос 9 600 ₽. Агент предложил отправить видеообзор и подобрать альтернативные участки."
+key_facts: [{"label":"Бюджет","value":"до 5,5 млн ₽"},{"label":"Требования","value":"ИЖС, площадь от 6 соток"},{"label":"Основное сомнение","value":"ежемесячный взнос 9 600 ₽"}]
+next_step: "Агент отправит в MAX видеообзор объекта и подборку альтернативных участков под требования клиента."
+
+Второй пример — звонок с несколькими мелкими открытыми вопросами (несколько тем сворачиваются в одну компактную фразу, а не перечисляются подряд):
+conversation_result: "Клиент Александр рассматривает покупку апартаментов для себя и уточняет размер эксплуатационных расходов и включён ли в них НДС. До получения этой информации не готов ехать на просмотр. Агент уточнит суммы у собственника и свяжется с клиентом в WhatsApp сегодня или завтра."
+key_facts: [{"label":"Открытый вопрос","value":"размер расходов и НДС"}]
+quotes: ["Пока присматриваюсь, поэтому пока не готов ехать. Если всё устроит, тогда буду рассматривать просмотр."]
+next_step: "Агент уточнит у собственника точные суммы расходов и включённость НДС и свяжется с клиентом в WhatsApp сегодня или завтра."
+
+ТРАНСКРИБАЦИЯ
+{{transcript}}
+
+FACTS.JSON
+{{facts}}
+
+NEEDS.JSON
+{{needs}}
+
+OUTCOME.JSON
+{{outcome}}
+
+Верни строго JSON без markdown и пояснений. Если данных достаточно:
+{"status": "GENERATED", "conversation_result": "краткий итог разговора", "key_facts": [{"label":"Бюджет","value":"значение из JSON"}], "quotes": ["точная цитата клиента из транскрибации"], "next_step": "согласованный следующий шаг или ровно \\"Следующий шаг не согласован.\\"", "error": ""}
+Используй INPUT_DATA_INCOMPLETE только если без этого факта summary станет вводящим в заблуждение или его физически нельзя написать — то есть все три JSON вместе не дают связной картины (кто клиент, что хочет, чем закончился разговор, что дальше), потому что этого просто нет ни в одном из них. НЕ используй этот статус только потому, что в транскрибации прозвучала деталь, которой нет в JSON: facts.json/needs.json/outcome.json — это уже отобранный экстракт для summary, а не дословный пересказ, и не обязаны содержать каждую фразу разговора (характеристики объекта со стороны продавца, реплики второстепенных участников, технические подробности сделки и т.п.). Если JSON вместе дают связную картину, пиши summary по ним, даже если в разговоре звучали дополнительные детали, не попавшие в эти JSON. Если данных всё же недостаточно, верни:
+{"status": "INPUT_DATA_INCOMPLETE", "conversation_result": "", "key_facts": [], "quotes": [], "next_step": "", "error": "краткое описание отсутствующего факта и номер реплики"}
+Ограничения: key_facts — не более 4; quotes — не более 2; весь пользовательский текст — не более 1200 символов. conversation_result и next_step обязательны при status="GENERATED".`;
+
+// ── Stage 5: Summary Quality Gate (spec §9-§14) — единая форма для AI и человека ──
+
+export const CRITERION_KEYS = ["faithfulness", "completeness", "usefulness", "agreements_next_step", "format"] as const;
+export type CriterionKey = (typeof CRITERION_KEYS)[number];
+
+export const CRITERION_LABELS: Record<CriterionKey, string> = {
+  faithfulness: "Достоверность",
+  completeness: "Полнота критически важной информации",
+  usefulness: "Полезность для агента",
+  agreements_next_step: "Договорённости и следующий шаг",
+  format: "Формат, структура и краткость",
+};
+
+/**
+ * Groups the 12 error types from spec §17 under the criterion they most
+ * directly evidence -- shown as sub-headings in the human evaluation
+ * form's "Типы ошибок" list instead of one flat 12-item checkbox wall.
+ * Mirrors the original pipeline's own judge grouping (truth/critical-
+ * facts/context-utility/action/presentation): faithfulness gets invented/
+ * distorted-fact and role/quote errors; completeness gets missing-fact and
+ * wrong-need errors; agreements_next_step gets outcome/next-step errors;
+ * format gets duplication/verbosity/clarity/format errors. "Полезность
+ * для агента" has no type of its own in the spec's taxonomy -- every
+ * listed error already evidences one of the other four -- so its group is
+ * intentionally empty and not rendered.
+ */
+export const ERROR_TYPE_GROUPS: readonly Readonly<{ criterion: CriterionKey; types: readonly CallSummaryErrorType[] }>[] = [
+  { criterion: "faithfulness", types: ["FACT_INVENTED", "FACT_DISTORTED", "ROLE_CONFUSION", "QUOTE_INACCURATE"] },
+  { criterion: "completeness", types: ["CRITICAL_FACT_MISSING", "WRONG_CLIENT_NEED"] },
+  { criterion: "usefulness", types: [] },
+  { criterion: "agreements_next_step", types: ["WRONG_OUTCOME", "WRONG_NEXT_STEP"] },
+  { criterion: "format", types: ["CRM_DATA_DUPLICATION", "VERBOSE", "UNCLEAR_LANGUAGE", "FORMAT_VIOLATION"] },
+];
+
+// Равные веса по 20% на критерий -- прямое требование задачи (переопределяет
+// иллюстративный пример из §13 приложенной спеки, где веса были 30/25/20/15/10).
+export const CRITERION_WEIGHT = 0.2;
+
+// A missing/malformed criterion here must never silently pass as a 4 --
+// that would inflate the score exactly where honesty matters most.
+// looseScore04's own fallback is deliberately 2 (a below-passing "existing
+// but weak" score), and a criterion whose sub-object is missing entirely
+// also lands on raw_score:2, not on a full parse failure.
+const CriterionRawSchema = z.object({ raw_score: looseScore04(2), comment: z.string().optional() }).catch({ raw_score: 2 });
+export const QualityScoresRawSchema = z.object({
+  faithfulness: CriterionRawSchema,
+  completeness: CriterionRawSchema,
+  usefulness: CriterionRawSchema,
+  agreements_next_step: CriterionRawSchema,
+  format: CriterionRawSchema,
+});
+export type QualityScoresRaw = z.infer<typeof QualityScoresRawSchema>;
+
+const QualityIssueSchema = z.object({
+  type: looseEnum(CALL_SUMMARY_ERROR_TYPES, "FORMAT_VIOLATION"),
+  critical: looseBool(false),
+  comment: z.string().optional(),
+});
+export type QualityIssue = z.infer<typeof QualityIssueSchema>;
+
+export const QualityJudgeRawSchema = z.object({
+  scores: QualityScoresRawSchema,
+  issues: z.array(QualityIssueSchema).catch([]),
+});
+export type QualityJudgeRaw = z.infer<typeof QualityJudgeRawSchema>;
+
+export type QualityDecision = "PASS" | "PASS_WITH_MINOR_ISSUES" | "REGENERATE_SUMMARY" | "REVIEW_REQUIRED";
+
+export const QUALITY_DECISION_LABELS: Record<QualityDecision, string> = {
+  PASS: "Пройдено",
+  PASS_WITH_MINOR_ISSUES: "Пройдено с замечаниями",
+  REGENERATE_SUMMARY: "Требуется перегенерация",
+  REVIEW_REQUIRED: "Требуется проверка",
+};
+
+export type QualityReport = Readonly<{
+  evaluation_version: string;
+  scores: Record<CriterionKey, { raw_score: number; score: number; weight: number; comment?: string }>;
+  overall_score: number;
+  blocking_errors: readonly QualityIssue[];
+  decision: QualityDecision;
+}>;
+
+/**
+ * The one deterministic function both the AI judge's raw scores and a
+ * saved human evaluation are run through -- guarantees "AI и человек
+ * используют одинаковые критерии/шкалу/веса/правила расчёта" (spec §9).
+ * raw_score 0-4 -> criterion score 0-100 (§11), overall = simple average
+ * over five equally-weighted criteria (§10-11), any issue marked
+ * `critical` caps the overall at 60% (§12.1), then threshold decision (§14).
+ */
+export function computeQualityDecision(scores: QualityScoresRaw, issues: readonly QualityIssue[]): QualityReport {
+  const blockingErrors = issues.filter((issue) => issue.critical);
+  const perCriterion = Object.fromEntries(
+    CRITERION_KEYS.map((key) => {
+      const raw = scores[key].raw_score;
+      return [key, { raw_score: raw, score: (raw / 4) * 100, weight: CRITERION_WEIGHT, comment: scores[key].comment }];
+    }),
+  ) as QualityReport["scores"];
+
+  let overall = CRITERION_KEYS.reduce((sum, key) => sum + perCriterion[key].score * CRITERION_WEIGHT, 0);
+  if (blockingErrors.length > 0) overall = Math.min(overall, 60);
+  overall = Math.round(overall);
+
+  const decision: QualityDecision = overall >= 95 ? "PASS" : overall >= 90 ? "PASS_WITH_MINOR_ISSUES" : overall >= 80 ? "REGENERATE_SUMMARY" : "REVIEW_REQUIRED";
+
+  return { evaluation_version: "call_summary_quality_v1", scores: perCriterion, overall_score: overall, blocking_errors: blockingErrors, decision };
+}
+
+const QUALITY_GATE_PROMPT = `Ты — независимый оценщик качества summary звонка. Оцени ГОТОВЫЙ ТЕКСТ summary (не сам разговор) по пяти критериям, используя ТОЛЬКО дискретную шкалу 0-4 для каждого критерия:
+4 — Полностью соответствует. 3 — Есть одно несущественное замечание. 2 — Есть существенный недостаток, но summary остаётся полезным. 1 — Серьёзная ошибка, требуется переработка. 0 — Критерий не выполнен.
+
+КРИТЕРИИ (по 20% каждый)
+1. Достоверность (faithfulness) — все ли факты, выводы и цитаты summary подтверждены транскрибацией и JSON? Блокирующие ошибки (если есть любая из них — отметь issue с critical:true): перепутана роль клиента/агента, придуман факт, искажён бюджет, искажён срок, неверно указана договорённость, клиенту приписано предложение агента, цитата меняет смысл.
+2. Полнота (completeness) — передано ли всё критически важное для продолжения работы (цель обращения, потребность, требования, бюджет/срок, ограничение/возражение, результат, незакрытые вопросы — если они были в разговоре)?
+3. Полезность для агента (usefulness) — позволяет ли summary быстро понять клиента и продолжить работу без прослушивания записи?
+4. Договорённости и следующий шаг (agreements_next_step) — понятно ли, что дальше, кто отвечает и когда? Если шага не было согласовано и summary честно об этом пишет — это НЕ ошибка, снижать оценку нельзя.
+5. Формат, структура и краткость (format) — краткость, структура, отсутствие дублей и повторов.
+
+Также отметь любые найденные проблемы как issues по справочнику типов: ${CALL_SUMMARY_ERROR_TYPES.join(", ")}. Используй critical:true только для действительно блокирующих ошибок (см. критерий 1).
+
+ПРОВЕРЯЕМОЕ SUMMARY
+{{summary}}
+
+FACTS.JSON
+{{facts}}
+
+NEEDS.JSON
+{{needs}}
+
+OUTCOME.JSON
+{{outcome}}
+
+ТРАНСКРИБАЦИЯ (для проверки соответствия)
+{{transcript}}
+
+Верни СТРОГО валидный JSON без markdown и пояснений по схеме:
+{
+  "scores": {
+    "faithfulness": {"raw_score": 0-4, "comment": string},
+    "completeness": {"raw_score": 0-4, "comment": string},
+    "usefulness": {"raw_score": 0-4, "comment": string},
+    "agreements_next_step": {"raw_score": 0-4, "comment": string},
+    "format": {"raw_score": 0-4, "comment": string}
+  },
+  "issues": [{"type": "FACT_INVENTED", "critical": boolean, "comment": string}]
+}`;
+
+// ── Stage config (data-driven, editable in the panel — same convention as ad-copy-test-bench.ts) ──
+
+export type CallSummaryStageId = "facts" | "needs" | "outcome" | "summary" | "quality_gate";
+
+export type CallSummaryStageConfig = Readonly<{
+  id: CallSummaryStageId;
+  enabled: boolean;
+  name: string;
+  type: "llm" | "judge";
+  model: string;
+  prompt: string;
+  outKey: string;
+  // Generous per-stage output budgets -- a real, messy call transcript
+  // needs real room for evidence-heavy structured JSON; the shared BYOK
+  // client's own default (2000) reliably truncates facts/needs/outcome
+  // output on non-trivial calls (confirmed live against AI Tunnel: a
+  // ~2.7k-character transcript produced a response cut off mid-JSON).
+  maxTokens: number;
+  // A hung request should fail loudly in well under a minute, not leave
+  // the user staring at "выполняется…" -- confirmed live one such call
+  // took 48.8s before failing anyway.
+  timeoutMs: number;
+}>;
+
+// Defaults picked from MODEL_OPTIONS' own "(AI Tunnel)"-labeled entries
+// -- unlike "gpt-5-mini"/"claude-sonnet-4.5" (labeled "(OpenAI)"/
+// "(Anthropic)"), these are the models this app's own catalog marks as
+// verified against the AI Tunnel proxy, which every stage gets routed
+// through unconditionally once "AI Tunnel" is the selected provider in
+// Настройки (callModelByName forwards whatever model string a stage is
+// configured with, regardless of that model's own label/vendor). Still
+// fully editable per stage in the panel regardless of provider.
+const DEFAULT_EXTRACTION_MODEL = "gpt-4o-mini";
+const DEFAULT_JUDGE_MODEL = "deepseek-v3.2-exp";
+
+// timeoutMs values below are deliberately generous, not just "safe": a real
+// run through AI Tunnel (see the 2026-07-27 incident report) hit the prior
+// 45000ms ceiling on quality_gate on BOTH technical-retry attempts back to
+// back (durationMs: 45002 each) -- i.e. this wasn't a one-off transient
+// blip STAGE_TECHNICAL_RETRIES could paper over, the stage's real latency
+// under load genuinely exceeded 45s, so retrying with the same short
+// window just wasted ~90s before still failing. quality_gate reads the
+// most context of any stage (summary + all three upstream JSONs) and gets
+// the longest allowance for that reason.
+export function defaultCallSummaryStages(): CallSummaryStageConfig[] {
+  return [
+    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: FACTS_PROMPT, outKey: "facts", maxTokens: 4000, timeoutMs: 60000 },
+    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: NEEDS_PROMPT, outKey: "needs", maxTokens: 3000, timeoutMs: 60000 },
+    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: OUTCOME_PROMPT, outKey: "outcome", maxTokens: 3000, timeoutMs: 60000 },
+    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: SUMMARY_PROMPT, outKey: "summary", maxTokens: 2500, timeoutMs: 60000 },
+    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: DEFAULT_JUDGE_MODEL, prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate", maxTokens: 2500, timeoutMs: 90000 },
+  ];
+}
+
+// ── JSON repair (duplicated, small, self-contained -- see file header for why this isn't imported from ad-copy-test-bench.ts) ──
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function extractBraceSpan(text: string): string {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start >= 0 && end > start ? text.slice(start, end + 1) : text;
+}
+
+function fixControlCharsInsideStrings(text: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (!inString) {
+      if (ch === '"') inString = true;
+      result += ch;
+      continue;
+    }
+    if (escaped) {
+      result += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      result += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = false;
+      result += ch;
+      continue;
+    }
+    if (ch === "\n") {
+      result += "\\n";
+      continue;
+    }
+    if (ch === "\r") continue;
+    if (ch === "\t") {
+      result += "\\t";
+      continue;
+    }
+    result += ch;
+  }
+  return result;
+}
+
+function closeUnbalancedBrackets(text: string): string {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  return stack.length > 0 ? text + stack.reverse().join("") : text;
+}
+
+export type JsonRepairResult = Readonly<{ ok: boolean; value?: unknown; repaired: boolean; rawText: string; error?: string }>;
+
+export function repairAndParseJson(raw: string): JsonRepairResult {
+  try {
+    return { ok: true, value: parseJsonResponse(raw), repaired: false, rawText: raw };
+  } catch {
+    // fall through to repair
+  }
+  let candidate = extractBraceSpan(raw.trim().replace(/```json/gi, "").replace(/```/g, "").trim());
+  candidate = candidate.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  candidate = fixControlCharsInsideStrings(candidate);
+  candidate = candidate.replace(/,(\s*[}\]])/g, "$1");
+  candidate = closeUnbalancedBrackets(candidate);
+  try {
+    return { ok: true, value: JSON.parse(candidate), repaired: true, rawText: raw };
+  } catch (error) {
+    return { ok: false, repaired: false, rawText: raw, error: errorMessage(error) };
+  }
+}
+
+// ── Run engine ──
+
+const COST_PER_1K_TOKENS: Record<string, number> = {
+  "gpt-5-mini": 0.0006,
+  "claude-sonnet-4.5": 0.006,
+  "deepseek-v3.2-exp": 0.0004,
+  "deepseek-v4-flash": 0.0004,
+  "gpt-4o-mini": 0.0006,
+  "gemini-2.5-flash-lite": 0.0003,
+  "qwen3-235b-a22b-2507": 0.0004,
+  "mistral-small-3.2-24b-instruct": 0.0004,
+};
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.round(text.length / 4));
+}
+function estimateCost(model: string, tokens: number): number {
+  return (tokens / 1000) * (COST_PER_1K_TOKENS[model] ?? 0.001);
+}
+
+function tmpl(str: string, vars: Readonly<Record<string, string>>): string {
+  return str.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? "");
+}
+function j(value: unknown): string {
+  return value === undefined ? "—" : JSON.stringify(value, null, 2);
+}
+
+export type CallSummaryStageStatus = "idle" | "running" | "ok" | "bad";
+export type CallSummaryStageReport = Readonly<{
+  stageId: CallSummaryStageId;
+  status: CallSummaryStageStatus;
+  attempt?: number;
+  output?: unknown;
+  rawResponse?: string;
+  jsonRepaired?: boolean;
+  error?: string;
+  durationMs?: number;
+  tokens?: number;
+  costUsd?: number;
+}>;
+
+export type CallSummaryPipelineResult = Readonly<{
+  reports: Readonly<Record<CallSummaryStageId, CallSummaryStageReport>>;
+  facts?: FactsQuotes;
+  needs?: Needs;
+  outcome?: Outcome;
+  summary?: Summary;
+  aiQualityReport?: QualityReport;
+  retryCount: number;
+  totalTokensEstimate: number;
+  totalCostUsd: number;
+  totalDurationMs: number;
+  technicalError?: string;
+}>;
+
+const STAGE_SCHEMAS: Record<CallSummaryStageId, z.ZodTypeAny> = {
+  facts: FactsQuotesSchema,
+  needs: NeedsSchema,
+  outcome: OutcomeSchema,
+  summary: SummarySchema,
+  quality_gate: QualityJudgeRawSchema,
+};
+
+const MAX_SUMMARY_ATTEMPTS = 2; // spec §14: "для MVP можно разрешить только один повтор"
+
+export async function runCallSummaryPipeline(
+  stages: readonly CallSummaryStageConfig[],
+  transcript: string,
+  crmFieldsVisible: readonly string[],
+  onUpdate: (reports: Readonly<Record<string, CallSummaryStageReport>>) => void,
+): Promise<CallSummaryPipelineResult> {
+  const startAll = Date.now();
+  let reports: Record<string, CallSummaryStageReport> = Object.fromEntries(
+    stages.map((stage) => [stage.id, { stageId: stage.id, status: "idle" as const }]),
+  );
+  const emit = () => onUpdate({ ...reports });
+  const setReport = (id: string, patch: Partial<CallSummaryStageReport>) => {
+    reports = { ...reports, [id]: { ...reports[id], ...patch, stageId: id as CallSummaryStageId } };
+    emit();
+  };
+  emit();
+
+  let totalTokens = 0;
+  let totalCostUsd = 0;
+
+  const byId = new Map(stages.filter((s) => s.enabled).map((stage) => [stage.id, stage]));
+  const ctx: { facts?: FactsQuotes; needs?: Needs; outcome?: Outcome; summary?: Summary; quality_gate?: QualityJudgeRaw } = {};
+  // Declared here (before any early `return finalize(...)` below) so
+  // `finalize()`'s closure never hits a temporal-dead-zone
+  // ReferenceError on an early technical-error exit from stage 1/2/3.
+  let retryCount = 0;
+  let aiQualityReport: QualityReport | undefined;
+
+  // Separate from MAX_SUMMARY_ATTEMPTS below (which re-generates the
+  // summary when its *content* scores REGENERATE_SUMMARY) -- this covers
+  // plain transient call failures (a truncated/empty response, a dropped
+  // connection) on *any* stage, confirmed live: a real AI Tunnel call
+  // once returned valid-looking JSON cut off mid-string at character 113
+  // after 37s, with nothing content-wise wrong to regenerate against --
+  // just a bad call worth retrying once before surfacing TECHNICAL_ERROR.
+  const STAGE_TECHNICAL_RETRIES = 2;
+
+  async function runStage(id: CallSummaryStageId, promptVars: Readonly<Record<string, string>>, attempt?: number): Promise<{ ok: boolean; parsed?: unknown }> {
+    const stage = byId.get(id);
+    if (!stage) return { ok: false };
+
+    let result: { ok: boolean; parsed?: unknown } = { ok: false };
+    for (let technicalTry = 1; technicalTry <= STAGE_TECHNICAL_RETRIES; technicalTry += 1) {
+      const startedMs = Date.now();
+      setReport(id, { status: "running", attempt });
+      const retrySuffix = technicalTry < STAGE_TECHNICAL_RETRIES ? " Повторяю вызов…" : "";
+      try {
+        const prompt = tmpl(stage.prompt, promptVars);
+        const text = await callModelByName(prompt, stage.model, { maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs });
+        const tokens = estimateTokens(prompt) + estimateTokens(text);
+        const cost = estimateCost(stage.model, tokens);
+        totalTokens += tokens;
+        totalCostUsd += cost;
+
+        const repair = repairAndParseJson(text);
+        if (!repair.ok) {
+          const preview = text.trim().slice(0, 200);
+          setReport(id, {
+            status: "bad",
+            error: `JSON не удалось разобрать: ${repair.error}. Ответ модели (первые 200 символов): «${preview}${text.trim().length > 200 ? "…" : ""}»${retrySuffix}`,
+            rawResponse: text,
+            attempt,
+            durationMs: Date.now() - startedMs,
+            tokens,
+            costUsd: cost,
+          });
+          result = { ok: false };
+          continue;
+        }
+        const schema = STAGE_SCHEMAS[id];
+        const validated = schema.safeParse(repair.value);
+        if (!validated.success) {
+          const issues = validated.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+          setReport(id, { status: "bad", error: `Ответ не соответствует контракту этапа: ${issues}${retrySuffix}`, rawResponse: text, jsonRepaired: repair.repaired, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
+          result = { ok: false };
+          continue;
+        }
+        setReport(id, { status: "ok", output: validated.data, rawResponse: text, jsonRepaired: repair.repaired, attempt, durationMs: Date.now() - startedMs, tokens, costUsd: cost });
+        return { ok: true, parsed: validated.data };
+      } catch (error) {
+        setReport(id, { status: "bad", error: `${errorMessage(error)}${retrySuffix}`, attempt, durationMs: Date.now() - startedMs });
+        result = { ok: false };
+      }
+    }
+    return result;
+  }
+
+  const factsResult = await runStage("facts", { transcript });
+  if (!factsResult.ok) {
+    return finalize("Этап «Факты и цитаты» завершился с технической ошибкой.");
+  }
+  ctx.facts = factsResult.parsed as FactsQuotes;
+
+  const needsResult = await runStage("needs", { transcript, facts: j(ctx.facts) });
+  if (!needsResult.ok) return finalize("Этап «Потребности» завершился с технической ошибкой.");
+  ctx.needs = needsResult.parsed as Needs;
+
+  const outcomeResult = await runStage("outcome", { transcript, facts: j(ctx.facts) });
+  if (!outcomeResult.ok) return finalize("Этап «Результат и следующий шаг» завершился с технической ошибкой.");
+  ctx.outcome = outcomeResult.parsed as Outcome;
+
+  for (let attempt = 1; attempt <= MAX_SUMMARY_ATTEMPTS; attempt += 1) {
+    const summaryResult = await runStage(
+      "summary",
+      { transcript, facts: j(ctx.facts), needs: j(ctx.needs), outcome: j(ctx.outcome), crm_fields_visible: crmFieldsVisible.join(", ") || "нет" },
+      attempt,
+    );
+    if (!summaryResult.ok) return finalize("Этап «Генерация summary» завершился с технической ошибкой.");
+    ctx.summary = summaryResult.parsed as Summary;
+
+    const gateResult = await runStage(
+      "quality_gate",
+      { summary: j(ctx.summary), facts: j(ctx.facts), needs: j(ctx.needs), outcome: j(ctx.outcome), transcript },
+      attempt,
+    );
+    if (!gateResult.ok) return finalize("Этап «Summary Quality Gate» завершился с технической ошибкой.");
+    ctx.quality_gate = gateResult.parsed as QualityJudgeRaw;
+    aiQualityReport = computeQualityDecision(ctx.quality_gate.scores, ctx.quality_gate.issues);
+    retryCount = attempt - 1;
+
+    if (aiQualityReport.decision !== "REGENERATE_SUMMARY" || attempt >= MAX_SUMMARY_ATTEMPTS) break;
+  }
+
+  return finalize();
+
+  function finalize(technicalError?: string): CallSummaryPipelineResult {
+    return {
+      reports: reports as Record<CallSummaryStageId, CallSummaryStageReport>,
+      facts: ctx.facts,
+      needs: ctx.needs,
+      outcome: ctx.outcome,
+      summary: ctx.summary,
+      aiQualityReport,
+      retryCount,
+      totalTokensEstimate: Math.round(totalTokens),
+      totalCostUsd,
+      totalDurationMs: Date.now() - startAll,
+      technicalError,
+    };
+  }
+}
+
+// ── Per-stage mini-dashboard (compact numeric summary shown next to each stage card, not just raw JSON) ──
+
+export type StageStatChip = Readonly<{ label: string; value: string }>;
+
+/** Pure function: derives a short, stage-specific row of numbers from that stage's own validated output -- no LLM call, no side effects, safe to compute on every render. */
+export function stageStatChips(stageId: CallSummaryStageId, output: unknown): readonly StageStatChip[] {
+  if (output === undefined || output === null) return [];
+  switch (stageId) {
+    case "facts": {
+      const data = output as Partial<FactsQuotes>;
+      return [
+        { label: "Фактов", value: String(data.facts?.length ?? 0) },
+        { label: "Цитат", value: String(data.quotes?.length ?? 0) },
+        { label: "Конфликтов", value: String(data.conflicts?.length ?? 0) },
+        { label: "Не найдено", value: String(data.missing_critical_facts?.length ?? 0) },
+      ];
+    }
+    case "needs": {
+      const data = output as Partial<Needs>;
+      return [
+        { label: "Уверенность", value: data.confidence !== undefined ? `${Math.round(data.confidence * 100)}%` : "—" },
+        { label: "Параметров", value: String(data.requirements?.object_parameters?.length ?? 0) },
+        { label: "Ограничений", value: String(data.requirements?.limitations?.length ?? 0) },
+        { label: "Локаций", value: String(data.requirements?.locations?.length ?? 0) },
+      ];
+    }
+    case "outcome": {
+      const data = output as Partial<Outcome>;
+      return [
+        { label: "Тип", value: data.conversation_outcome?.type ? outcomeTypeLabel(data.conversation_outcome.type) : "—" },
+        { label: "Договорённостей", value: String(data.agreements?.length ?? 0) },
+        { label: "Шаг согласован", value: data.next_step?.is_agreed ? "да" : "нет" },
+        { label: "Открытых вопросов", value: String(data.conversation_outcome?.unresolved_questions?.length ?? 0) },
+      ];
+    }
+    case "summary": {
+      const data = output as Summary;
+      if (data.status === "INPUT_DATA_INCOMPLETE") return [{ label: "Статус", value: "неполные данные" }];
+      return [
+        { label: "Ключевых фактов", value: String(data.key_facts?.length ?? 0) },
+        { label: "Цитат", value: String(data.quotes?.length ?? 0) },
+        { label: "Символов", value: String(data.conversation_result?.length ?? 0) },
+      ];
+    }
+    case "quality_gate": {
+      const data = output as QualityJudgeRaw;
+      const report = computeQualityDecision(data.scores, data.issues);
+      return [
+        { label: "Итог", value: `${report.overall_score}%` },
+        { label: "Решение", value: QUALITY_DECISION_LABELS[report.decision] },
+        { label: "Блокеров", value: String(report.blocking_errors.length) },
+      ];
+    }
+    default:
+      return [];
+  }
+}

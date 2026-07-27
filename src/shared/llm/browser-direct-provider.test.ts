@@ -131,6 +131,60 @@ describe("AI Tunnel browser provider", () => {
     expect(JSON.parse(request.body as string)).toEqual({ model, messages: [{ role: "user", content: "prompt" }], temperature: 0.2, max_tokens: 2000 });
   });
 
+  it("throws a clear error instead of silently returning an empty string when AI Tunnel returns a 200 with no usable content", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse(""));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(callModelByName("prompt", "gpt-4o-mini")).rejects.toThrow("AI Tunnel вернул пустой ответ");
+  });
+
+  it("treats whitespace-only content the same as empty", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("   \n  "));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(callModelByName("prompt", "gpt-4o-mini")).rejects.toThrow("AI Tunnel вернул пустой ответ");
+  });
+
+  it("forwards a caller-supplied timeoutMs through callModelByName as an AbortSignal on the AI Tunnel request", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-4o-mini", { timeoutMs: 45000 });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(request.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("omits the AbortSignal when timeoutMs is not supplied, matching pre-existing behavior", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-4o-mini");
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(request.signal).toBeUndefined();
+  });
+
+  it("forwards a caller-supplied maxTokens through callModelByName to the AI Tunnel request, without changing the default when omitted", async () => {
+    saveAiTunnelSettings("sk-aitunnel-secret", "https://api.aitunnel.ru/v1/");
+    saveSelectedLlmProvider("ai-tunnel");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("работает"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-5-mini", { maxTokens: 4000 });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({ model: "gpt-5-mini", messages: [{ role: "user", content: "prompt" }], temperature: 0.2, max_tokens: 4000 });
+  });
+
   it("uses the short connection-test payload and maps an invalid key", async () => {
     saveAiTunnelSettings("sk-aitunnel-invalid", "https://api.aitunnel.ru/v1");
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: "invalid api key" } }), { status: 401 }));
@@ -139,6 +193,63 @@ describe("AI Tunnel browser provider", () => {
     await expect(testAiTunnelConnection("gpt-5-mini")).resolves.toBe("invalid-key");
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body).toEqual({ model: "gpt-5-mini", messages: [{ role: "user", content: "Ответь одним словом: работает" }], temperature: 0, max_tokens: 2000 });
+  });
+});
+
+describe("callModelByName maxTokens forwarding (openai-direct and anthropic-direct)", () => {
+  afterEach(() => {
+    clearAnthropicApiKey();
+    clearOpenAiApiKey();
+    window.localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("forwards maxTokens to the OpenAI proxy request body", async () => {
+    saveOpenAiApiKey("sk-openai-valid-key");
+    saveSelectedLlmProvider("openai-direct");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("hello"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-5-mini", { maxTokens: 4000 });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toEqual({ apiKey: "sk-openai-valid-key", model: "gpt-5-mini", prompt: "prompt", maxTokens: 4000 });
+  });
+
+  it("omits maxTokens from the OpenAI proxy body when not supplied, matching pre-existing behavior", async () => {
+    saveOpenAiApiKey("sk-openai-valid-key");
+    saveSelectedLlmProvider("openai-direct");
+    const fetchMock = vi.fn().mockResolvedValue(openAiResponse("hello"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "gpt-5-mini");
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toEqual({ apiKey: "sk-openai-valid-key", model: "gpt-5-mini", prompt: "prompt" });
+  });
+
+  it("forwards maxTokens to the Anthropic request body", async () => {
+    saveAnthropicApiKey("sk-ant-valid-key");
+    saveSelectedLlmProvider("anthropic-direct");
+    const fetchMock = vi.fn().mockResolvedValue(anthropicResponse("hello"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "claude-sonnet-4-6", { maxTokens: 4000 });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.max_tokens).toBe(4000);
+  });
+
+  it("defaults Anthropic max_tokens to 2000 when not supplied, matching pre-existing behavior", async () => {
+    saveAnthropicApiKey("sk-ant-valid-key");
+    saveSelectedLlmProvider("anthropic-direct");
+    const fetchMock = vi.fn().mockResolvedValue(anthropicResponse("hello"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callModelByName("prompt", "claude-sonnet-4-6");
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.max_tokens).toBe(2000);
   });
 });
 

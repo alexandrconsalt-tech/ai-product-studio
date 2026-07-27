@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { ArrowLeft, Check, Clipboard, FileJson, Search, Upload } from "lucide-react";
+import { ArrowLeft, Check, Clipboard, FileJson, FileText, Search, Upload, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Button, Input, Panel, Select, Textarea } from "@/shared/ui";
+import { Button, Dialog, Input, Panel, Select, Textarea } from "@/shared/ui";
 import { normalizePlaygroundRun } from "./importer";
 import { buildReview, createDefaultCriteria, getAllBlockScores, getHumanDecision, getHumanScore, reviewBlocks, reviewerRoles } from "./scoring";
 import { sampleRun } from "./sample-data";
@@ -28,6 +28,28 @@ const optionClasses: Record<CriterionValue, string> = {
   no: "border-red-600 bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200",
   na: "border-border bg-muted text-text-muted",
 };
+
+// Display-only translation -- the underlying codes (AiDecision/HumanDecision)
+// stay untouched in storage/filtering logic, only the label shown to the
+// reviewer is Russian.
+const AI_DECISION_LABELS: Record<string, string> = {
+  AUTO_SAVE: "Автосохранение",
+  MANUAL_REVIEW: "Ручная проверка",
+  RETRY: "Повтор",
+};
+function aiDecisionLabel(value: string): string {
+  return AI_DECISION_LABELS[value] ?? value;
+}
+
+const HUMAN_DECISION_LABELS: Record<string, string> = {
+  EXCELLENT: "Отлично",
+  GOOD: "Хорошо",
+  ACCEPTABLE: "Приемлемо",
+  NEEDS_REWORK: "Требует доработки",
+};
+function humanDecisionLabel(value: string): string {
+  return HUMAN_DECISION_LABELS[value] ?? value;
+}
 
 function decodePayload(payload: string | null): unknown | null {
   if (!payload) return null;
@@ -74,6 +96,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
   const [visibleRoles, setVisibleRoles] = React.useState<Record<string, boolean>>({ Оператор: true, Агент: true, Клиент: true });
   const [saved, setSaved] = React.useState(false);
   const [importError, setImportError] = React.useState("");
+  const [transcriptModalOpen, setTranscriptModalOpen] = React.useState(false);
 
   React.useEffect(() => {
     const payloadRun = decodePayload(searchParams.get("payload"));
@@ -172,15 +195,25 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
               К списку запусков
             </Button>
           ) : null}
+          <Button variant="secondary" onClick={() => setTranscriptModalOpen(true)}>
+            <FileText className="size-4" aria-hidden="true" />
+            Транскрибация
+          </Button>
           <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm">
-            Human Score: <span className="font-semibold">{humanScore.toFixed(1)}</span> · {humanDecision}
+            Оценка человека: <span className="font-semibold">{humanScore.toFixed(1)}</span> · {humanDecisionLabel(humanDecision)}
           </div>
         </div>
       </div>
 
-      <div className="grid min-h-[680px] grid-cols-1 gap-4 xl:grid-cols-[1.05fr_0.85fr_1.15fr]">
-        <Panel className="flex min-h-0 flex-col overflow-hidden">
-          <div className="border-b border-border p-3">
+      {transcriptModalOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4 backdrop-blur-sm" onClick={() => setTranscriptModalOpen(false)}>
+          <Dialog className="grid max-h-[85vh] w-full max-w-3xl gap-3 overflow-hidden" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">Транскрибация звонка</p>
+              <Button variant="ghost" onClick={() => setTranscriptModalOpen(false)} aria-label="Закрыть">
+                <X className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
             <div className="mb-2 flex items-center gap-2">
               <Search className="size-4 text-text-muted" aria-hidden="true" />
               <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по транскрибации" />
@@ -192,22 +225,24 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
                 </Button>
               ))}
             </div>
-          </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3 text-sm leading-6">
-            {transcriptLines.map((line, index) => (
-              <p key={`${line}-${index}`} className="rounded-md bg-muted/50 px-3 py-2">{line}</p>
-            ))}
-          </div>
-        </Panel>
+            <div className="min-h-0 flex-1 space-y-2 overflow-auto p-1 text-sm leading-6">
+              {transcriptLines.map((line, index) => (
+                <p key={`${line}-${index}`} className="rounded-md bg-muted/50 px-3 py-2">{line}</p>
+              ))}
+            </div>
+          </Dialog>
+        </div>
+      ) : null}
 
+      <div className="grid min-h-[680px] grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <Panel className="flex min-h-0 flex-col gap-3 overflow-auto p-4">
           <div>
             <h2 className="text-lg font-semibold">Итоговое саммари</h2>
             <p className="mt-3 whitespace-pre-wrap rounded-md bg-muted/50 p-3 text-sm leading-6">{run.summary}</p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <div className="rounded-md border border-border p-3">AI Score<br /><span className="text-xl font-semibold">{run.aiScore}</span></div>
-            <div className="rounded-md border border-border p-3">AI Decision<br /><span className="text-base font-semibold">{run.aiDecision}</span></div>
+            <div className="rounded-md border border-border p-3">Оценка AI<br /><span className="text-xl font-semibold">{run.aiScore}</span></div>
+            <div className="rounded-md border border-border p-3">Решение AI<br /><span className="text-base font-semibold">{aiDecisionLabel(run.aiDecision)}</span></div>
           </div>
           <div>
             <h3 className="text-sm font-semibold">Краткие AI-проблемы</h3>

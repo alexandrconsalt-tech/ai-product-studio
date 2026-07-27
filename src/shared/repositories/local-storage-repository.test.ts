@@ -145,7 +145,13 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
     for (const retiredId of retiredIds) expect(loadedIds).not.toContain(retiredId);
     expect(loadedIds).toContain(keptProject.id);
     expect(loaded.products.some((product) => product.projectId === keptProject.id)).toBe(true);
-    expect(loaded.pipelines).toHaveLength(0);
+    // Only pipeline left is the one unconditionally injected by
+    // withCallSummaryPipelineModule() (the second, isolated product added
+    // 2026-07-26) -- none of the retired/kept fixtures above have a
+    // pipeline of their own, and withTranscriptionSummaryModule() injects
+    // no Pipeline record at all.
+    expect(loaded.pipelines).toHaveLength(1);
+    expect(loaded.pipelines[0]?.id).toBe("pipeline_call_summary_v2");
     expect(loaded.runs).toHaveLength(0);
     expect(loaded.reviews).toHaveLength(0);
   });

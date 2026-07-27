@@ -14,6 +14,28 @@ function barWidth(value: number, max: number) {
   return `${Math.max(4, Math.round((value / Math.max(max, 1)) * 100))}%`;
 }
 
+// Display-only translation -- the underlying codes (AiDecision/HumanDecision)
+// stay untouched in storage/filtering/CSV export, only the label shown on
+// screen is Russian.
+const AI_DECISION_LABELS: Record<string, string> = {
+  AUTO_SAVE: "Автосохранение",
+  MANUAL_REVIEW: "Ручная проверка",
+  RETRY: "Повтор",
+};
+function aiDecisionLabel(value: string): string {
+  return AI_DECISION_LABELS[value] ?? value;
+}
+
+const HUMAN_DECISION_LABELS: Record<string, string> = {
+  EXCELLENT: "Отлично",
+  GOOD: "Хорошо",
+  ACCEPTABLE: "Приемлемо",
+  NEEDS_REWORK: "Требует доработки",
+};
+function humanDecisionLabel(value: string): string {
+  return HUMAN_DECISION_LABELS[value] ?? value;
+}
+
 export function ReportWorkspace() {
   const [records, setRecords] = React.useState<ReviewRecord[]>([]);
   const [reviewer, setReviewer] = React.useState("");
@@ -41,13 +63,13 @@ export function ReportWorkspace() {
   const reviewed = filtered.filter((record) => record.review);
   const metrics = [
     ["Всего оценено", String(reviewed.length)],
-    ["Средний AI Score", avg(reviewed.map((record) => record.run.aiScore)).toFixed(1)],
-    ["Средний Human Score", avg(reviewed.map((record) => record.review?.humanScore ?? 0)).toFixed(1)],
+    ["Средняя оценка AI", avg(reviewed.map((record) => record.run.aiScore)).toFixed(1)],
+    ["Средняя оценка человека", avg(reviewed.map((record) => record.review?.humanScore ?? 0)).toFixed(1)],
     ["Среднее расхождение", avg(reviewed.map((record) => record.difference ?? 0)).toFixed(1)],
-    ["Доля совпадений AI/Human", `${Math.round((reviewed.filter((record) => record.differenceStatus === "Совпадает").length / Math.max(reviewed.length, 1)) * 100)}%`],
-    ["Количество Golden Dataset", String(filtered.filter((record) => record.isGolden).length)],
-    ["Доля RETRY", `${Math.round((filtered.filter((record) => record.run.aiDecision === "RETRY").length / Math.max(filtered.length, 1)) * 100)}%`],
-    ["Доля Manual Review", `${Math.round((filtered.filter((record) => record.run.aiDecision === "MANUAL_REVIEW").length / Math.max(filtered.length, 1)) * 100)}%`],
+    ["Доля совпадений AI/человек", `${Math.round((reviewed.filter((record) => record.differenceStatus === "Совпадает").length / Math.max(reviewed.length, 1)) * 100)}%`],
+    ["Количество в эталонном наборе", String(filtered.filter((record) => record.isGolden).length)],
+    ["Доля повторов", `${Math.round((filtered.filter((record) => record.run.aiDecision === "RETRY").length / Math.max(filtered.length, 1)) * 100)}%`],
+    ["Доля ручной проверки", `${Math.round((filtered.filter((record) => record.run.aiDecision === "MANUAL_REVIEW").length / Math.max(filtered.length, 1)) * 100)}%`],
   ];
 
   const blockAverages = [
@@ -91,7 +113,7 @@ export function ReportWorkspace() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Отчёт по оценке</h1>
-          <p className="text-sm text-text-muted">Сравнение AI Score и ручной оценки пользователей.</p>
+          <p className="text-sm text-text-muted">Сравнение оценки AI и ручной оценки пользователей.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={exportCsv}><Download className="size-4" />Экспорт CSV</Button>
@@ -111,15 +133,26 @@ export function ReportWorkspace() {
       <Panel className="grid gap-3 p-3 md:grid-cols-3 xl:grid-cols-6">
         <Input value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="Оценщик" />
         <Select value={role} onChange={(event) => setRole(event.target.value)}><option>Все</option><option>Агент</option><option>РОП</option><option>Продакт</option><option>QA</option><option>Другое</option></Select>
-        <Select value={aiDecision} onChange={(event) => setAiDecision(event.target.value)}><option>Все</option><option>AUTO_SAVE</option><option>MANUAL_REVIEW</option><option>RETRY</option></Select>
-        <Select value={humanDecision} onChange={(event) => setHumanDecision(event.target.value as HumanDecision | "Все")}><option>Все</option><option>EXCELLENT</option><option>GOOD</option><option>ACCEPTABLE</option><option>NEEDS_REWORK</option></Select>
+        <Select value={aiDecision} onChange={(event) => setAiDecision(event.target.value)}>
+          <option value="Все">Все</option>
+          <option value="AUTO_SAVE">Автосохранение</option>
+          <option value="MANUAL_REVIEW">Ручная проверка</option>
+          <option value="RETRY">Повтор</option>
+        </Select>
+        <Select value={humanDecision} onChange={(event) => setHumanDecision(event.target.value as HumanDecision | "Все")}>
+          <option value="Все">Все</option>
+          <option value="EXCELLENT">Отлично</option>
+          <option value="GOOD">Хорошо</option>
+          <option value="ACCEPTABLE">Приемлемо</option>
+          <option value="NEEDS_REWORK">Требует доработки</option>
+        </Select>
         <Select value={golden} onChange={(event) => setGolden(event.target.value)}><option>Все</option><option>Да</option><option>Нет</option></Select>
         <Select value={diffStatus} onChange={(event) => setDiffStatus(event.target.value as DifferenceStatus | "Все")}><option>Все</option><option>Совпадает</option><option>Допустимое расхождение</option><option>Требует анализа</option></Select>
       </Panel>
 
       <div className="grid gap-4 xl:grid-cols-4">
         <Panel className="p-4 xl:col-span-2">
-          <h2 className="mb-3 text-sm font-semibold">AI Score vs Human Score</h2>
+          <h2 className="mb-3 text-sm font-semibold">Оценка AI и человека</h2>
           <div className="space-y-2">
             {reviewed.slice(0, 8).map((record) => (
               <div key={record.run.id} className="grid grid-cols-[120px_1fr_48px] items-center gap-2 text-xs">
@@ -155,7 +188,7 @@ export function ReportWorkspace() {
       <Panel className="overflow-auto">
         <table className="w-full min-w-[1100px] text-left text-sm">
           <thead className="border-b border-border text-xs text-text-muted">
-            <tr>{["id", "дата", "клиент", "AI Score", "Human Score", "разница", "AI Decision", "Human Decision", "Golden", "оценщик", "статус"].map((head) => <th key={head} className="p-3 font-medium">{head}</th>)}</tr>
+            <tr>{["id", "дата", "клиент", "оценка AI", "оценка человека", "разница", "решение AI", "решение человека", "эталон", "оценщик", "статус"].map((head) => <th key={head} className="p-3 font-medium">{head}</th>)}</tr>
           </thead>
           <tbody>
             {filtered.map((record) => (
@@ -166,9 +199,9 @@ export function ReportWorkspace() {
                 <td className="p-3">{record.run.aiScore}</td>
                 <td className="p-3">{record.review?.humanScore.toFixed(1) ?? ""}</td>
                 <td className="p-3">{record.difference?.toFixed(1) ?? ""} {record.differenceStatus !== "Нет оценки" ? `· ${record.differenceStatus}` : ""}</td>
-                <td className="p-3">{record.run.aiDecision}</td>
-                <td className="p-3">{record.review?.humanDecision ?? ""}</td>
-                <td className="p-3">{record.isGolden ? <span className="rounded-full bg-yellow-400 px-2 py-1 text-xs font-semibold text-yellow-950">GOLDEN</span> : ""}</td>
+                <td className="p-3">{aiDecisionLabel(record.run.aiDecision)}</td>
+                <td className="p-3">{record.review?.humanDecision ? humanDecisionLabel(record.review.humanDecision) : ""}</td>
+                <td className="p-3">{record.isGolden ? <span className="rounded-full bg-yellow-400 px-2 py-1 text-xs font-semibold text-yellow-950">ЭТАЛОН</span> : ""}</td>
                 <td className="p-3">{record.review?.reviewerName ?? ""}</td>
                 <td className="p-3">{record.reviewStatus}</td>
               </tr>

@@ -20,6 +20,19 @@ const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
 const TRANSCRIPTION_SUMMARY_CREATED_AT = "2026-07-08T00:00:00.000Z";
 
+// Second, fully isolated product (2026-07-26) -- see
+// docs/NEW_SUMMARY_PIPELINE_SPEC.md. Own project/product/architecture/
+// pipeline records, own PlaygroundTestRunSource ("call-summary-pipeline"),
+// own React engine (src/features/call-summary-pipeline/). Never shares an
+// id, a prompt, or a stage with the original transcription/summary module
+// above or with pipeline_ad_copy_generation.
+const CALL_SUMMARY_PROJECT_ID = "project_call_summary_v2";
+const CALL_SUMMARY_PRODUCT_ID = "product_call_summary_v2";
+const CALL_SUMMARY_ARCHITECTURE_ID = "architecture_call_summary_v2";
+const CALL_SUMMARY_PIPELINE_ID = "pipeline_call_summary_v2";
+const CALL_SUMMARY_NAME = "Анализ звонков v2 (Факты → Потребности → Результат → Summary → Quality Gate)";
+const CALL_SUMMARY_CREATED_AT = "2026-07-26T00:00:00.000Z";
+
 const RepositorySnapshotSchema = z.object({
   projects: z.array(ProjectSchema).readonly(),
   products: z.array(ProductSchema).readonly(),
@@ -269,15 +282,186 @@ function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): Repositor
   };
 }
 
+const CALL_SUMMARY_STAGE_DEFS = [
+  { key: "facts", name: "Факты и цитаты", description: "Извлекает подтверждённые факты и важные цитаты клиента из транскрибации, с evidence и обработкой конфликтов.", output: "facts.json" },
+  { key: "needs", name: "Потребности клиента", description: "Собирает полную модель клиентского запроса: намерение, требования, ограничения, стадию принятия решения.", output: "needs.json" },
+  { key: "outcome", name: "Результат и следующий шаг", description: "Определяет итог звонка, договорённости и следующий шаг, раздельно.", output: "outcome.json" },
+  { key: "summary", name: "Генерация summary", description: "Формирует короткое человеческое summary из трёх JSON и транскрибации.", output: "summary.json" },
+  { key: "quality_gate", name: "Summary Quality Gate", description: "Оценивает summary по единой человеко-AI методике: 5 критериев по 20%, шкала 0-4.", output: "quality_report.json" },
+] as const;
+
+/**
+ * Injects the second, fully isolated call-summary product (see
+ * docs/NEW_SUMMARY_PIPELINE_SPEC.md) -- same mechanism as
+ * withTranscriptionSummaryModule() above, so it reliably appears both for
+ * brand-new browsers (first load falls back to demoSnapshot) and for
+ * existing users who already have a persisted snapshot (only this kind of
+ * unconditional injection, not a demo-data.ts fixture, actually reaches
+ * them -- see the ADR-equivalent note in CLAUDE.md's addendum for this
+ * change; a plain demo-data.ts fixture would additionally have needed to
+ * dodge RETIRED_DEMO_PROJECT_IDS, which project_ad_copy_generation did
+ * not). Unlike the transcription-summary module, this product DOES ship
+ * with a domain Pipeline record (id CALL_SUMMARY_PIPELINE_ID) so
+ * playground-screen.tsx's `pipeline.id === CALL_SUMMARY_PIPELINE_ID`
+ * branch can route it to its own React panel instead of Pipeline Lab v3.
+ */
+// The project's description shipped with this text in the very first
+// version of this injection; superseded below, but already-persisted
+// snapshots keep whatever they got on first load since this function is
+// otherwise additive-only (see the "Appended at the end" note near the
+// return statement) -- so it has to be migrated explicitly here, not just
+// changed in the `project` literal, or existing users would keep seeing
+// this line forever.
+const STALE_CALL_SUMMARY_DESCRIPTION =
+  "Второй, полностью изолированный продукт: pipeline из пяти AI-этапов для анализа звонков и генерации проверяемого summary. Не использует промты, схемы или историю старого Pipeline Lab v3.";
+
+function withCallSummaryPipelineModule(snapshot: RepositorySnapshot): RepositorySnapshot {
+  const existingProject = snapshot.projects.find((project) => project.id === CALL_SUMMARY_PROJECT_ID);
+  const hasProject = Boolean(existingProject);
+  const hasStaleDescription = existingProject?.description === STALE_CALL_SUMMARY_DESCRIPTION;
+  const hasProduct = snapshot.products.some((product) => product.id === CALL_SUMMARY_PRODUCT_ID);
+  const hasArchitecture = snapshot.architectures.some((architecture) => architecture.id === CALL_SUMMARY_ARCHITECTURE_ID);
+  const hasPipeline = snapshot.pipelines.some((pipeline) => pipeline.id === CALL_SUMMARY_PIPELINE_ID);
+
+  if (hasProject && hasProduct && hasArchitecture && hasPipeline && !hasStaleDescription) return snapshot;
+
+  const project = {
+    id: CALL_SUMMARY_PROJECT_ID,
+    name: CALL_SUMMARY_NAME,
+    description: "Pipeline из пяти AI-этапов: факты и цитаты, потребности клиента, результат звонка, генерация summary и оценка качества.",
+    status: "testing" as const,
+    productId: CALL_SUMMARY_PRODUCT_ID,
+    architectureId: CALL_SUMMARY_ARCHITECTURE_ID,
+    pipelineId: CALL_SUMMARY_PIPELINE_ID,
+    playgroundRunIds: [],
+    reviewIds: [],
+    createdAt: CALL_SUMMARY_CREATED_AT,
+    updatedAt: CALL_SUMMARY_CREATED_AT,
+    version: "1.0.0",
+  };
+
+  const product = {
+    id: CALL_SUMMARY_PRODUCT_ID,
+    projectId: CALL_SUMMARY_PROJECT_ID,
+    status: "ready" as const,
+    idea: {
+      statement: "Пять последовательных AI-этапов анализа звонка: факты и цитаты, потребности, результат и следующий шаг, генерация summary, единая человеко-AI Quality Gate.",
+      source: "docs/NEW_SUMMARY_PIPELINE_SPEC.md",
+    },
+    discovery: "Второй, изолированный продукт анализа звонков, развивающий подход первого модуля без изменения его этапов, промтов и истории.",
+    problem: {
+      statement: "Нужен pipeline с узкими JSON-контрактами по этапам и Quality Gate, где AI и человек оценивают summary по абсолютно одинаковой шкале и весам.",
+      evidenceIds: [],
+    },
+    users: [{ id: "user_call_summary_agent", name: "Агент", segment: "Продажи" }, { id: "user_call_summary_reviewer", name: "Оценщик Summary", segment: "Quality" }],
+    jtbd: [
+      {
+        statement: "Когда завершился звонок, я хочу получить проверенное summary с ключевыми фактами и следующим шагом, чтобы продолжить работу без прослушивания записи.",
+        context: "После клиентского звонка",
+        desiredOutcome: "Summary и структурированные данные готовы к работе или ручной проверке",
+      },
+    ],
+    features: CALL_SUMMARY_STAGE_DEFS.map((stage) => ({ id: `feature_call_summary_${stage.key}`, name: stage.name, description: stage.description, priority: "high" as const })),
+    mvp: "Пять AI-этапов, единая форма ручной и AI-оценки summary (5 критериев по 20%, шкала 0-4), запись каждого запуска в общую историю Песочницы и Дашборда.",
+    metrics: [
+      { name: "Качество summary (ручная оценка)", target: "> 95%", category: "quality" as const },
+      { name: "Качество summary (AI-оценка)", target: "> 95%", category: "quality" as const },
+      { name: "Среднее расхождение AI и человека", target: "<= 5 п.п.", category: "quality" as const },
+    ],
+    prd: "См. docs/NEW_SUMMARY_PIPELINE_SPEC.md — основная продуктовая спецификация этого продукта.",
+    frameworkIds: [],
+    valueProposition: "Проверяемое, изолированное от старого pipeline summary звонков с единой человеко-AI методикой оценки качества.",
+    targetAudience: "Команды, тестирующие второй, независимый pipeline анализа звонков.",
+    acceptanceCriteria: "Продукт виден в Продукте/Песочнице/Дашборде отдельной строкой, использует собственные промты и схемы, не изменяет статистику первого модуля.",
+    createdAt: CALL_SUMMARY_CREATED_AT,
+    updatedAt: CALL_SUMMARY_CREATED_AT,
+    version: "1.0.0",
+  };
+
+  const architecture = {
+    id: CALL_SUMMARY_ARCHITECTURE_ID,
+    projectId: CALL_SUMMARY_PROJECT_ID,
+    productId: CALL_SUMMARY_PRODUCT_ID,
+    status: "ready" as const,
+    capabilities: [{ id: "capability_call_summary_quality_gate", name: "Единая человеко-AI Quality Gate", description: "5 критериев по 20%, шкала 0-4, детерминированный расчёт итога.", required: true }],
+    aiComponents: CALL_SUMMARY_STAGE_DEFS.map((stage) => ({ id: `component_call_summary_${stage.key}`, name: stage.name, type: "llm" as const, description: stage.description })),
+    modelIds: [],
+    dataFlow: CALL_SUMMARY_STAGE_DEFS.map((stage, index) => ({
+      id: `dataflow_call_summary_${stage.key}`,
+      source: index === 0 ? "transcript" : CALL_SUMMARY_STAGE_DEFS[index - 1].output,
+      target: stage.output,
+      dataType: "json",
+    })),
+    quality: [{ name: "Достоверность/Полнота/Полезность/Договорённости/Формат", threshold: "по 20% каждый, итог >= 95% = PASS" }],
+    evaluation: [{ metric: "Расхождение AI и человека", method: "computeQualityDecision на одинаковых сырых баллах", threshold: "<= 5 п.п. в среднем" }],
+    createdAt: CALL_SUMMARY_CREATED_AT,
+    updatedAt: CALL_SUMMARY_CREATED_AT,
+    version: "1.0.0",
+  };
+
+  const nodes = CALL_SUMMARY_STAGE_DEFS.map((stage, index) => ({
+    id: `node_call_summary_${stage.key}`,
+    type: (stage.key === "quality_gate" ? "validation" : "llm") as "llm" | "validation",
+    name: stage.name,
+    description: stage.description,
+    inputPorts: [{ id: `port_call_summary_${stage.key}_in`, name: index === 0 ? "transcript" : CALL_SUMMARY_STAGE_DEFS[index - 1].output }],
+    outputPorts: [{ id: `port_call_summary_${stage.key}_out`, name: stage.output }],
+    tools: [],
+    metadata: { output: stage.output },
+    position: { x: 260 * index, y: 160 },
+    version: "1.0.0",
+  }));
+
+  const edges = CALL_SUMMARY_STAGE_DEFS.slice(1).map((stage, index) => ({
+    id: `edge_call_summary_${CALL_SUMMARY_STAGE_DEFS[index].key}_${stage.key}`,
+    sourceNodeId: `node_call_summary_${CALL_SUMMARY_STAGE_DEFS[index].key}`,
+    targetNodeId: `node_call_summary_${stage.key}`,
+    sourcePortId: `port_call_summary_${CALL_SUMMARY_STAGE_DEFS[index].key}_out`,
+    targetPortId: `port_call_summary_${stage.key}_in`,
+    version: "1.0.0",
+  }));
+
+  const pipeline = {
+    id: CALL_SUMMARY_PIPELINE_ID,
+    projectId: CALL_SUMMARY_PROJECT_ID,
+    architectureId: CALL_SUMMARY_ARCHITECTURE_ID,
+    status: "ready" as const,
+    nodes,
+    edges,
+    layout: { viewport: { x: 0, y: 0, zoom: 0.5 } },
+    createdAt: CALL_SUMMARY_CREATED_AT,
+    updatedAt: CALL_SUMMARY_CREATED_AT,
+    version: "1.0.0",
+  };
+
+  // Appended at the end (unlike withTranscriptionSummaryModule's own
+  // prepend) so this injection never changes which project ends up first
+  // in the list -- Playground/Dashboard's "no product explicitly
+  // selected yet" default and tests/smoke/dashboard-run-history.spec.ts's
+  // reliance on project_transcription_summary_module staying the
+  // effective default are both preserved.
+  return {
+    ...snapshot,
+    projects: !hasProject
+      ? [...snapshot.projects, project]
+      : hasStaleDescription
+        ? snapshot.projects.map((item) => (item.id === CALL_SUMMARY_PROJECT_ID ? { ...item, description: project.description } : item))
+        : snapshot.projects,
+    products: hasProduct ? snapshot.products : [...snapshot.products, product],
+    architectures: hasArchitecture ? snapshot.architectures : [...snapshot.architectures, architecture],
+    pipelines: hasPipeline ? snapshot.pipelines : [...snapshot.pipelines, pipeline],
+  };
+}
+
 export class LocalStorageProjectRepository implements ProjectRepository {
   load(): RepositorySnapshot {
     if (typeof window === "undefined") {
-      return withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
+      return withCallSummaryPipelineModule(withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot))));
     }
 
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      const seeded = withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
+      const seeded = withCallSummaryPipelineModule(withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot))));
       this.save(seeded);
       return seeded;
     }
@@ -287,12 +471,12 @@ export class LocalStorageProjectRepository implements ProjectRepository {
     const parsedSnapshot = RepositorySnapshotSchema.safeParse(migrated);
     if (!parsedSnapshot.success) {
       window.localStorage.setItem(BACKUP_STORAGE_KEY, raw);
-      const seeded = withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
+      const seeded = withCallSummaryPipelineModule(withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot))));
       this.save(seeded);
       return seeded;
     }
 
-    const snapshot = withTranscriptionSummaryModule(withoutRetiredDemoProjects(parsedSnapshot.data));
+    const snapshot = withCallSummaryPipelineModule(withTranscriptionSummaryModule(withoutRetiredDemoProjects(parsedSnapshot.data)));
     this.save(snapshot);
     return snapshot;
   }
@@ -307,7 +491,7 @@ export class LocalStorageProjectRepository implements ProjectRepository {
   }
 
   reset(): RepositorySnapshot {
-    const seeded = withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot)));
+    const seeded = withCallSummaryPipelineModule(withTranscriptionSummaryModule(withoutRetiredDemoProjects(cloneSnapshot(demoSnapshot))));
     this.save(seeded);
     return seeded;
   }
