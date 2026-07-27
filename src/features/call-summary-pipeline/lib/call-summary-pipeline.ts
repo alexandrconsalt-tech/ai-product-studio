@@ -396,7 +396,9 @@ const SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентства н�
 
 СТРОГИЙ ЗАПРЕТ НА ДУБЛИРОВАНИЕ КАРТОЧКИ (частая ошибка — проверяй перед ответом). Ни в conversation_result, ни в key_facts, ни в quotes, ни в next_step никогда не упоминай: {{crm_fields_visible}}. Это правило действует, даже если эти данные есть в facts.json/needs.json/outcome.json (например, потому что их произнёс клиент или агент по телефону) — они уже отдельно показаны в карточке CRM, и упоминание их в тексте summary — это дублирование, а не полезная информация. Единственное исключение: если возражение или сомнение клиента касается одного из этих полей (например, цена или взнос кажутся клиенту высокими) — само возражение указывай, но не как отдельное упоминание значения поля, а как суть сомнения.
 
-Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. Если среди фактов (facts.json) есть подтверждённое имя клиента, это НЕ карточный шум — начинай conversation_result с «Клиент {Имя}» (используй имя как есть в JSON, без домысливания); если такого факта нет, начинай просто с «Клиент». В «нужно уточнить» включай только вопросы из outcome.json → conversation_outcome.unresolved_questions; вопросы, уже попавшие в resolved_questions, — закрытые, их не поднимай.
+НЕ ПУТАЙ БЮДЖЕТ КЛИЕНТА СО СТОИМОСТЬЮ ОБЪЕКТА (частая ошибка — проверяй перед ответом). Бюджет — это максимальная сумма, которую сам клиент готов и может потратить на покупку; её называет сам клиент как свой финансовый предел ("у меня бюджет до…", "рассматриваю варианты в пределах…", "могу потратить максимум…"). Стоимость/цена объекта — это цена конкретного объекта, по которому звонит клиент; её обычно называет оператор или агент ("стоимость составляет…", "цена объекта — …", "указана цена…"). Это разные вещи, даже если needs.json → requirements.budget или facts.json содержат эту сумму под ярлыком "бюджет" — сам ярлык поля не доказывает, что это заявленный клиентом бюджет. Перед тем как написать "бюджет" в conversation_result или key_facts, сверься с транскрибацией: кто произнёс эту сумму и в каком контексте. Если сумму назвал оператор/агент как цену конкретного объекта (а не сам клиент как свой финансовый предел на будущие варианты) — пиши "стоимость объекта" или "цена объекта", а не "бюджет". Если из транскрибации не очевидно, кто и в каком смысле назвал сумму, используй нейтральную формулировку "стоимость объекта" — не домысливай, что это бюджет клиента.
+
+Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование или стоимость объекта; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. Если среди фактов (facts.json) есть подтверждённое имя клиента, это НЕ карточный шум — начинай conversation_result с «Клиент {Имя}» (используй имя как есть в JSON, без домысливания); если такого факта нет, начинай просто с «Клиент». В «нужно уточнить» включай только вопросы из outcome.json → conversation_outcome.unresolved_questions; вопросы, уже попавшие в resolved_questions, — закрытые, их не поднимай.
 
 Связность текста обязательна: conversation_result и next_step — это связный деловой текст, а не цепочка отдельных коротких предложений по одному на факт. Объединяй логически связанные факты в одну фразу (кто клиент + что хочет + ключевое требование + бюджет — одним предложением), как в примере ниже. При этом каждое предложение должно оставаться грамматически самостоятельным: не обрывай его без подлежащего и не начинай со строчной буквы. Связность — не то же самое, что перечисление: если у клиента 3 и более мелких открытых вопроса (например, про управляющую компанию, расходы, коммунальные платежи и НДС), не перечисляй каждый через запятую в одном предложении-простыне — сверни их в одну компактную формулировку по общему смыслу («уточнить размер расходов и НДС»), опуская темы, которые не критичны для следующего шага. Итоговый conversation_result должен быть короче, а не длиннее черновика: старайся уложиться в 2 предложения там, где разговор не содержит явного конфликта интересов или множества договорённостей.
 
@@ -622,13 +624,22 @@ export type CallSummaryStageConfig = Readonly<{
 const DEFAULT_EXTRACTION_MODEL = "gpt-4o-mini";
 const DEFAULT_JUDGE_MODEL = "deepseek-v3.2-exp";
 
+// timeoutMs values below are deliberately generous, not just "safe": a real
+// run through AI Tunnel (see the 2026-07-27 incident report) hit the prior
+// 45000ms ceiling on quality_gate on BOTH technical-retry attempts back to
+// back (durationMs: 45002 each) -- i.e. this wasn't a one-off transient
+// blip STAGE_TECHNICAL_RETRIES could paper over, the stage's real latency
+// under load genuinely exceeded 45s, so retrying with the same short
+// window just wasted ~90s before still failing. quality_gate reads the
+// most context of any stage (summary + all three upstream JSONs) and gets
+// the longest allowance for that reason.
 export function defaultCallSummaryStages(): CallSummaryStageConfig[] {
   return [
-    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: FACTS_PROMPT, outKey: "facts", maxTokens: 4000, timeoutMs: 45000 },
-    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: NEEDS_PROMPT, outKey: "needs", maxTokens: 3000, timeoutMs: 45000 },
-    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: OUTCOME_PROMPT, outKey: "outcome", maxTokens: 3000, timeoutMs: 45000 },
-    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: SUMMARY_PROMPT, outKey: "summary", maxTokens: 2500, timeoutMs: 45000 },
-    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: DEFAULT_JUDGE_MODEL, prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate", maxTokens: 2500, timeoutMs: 45000 },
+    { id: "facts", enabled: true, name: "1. Факты и цитаты", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: FACTS_PROMPT, outKey: "facts", maxTokens: 4000, timeoutMs: 60000 },
+    { id: "needs", enabled: true, name: "2. Потребности клиента", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: NEEDS_PROMPT, outKey: "needs", maxTokens: 3000, timeoutMs: 60000 },
+    { id: "outcome", enabled: true, name: "3. Результат звонка и следующий шаг", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: OUTCOME_PROMPT, outKey: "outcome", maxTokens: 3000, timeoutMs: 60000 },
+    { id: "summary", enabled: true, name: "4. Генерация summary", type: "llm", model: DEFAULT_EXTRACTION_MODEL, prompt: SUMMARY_PROMPT, outKey: "summary", maxTokens: 2500, timeoutMs: 60000 },
+    { id: "quality_gate", enabled: true, name: "5. Summary Quality Gate", type: "judge", model: DEFAULT_JUDGE_MODEL, prompt: QUALITY_GATE_PROMPT, outKey: "quality_gate", maxTokens: 2500, timeoutMs: 90000 },
   ];
 }
 

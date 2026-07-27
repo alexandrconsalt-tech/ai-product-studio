@@ -80,11 +80,17 @@ describe("defaultCallSummaryStages", () => {
     }
   });
 
-  it("gives every stage a bounded timeout so a hung request fails well under a minute", () => {
+  it("gives every stage a bounded timeout, with quality_gate allowed the longest window for its heavier context", () => {
+    // Regression guard for a real run where quality_gate hit a 45000ms
+    // ceiling on both technical-retry attempts back to back -- not a
+    // transient hang, its genuine latency (reading summary + all three
+    // upstream JSONs) exceeded that window under load.
     for (const stage of defaultCallSummaryStages()) {
       expect(stage.timeoutMs).toBeGreaterThan(0);
-      expect(stage.timeoutMs).toBeLessThanOrEqual(60000);
+      expect(stage.timeoutMs).toBeLessThanOrEqual(90000);
     }
+    const gate = defaultCallSummaryStages().find((stage) => stage.id === "quality_gate");
+    expect(gate?.timeoutMs).toBe(90000);
   });
 
   it("defaults to models this app's own catalog labels as AI Tunnel-verified, not the ambiguous OpenAI/Anthropic-labeled ones", () => {
