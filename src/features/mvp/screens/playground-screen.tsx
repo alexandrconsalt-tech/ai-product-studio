@@ -23,7 +23,7 @@ import { PipelineLabV3Screen } from "./pipeline-lab-v3-screen";
 import { AdCopyTestBenchPanel } from "./ad-copy-test-bench-panel";
 import type { AdCopyPipelineResult } from "../lib/ad-copy-test-bench";
 import { CallSummaryPipelinePanel } from "../../call-summary-pipeline/screens/call-summary-pipeline-panel";
-import type { CallSummaryPipelineResult } from "../../call-summary-pipeline/lib/call-summary-pipeline";
+import { QUALITY_DECISION_LABELS, type CallSummaryPipelineResult } from "../../call-summary-pipeline/lib/call-summary-pipeline";
 
 const IFRAME_SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
@@ -212,7 +212,7 @@ function PipelineStagesSection({ pipeline, models, trace }: Readonly<{ pipeline:
  */
 export function PlaygroundScreen() {
   const { snapshot, selectedProjectId, selectProject } = useRepositoryStore();
-  const { recordRun } = usePlaygroundTestRunStore();
+  const { recordRun, getRuns } = usePlaygroundTestRunStore();
   const { recordTrace, getTrace } = useExecutionTraceStore();
   const [runInput, setRunInput] = React.useState("");
   const [executing, setExecuting] = React.useState(false);
@@ -297,13 +297,14 @@ export function PlaygroundScreen() {
   );
 
   const handleCallSummaryRunComplete = React.useCallback(
-    (result: CallSummaryPipelineResult, transcript: string) => {
+    (result: CallSummaryPipelineResult, transcript: string, runId: string) => {
       if (!selectedProjectId) return;
       const reportList = Object.values(result.reports);
       const errorCount = reportList.filter((report) => report.status === "bad").length;
       const startedAt = new Date(Date.now() - result.totalDurationMs).toISOString();
       recordRun(
         createPlaygroundTestRun({
+          id: runId,
           projectId: selectedProjectId,
           source: CALL_SUMMARY_SOURCE,
           status: result.technicalError || errorCount > 0 ? "failed" : "succeeded",
@@ -316,7 +317,13 @@ export function PlaygroundScreen() {
           productName: selectedProject?.name,
           confidence: result.aiQualityReport ? result.aiQualityReport.overall_score / 100 : undefined,
           qualityScore: result.aiQualityReport?.overall_score,
-          decision: result.aiQualityReport?.decision ?? (result.technicalError ? "TECHNICAL_ERROR" : undefined),
+          // Stored pre-translated to Russian (rather than leaving the raw
+          // "PASS"/"REVIEW_REQUIRED"/"TECHNICAL_ERROR" code) so Dashboard's
+          // shared, generic "РЕШЕНИЕ" column -- which just renders
+          // run.decision verbatim for every product -- reads in Russian
+          // for this product's rows without that shared column needing to
+          // know anything about this product's own decision vocabulary.
+          decision: result.aiQualityReport ? QUALITY_DECISION_LABELS[result.aiQualityReport.decision] : result.technicalError ? "Техническая ошибка" : undefined,
           transcript,
           report: { facts: result.facts, needs: result.needs, outcome: result.outcome, summary: result.summary, aiQualityReport: result.aiQualityReport, retryCount: result.retryCount, reports: result.reports },
           summary: result.summary && result.summary.status === "GENERATED" ? result.summary.conversation_result : undefined,
@@ -326,6 +333,22 @@ export function PlaygroundScreen() {
       );
     },
     [selectedProjectId, selectedProject, recordRun],
+  );
+
+  // Fired after the human saves their evaluation in CallSummaryPipelinePanel
+  // (always strictly later than the run-complete call above -- the human
+  // can only evaluate a summary that already finished generating) --
+  // re-records the same run id with its manual score added, so Dashboard's
+  // "Ручная" column has something to show without inventing a second,
+  // parallel history mechanism.
+  const handleCallSummaryHumanEvaluationSaved = React.useCallback(
+    (runId: string, manualQualityScore: number) => {
+      if (!selectedProjectId) return;
+      const existing = getRuns(selectedProjectId).find((run) => run.id === runId);
+      if (!existing) return;
+      recordRun({ ...existing, manualQualityScore });
+    },
+    [selectedProjectId, getRuns, recordRun],
   );
 
   const handleRunPipeline = async () => {
@@ -438,7 +461,7 @@ export function PlaygroundScreen() {
             <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
           </div>
           <p className="text-sm text-text-muted">Вставьте транскрибацию звонка и нажмите «Запустить pipeline». Пять этапов выполняются реальными вызовами модели (ключ из «Настройки»): факты и цитаты, потребности, результат и следующий шаг, генерация summary, Summary Quality Gate.</p>
-          <CallSummaryPipelinePanel productId={selectedProject.id} onRunComplete={handleCallSummaryRunComplete} />
+          <CallSummaryPipelinePanel productId={selectedProject.id} onRunComplete={handleCallSummaryRunComplete} onHumanEvaluationSaved={handleCallSummaryHumanEvaluationSaved} />
         </Section>
       ) : (
         <>

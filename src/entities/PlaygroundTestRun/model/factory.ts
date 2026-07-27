@@ -17,6 +17,7 @@ export function createPlaygroundTestRun(
     durationMs: input.durationMs,
     confidence: input.confidence,
     qualityScore: input.qualityScore,
+    manualQualityScore: input.manualQualityScore,
     decision: input.decision,
     transcript: input.transcript,
     report: input.report,

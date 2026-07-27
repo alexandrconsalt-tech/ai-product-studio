@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  CALL_SUMMARY_ERROR_TYPES,
   computeQualityDecision,
   CRITERION_KEYS,
   defaultCallSummaryStages,
+  ERROR_TYPE_GROUPS,
   FactsQuotesSchema,
   NeedsSchema,
+  outcomeTypeLabel,
   OutcomeSchema,
+  QUALITY_DECISION_LABELS,
   QualityJudgeRawSchema,
   stageStatChips,
   SummarySchema,
@@ -124,7 +128,7 @@ describe("stageStatChips", () => {
     });
     expect(chips).toEqual([
       { label: "Итог", value: "100%" },
-      { label: "Решение", value: "PASS" },
+      { label: "Решение", value: "Пройдено" },
       { label: "Блокеров", value: "0" },
     ]);
   });
@@ -252,5 +256,38 @@ describe("schema tolerance against real-world model output variance", () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     for (const key of CRITERION_KEYS) expect(result.data.scores[key].raw_score).toBe(2);
+  });
+});
+
+describe("ERROR_TYPE_GROUPS", () => {
+  it("covers every one of the 12 error types exactly once across the 5 criteria", () => {
+    const allTypes = ERROR_TYPE_GROUPS.flatMap((group) => group.types);
+    expect(allTypes.sort()).toEqual([...CALL_SUMMARY_ERROR_TYPES].sort());
+    expect(new Set(allTypes).size).toBe(allTypes.length);
+  });
+
+  it("has exactly one group per criterion, in CRITERION_KEYS order", () => {
+    expect(ERROR_TYPE_GROUPS.map((group) => group.criterion)).toEqual([...CRITERION_KEYS]);
+  });
+});
+
+describe("QUALITY_DECISION_LABELS", () => {
+  it("has a Russian label for every possible decision computeQualityDecision can return", () => {
+    for (const raw of [100, 92, 85, 60]) {
+      const decision = computeQualityDecision(scores({ faithfulness: Math.round((raw / 100) * 4), completeness: Math.round((raw / 100) * 4), usefulness: Math.round((raw / 100) * 4), agreements_next_step: Math.round((raw / 100) * 4), format: Math.round((raw / 100) * 4) }), []).decision;
+      expect(QUALITY_DECISION_LABELS[decision]).toBeTruthy();
+      expect(QUALITY_DECISION_LABELS[decision]).not.toMatch(/^[A-Z_]+$/); // not still a raw English code
+    }
+  });
+});
+
+describe("outcomeTypeLabel", () => {
+  it("translates every cataloged outcome type to a Russian label", () => {
+    expect(outcomeTypeLabel("viewing_agreed")).toBe("Просмотр согласован");
+    expect(outcomeTypeLabel("no_agreement")).toBe("Договорённости нет");
+  });
+
+  it("falls back to the raw value for a type outside the catalog instead of showing a blank label", () => {
+    expect(outcomeTypeLabel("viewing scheduled")).toBe("viewing scheduled");
   });
 });

@@ -10,8 +10,11 @@ import {
   CALL_SUMMARY_ERROR_TYPES,
   CRITERION_KEYS,
   CRITERION_LABELS,
+  ERROR_TYPE_GROUPS,
+  QUALITY_DECISION_LABELS,
   computeQualityDecision,
   defaultCallSummaryStages,
+  outcomeTypeLabel,
   runCallSummaryPipeline,
   stageStatChips,
   type CallSummaryErrorType,
@@ -36,7 +39,12 @@ const EXAMPLE_TRANSCRIPT = `[00:12] Агент: Добрый день! Меня 
 [02:02] Агент: Хорошо, я уточню у собственника и напишу вам сегодня или завтра в WhatsApp, подберу ещё варианты в Мистолове, Капитолове и Лавриках.
 [02:15] Клиент: Хорошо, буду ждать, спасибо.`;
 
-const CRM_FIELDS_ALREADY_VISIBLE = ["object_address", "object_price", "object_area", "floor", "agent_name"] as const;
+// Plain Russian phrases, not internal field codes -- fed verbatim into
+// the Summary prompt's {{crm_fields_visible}} slot, so the model reads
+// an unambiguous instruction ("адрес объекта" is clearly "не пиши
+// адрес") rather than having to guess what a snake_case key like
+// "object_address" means for its own output.
+const CRM_FIELDS_ALREADY_VISIBLE = ["адрес объекта", "цена объекта", "площадь объекта", "этаж", "имя агента"] as const;
 
 function configStorageKey(productId: string): string {
   return `callSummaryPipeline.config.${productId}`;
@@ -190,7 +198,7 @@ function QualityReportCard({ title, report }: Readonly<{ title: string; report: 
     <Card className="grid gap-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-medium">{title}</p>
-        <Badge tone={DECISION_TONE[report.decision]}>{report.decision} · {report.overall_score}%</Badge>
+        <Badge tone={DECISION_TONE[report.decision]}>{QUALITY_DECISION_LABELS[report.decision]} · {report.overall_score}%</Badge>
       </div>
       <div className="grid gap-1.5">
         {CRITERION_KEYS.map((key) => (
@@ -241,46 +249,55 @@ function HumanEvaluationForm({
     <Card className="grid gap-3">
       <p className="text-sm font-medium">Ручная оценка</p>
       <p className="text-xs text-text-muted">Оцените текст summary по каждому критерию: 4 — полностью соответствует, 3 — несущественное замечание, 2 — существенный недостаток, 1 — серьёзная ошибка, 0 — критерий не выполнен. AI-оценка станет видна только после сохранения.</p>
-      {CRITERION_KEYS.map((key) => (
-        <div key={key} className="grid gap-1 border-t border-border pt-2 first:border-t-0 first:pt-0">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm">{CRITERION_LABELS[key]}</span>
-            <div className="flex gap-1">
-              {RAW_SCORE_OPTIONS.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setScores((current) => ({ ...current, [key]: { ...current[key], raw_score: value } }))}
-                  className={`flex size-7 items-center justify-center rounded-md border text-xs font-semibold transition-colors ${scores[key].raw_score === value ? "border-primary bg-primary text-primary-foreground" : "border-border text-text-muted hover:bg-hover"}`}
-                >
-                  {value}
-                </button>
-              ))}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid content-start gap-2">
+          {CRITERION_KEYS.map((key) => (
+            <div key={key} className="grid gap-1 border-t border-border pt-2 first:border-t-0 first:pt-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm">{CRITERION_LABELS[key]}</span>
+                <div className="flex gap-1">
+                  {RAW_SCORE_OPTIONS.map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setScores((current) => ({ ...current, [key]: { ...current[key], raw_score: value } }))}
+                      className={`flex size-7 items-center justify-center rounded-md border text-xs font-semibold transition-colors ${scores[key].raw_score === value ? "border-primary bg-primary text-primary-foreground" : "border-border text-text-muted hover:bg-hover"}`}
+                    >
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Textarea
+                className="min-h-12 text-xs"
+                placeholder="Комментарий (необязательно)"
+                value={scores[key].comment}
+                onChange={(event) => setScores((current) => ({ ...current, [key]: { ...current[key], comment: event.target.value } }))}
+              />
             </div>
-          </div>
-          <Textarea
-            className="min-h-16 text-xs"
-            placeholder="Комментарий (необязательно)"
-            value={scores[key].comment}
-            onChange={(event) => setScores((current) => ({ ...current, [key]: { ...current[key], comment: event.target.value } }))}
-          />
-        </div>
-      ))}
-      <div className="grid gap-1 border-t border-border pt-2">
-        <p className="text-sm">Типы ошибок</p>
-        <div className="grid gap-1 sm:grid-cols-2">
-          {CALL_SUMMARY_ERROR_TYPES.map((type) => (
-            <label key={type} className="flex items-center gap-2 text-xs">
-              <Checkbox checked={selectedIssues[type]} onChange={(event) => setSelectedIssues((current) => ({ ...current, [type]: event.target.checked }))} />
-              {CALL_SUMMARY_ERROR_LABELS[type]}
-            </label>
           ))}
         </div>
+        <div className="grid content-start gap-2 border-t border-border pt-2 lg:border-t-0 lg:border-l lg:pl-4 lg:pt-0">
+          <p className="text-sm">Типы ошибок</p>
+          {ERROR_TYPE_GROUPS.filter((group) => group.types.length > 0).map((group) => (
+            <div key={group.criterion} className="grid gap-1">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-text-muted">{CRITERION_LABELS[group.criterion]}</p>
+              <div className="grid gap-1">
+                {group.types.map((type) => (
+                  <label key={type} className="flex items-center gap-2 text-xs">
+                    <Checkbox checked={selectedIssues[type]} onChange={(event) => setSelectedIssues((current) => ({ ...current, [type]: event.target.checked }))} />
+                    {CALL_SUMMARY_ERROR_LABELS[type]}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+          <Button variant={criticalIssue ? "danger" : "secondary"} onClick={() => setCriticalIssue((value) => !value)} className="mt-1 w-fit">
+            <ShieldAlert className="size-4" aria-hidden="true" />
+            {criticalIssue ? "Отмечено как критическая ошибка" : "Критическая ошибка"}
+          </Button>
+        </div>
       </div>
-      <Button variant={criticalIssue ? "danger" : "secondary"} onClick={() => setCriticalIssue((value) => !value)} className="w-fit">
-        <ShieldAlert className="size-4" aria-hidden="true" />
-        {criticalIssue ? "Отмечено как критическая ошибка" : "Критическая ошибка"}
-      </Button>
       <Button variant="primary" onClick={handleSave} className="w-fit">Сохранить оценку</Button>
     </Card>
   );
@@ -307,7 +324,7 @@ function ResultSummaryCard({ result, onDownload }: Readonly<{ result: CallSummar
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={succeeded ? "success" : "error"}>{succeeded ? "успешно" : "с ошибкой"}</Badge>
-          {ai ? <Badge tone={DECISION_TONE[ai.decision]}>{ai.decision} · {ai.overall_score}%</Badge> : null}
+          {ai ? <Badge tone={DECISION_TONE[ai.decision]}>{QUALITY_DECISION_LABELS[ai.decision]} · {ai.overall_score}%</Badge> : null}
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -317,7 +334,7 @@ function ResultSummaryCard({ result, onDownload }: Readonly<{ result: CallSummar
         <StatChip label="Повторов summary" value={String(result.retryCount)} />
         {result.facts ? <StatChip label="Фактов" value={String(result.facts.facts.length)} /> : null}
         {result.facts ? <StatChip label="Цитат" value={String(result.facts.quotes.length)} /> : null}
-        {result.outcome ? <StatChip label="Результат звонка" value={result.outcome.conversation_outcome.type} /> : null}
+        {result.outcome ? <StatChip label="Результат звонка" value={outcomeTypeLabel(result.outcome.conversation_outcome.type)} /> : null}
         {result.outcome ? <StatChip label="Договорённостей" value={String(result.outcome.agreements.length)} /> : null}
       </div>
       <Button variant="secondary" onClick={onDownload} className="w-fit">
@@ -333,7 +350,15 @@ function computeComparison(ai: QualityReport, human: QualityReport): AiVsHumanCo
   return { overallDiff: Math.abs(ai.overall_score - human.overall_score), perCriterionDiff, decisionMatches: ai.decision === human.decision };
 }
 
-export type CallSummaryPipelinePanelProps = Readonly<{ productId: string; onRunComplete: (result: CallSummaryPipelineResult, transcript: string) => void }>;
+export type CallSummaryPipelinePanelProps = Readonly<{
+  productId: string;
+  onRunComplete: (result: CallSummaryPipelineResult, transcript: string, runId: string) => void;
+  // Fired only after the human saves their evaluation (the AI score is
+  // deliberately withheld from the reviewer until then, see the blind-
+  // review Alert below) -- lets the caller attach the final manual score
+  // to the *same* recorded run, which Dashboard's "Ручная" column reads.
+  onHumanEvaluationSaved?: (runId: string, manualQualityScore: number) => void;
+}>;
 
 /**
  * Panel for the "Анализ звонков v2" product -- see
@@ -343,14 +368,15 @@ export type CallSummaryPipelinePanelProps = Readonly<{ productId: string; onRunC
  * independent code -- no shared state or types with the original
  * call-transcription pipeline or with `src/features/summary-review`.
  */
-export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSummaryPipelinePanelProps) {
+export function CallSummaryPipelinePanel({ productId, onRunComplete, onHumanEvaluationSaved }: CallSummaryPipelinePanelProps) {
   const [stages, setStages] = React.useState<CallSummaryStageConfig[]>(() => loadStoredStages(productId) ?? defaultCallSummaryStages());
-  const [transcript, setTranscript] = React.useState(EXAMPLE_TRANSCRIPT);
+  const [transcript, setTranscript] = React.useState("");
   const [reports, setReports] = React.useState<Readonly<Record<string, CallSummaryStageReport>>>({});
   const [running, setRunning] = React.useState(false);
   const [runError, setRunError] = React.useState<string | null>(null);
   const [lastResult, setLastResult] = React.useState<CallSummaryPipelineResult | null>(null);
   const [humanEvaluation, setHumanEvaluation] = React.useState<HumanEvaluation | null>(null);
+  const [currentRunId, setCurrentRunId] = React.useState<string | null>(null);
   const keyConfigured = hasBrowserLlmKeyConfigured();
 
   React.useEffect(() => {
@@ -385,10 +411,12 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
     setLastResult(null);
     setHumanEvaluation(null);
     setReports({});
+    const runId = crypto.randomUUID();
+    setCurrentRunId(runId);
     try {
       const result = await runCallSummaryPipeline(stages, transcript, CRM_FIELDS_ALREADY_VISIBLE, setReports);
       setLastResult(result);
-      onRunComplete(result, transcript);
+      onRunComplete(result, transcript, runId);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : "Не удалось выполнить прогон пайплайна.");
     } finally {
@@ -398,6 +426,13 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
 
   const humanReport = humanEvaluation ? computeQualityDecision(humanEvaluation.scores as unknown as QualityScoresRaw, humanEvaluation.issues) : null;
   const comparison = lastResult?.aiQualityReport && humanReport ? computeComparison(lastResult.aiQualityReport, humanReport) : null;
+
+  const handleHumanEvaluationSave = (evaluation: HumanEvaluation) => {
+    setHumanEvaluation(evaluation);
+    if (!currentRunId) return;
+    const report = computeQualityDecision(evaluation.scores as unknown as QualityScoresRaw, evaluation.issues);
+    onHumanEvaluationSaved?.(currentRunId, report.overall_score);
+  };
 
   const handleDownload = () => {
     if (!lastResult) return;
@@ -418,7 +453,12 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
 
       <Card className="grid gap-2">
         <p className="text-sm font-medium">Транскрибация звонка</p>
-        <Textarea className="min-h-48 font-mono text-xs" value={transcript} onChange={(event) => setTranscript(event.target.value)} />
+        <Textarea
+          className="min-h-48 font-mono text-xs"
+          value={transcript}
+          onChange={(event) => setTranscript(event.target.value)}
+          placeholder="Вставьте текст транскрибации"
+        />
         <div className="flex items-center justify-between gap-2">
           <Button variant="ghost" onClick={() => setTranscript(EXAMPLE_TRANSCRIPT)}>Вставить пример</Button>
           <span className="text-xs text-text-muted">{transcript.length} символов</span>
@@ -459,7 +499,7 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
         {runError ? <Alert tone="warning">{runError}</Alert> : null}
         {lastResult?.technicalError ? (
           <Alert tone="warning">
-            <span className="flex items-center gap-2"><XCircle className="size-4 shrink-0" aria-hidden="true" />{lastResult.technicalError} (TECHNICAL_ERROR)</span>
+            <span className="flex items-center gap-2"><XCircle className="size-4 shrink-0" aria-hidden="true" />{lastResult.technicalError} (техническая ошибка)</span>
           </Alert>
         ) : null}
       </Card>
@@ -489,7 +529,7 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
           {!humanEvaluation ? (
             <Alert tone="info">AI-оценка скрыта до сохранения вашей ручной оценки — так ручная оценка остаётся независимой.</Alert>
           ) : null}
-          <HumanEvaluationForm onSave={setHumanEvaluation} />
+          <HumanEvaluationForm onSave={handleHumanEvaluationSave} />
           {humanReport ? <QualityReportCard title="Ручная оценка" report={humanReport} /> : null}
           {humanReport ? <QualityReportCard title="AI-оценка" report={lastResult.aiQualityReport} /> : null}
           {comparison ? (
@@ -505,6 +545,13 @@ export function CallSummaryPipelinePanel({ productId, onRunComplete }: CallSumma
             </Card>
           ) : null}
         </Section>
+      ) : null}
+
+      {lastResult ? (
+        <Button variant="secondary" onClick={handleDownload} className="w-fit">
+          <Download className="size-4" aria-hidden="true" />
+          Скачать отчёт (JSON)
+        </Button>
       ) : null}
     </div>
   );

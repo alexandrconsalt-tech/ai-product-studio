@@ -141,7 +141,10 @@ function RunDetailDialog({ run, onClose }: Readonly<{ run: PlaygroundTestRun; on
           <Card><p className="text-xs text-text-muted">Стоимость</p><p className="font-medium">{formatUsd(run.costUsd)}</p></Card>
           <Card><p className="text-xs text-text-muted">Время</p><p className="font-medium">{formatMs(run.durationMs)}</p></Card>
           <Card><p className="text-xs text-text-muted">Уверенность</p><p className="font-medium">{run.confidence !== undefined ? run.confidence.toFixed(2) : "—"}</p></Card>
-          <Card><p className="text-xs text-text-muted">Оценка качества</p><p className="font-medium">{run.qualityScore !== undefined ? `${Math.round(run.qualityScore)}%` : "—"}</p></Card>
+          <Card><p className="text-xs text-text-muted">AI-оценка</p><p className="font-medium">{run.qualityScore !== undefined ? `${Math.round(run.qualityScore)}%` : "—"}</p></Card>
+          {run.manualQualityScore !== undefined ? (
+            <Card><p className="text-xs text-text-muted">Ручная оценка</p><p className="font-medium">{Math.round(run.manualQualityScore)}%</p></Card>
+          ) : null}
         </div>
         {run.decision ? <p className="text-sm text-text-muted">Решение: <span className="text-foreground">{run.decision}</span></p> : null}
         {run.transcript ? (
@@ -192,7 +195,7 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
           <button
             key={run.id}
             type="button"
-            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
+            className="grid grid-cols-2 items-center gap-2 rounded-lg border border-border bg-surface p-3 text-left text-sm hover:bg-hover md:grid-cols-[1.2fr_1.1fr_0.8fr_0.7fr_0.7fr_0.7fr_0.7fr_0.9fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_1fr_1.2fr]"
             onClick={() => setSelectedRun(run)}
           >
             <span className="text-text-muted">{formatDateTime(run.finishedAt)}</span>
@@ -203,7 +206,8 @@ function RunHistorySection({ runs }: Readonly<{ runs: readonly PlaygroundTestRun
             </span>
             <span>{formatUsd(run.costUsd)}</span>
             <span>{formatMs(run.durationMs)}</span>
-            <span>{run.qualityScore !== undefined ? `SQS ${Math.round(run.qualityScore)}%` : "—"}</span>
+            <span>{run.qualityScore !== undefined ? `AI ${Math.round(run.qualityScore)}%` : "—"}</span>
+            <span>{run.manualQualityScore !== undefined ? `Ручная ${Math.round(run.manualQualityScore)}%` : "—"}</span>
             <span className="truncate">{run.decision ?? "—"}</span>
             <span>{scoreFromReportResult(run.report, "truth_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "truth_check")!)}%` : "—"}</span>
             <span>{scoreFromReportResult(run.report, "critical_facts_check") !== undefined ? `${Math.round(scoreFromReportResult(run.report, "critical_facts_check")!)}%` : "—"}</span>

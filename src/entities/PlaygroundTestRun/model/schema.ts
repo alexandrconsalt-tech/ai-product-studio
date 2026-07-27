@@ -41,6 +41,14 @@ export const PlaygroundTestRunSchema = z.object({
   // (`ctx.summary_check.score`) -- a different scale than confidence,
   // intentionally (it grades the summary text, not routing confidence).
   qualityScore: z.number().min(0).max(100).optional(),
+  // 0-100 scale, same meaning as qualityScore but from a saved human
+  // evaluation (added 2026-07-26 for the call-summary-pipeline product's
+  // "Ручная оценка" -- computeQualityDecision's overall_score run on the
+  // reviewer's own raw scores). Written via a second recordRun() call
+  // with the same id once the reviewer saves, since the human evaluation
+  // only exists after the run itself already completed. Optional because
+  // no other source ever sets it.
+  manualQualityScore: z.number().min(0).max(100).optional(),
   decision: z.string().optional(),
   // Raw input tested and the full per-stage report (Pipeline Lab v3's own
   // "Скачать полный отчёт" shape: {pipeline, result, usage}) -- kept so a

@@ -317,7 +317,7 @@ function withCallSummaryPipelineModule(snapshot: RepositorySnapshot): Repository
   const project = {
     id: CALL_SUMMARY_PROJECT_ID,
     name: CALL_SUMMARY_NAME,
-    description: "Второй, полностью изолированный продукт: pipeline из пяти AI-этапов для анализа звонков и генерации проверяемого summary. Не использует промты, схемы или историю старого Pipeline Lab v3.",
+    description: "Pipeline из пяти AI-этапов: факты и цитаты, потребности клиента, результат звонка, генерация summary и оценка качества.",
     status: "testing" as const,
     productId: CALL_SUMMARY_PRODUCT_ID,
     architectureId: CALL_SUMMARY_ARCHITECTURE_ID,

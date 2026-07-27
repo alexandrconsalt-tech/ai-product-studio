@@ -242,6 +242,24 @@ export const OUTCOME_TYPES = [
   "no_agreement",
 ] as const;
 
+const OUTCOME_TYPE_LABELS: Record<string, string> = {
+  viewing_agreed: "Просмотр согласован",
+  meeting_agreed: "Встреча согласована",
+  follow_up_required: "Нужен повторный контакт",
+  information_sent: "Информация отправлена",
+  selection_preparation: "Готовится подборка",
+  client_will_decide: "Клиент принимает решение",
+  client_not_ready: "Клиент не готов",
+  object_not_suitable: "Объект не подошёл",
+  request_closed: "Заявка закрыта",
+  no_agreement: "Договорённости нет",
+};
+
+/** conversation_outcome.type is intentionally a plain, catch-all string in the schema (a model's near-miss shouldn't fail the whole stage -- see OutcomeSchema below), so this falls back to the raw value itself for anything outside the 10-item catalog rather than showing a blank label. */
+export function outcomeTypeLabel(type: string): string {
+  return OUTCOME_TYPE_LABELS[type] ?? type;
+}
+
 export const OutcomeSchema = z.object({
   conversation_outcome: z
     .object({
@@ -374,7 +392,11 @@ const SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентства н�
 
 Цель — не пересказ разговора, а рабочий бриф: что следующему агенту нужно знать, чтобы продолжить работу с клиентом без прослушивания записи.
 
-Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. Не выводи данные, уже находящиеся в карточке: роль клиента «частное лицо», имя агента/оператора, источник заявки, адрес и параметры конкретного объекта — их список: {{crm_fields_visible}}. Если среди фактов (facts.json) есть подтверждённое имя клиента, это НЕ карточный шум — начинай conversation_result с «Клиент {Имя}» (используй имя как есть в JSON, без домысливания); если такого факта нет, начинай просто с «Клиент». В «нужно уточнить» включай только вопросы из outcome.json → conversation_outcome.unresolved_questions; вопросы, уже попавшие в resolved_questions, — закрытые, их не поднимай.
+СТИЛЬ (частая ошибка — проверяй перед ответом). Пиши так, как реальный агент по недвижимости рассказывает коллеге о звонке своими словами по телефону: простым живым деловым языком, короткими естественными предложениями. Это не протокол и не канцелярский отчёт. Запрещены канцелярские и машинные обороты: «было сообщено», «клиенту сообщено, что», «предназначен для», «используется система», «на данный момент», «в связи с тем что», «следует отметить», «данный», «вышеуказанный». Пиши прямо, как человек человеку: не «клиенту было сообщено, что дом не утеплён и предназначен для летнего проживания», а «дом не утеплён — жить можно только летом»; не «клиент уточнил информацию относительно...», а «клиент спросил, ...». Если формулировка получилась длинной или наукообразной — сократи и упрости её перед ответом.
+
+СТРОГИЙ ЗАПРЕТ НА ДУБЛИРОВАНИЕ КАРТОЧКИ (частая ошибка — проверяй перед ответом). Ни в conversation_result, ни в key_facts, ни в quotes, ни в next_step никогда не упоминай: {{crm_fields_visible}}. Это правило действует, даже если эти данные есть в facts.json/needs.json/outcome.json (например, потому что их произнёс клиент или агент по телефону) — они уже отдельно показаны в карточке CRM, и упоминание их в тексте summary — это дублирование, а не полезная информация. Единственное исключение: если возражение или сомнение клиента касается одного из этих полей (например, цена или взнос кажутся клиенту высокими) — само возражение указывай, но не как отдельное упоминание значения поля, а как суть сомнения.
+
+Приоритет: итог разговора; основной следующий шаг и договорённости; бюджет/финансирование; срок покупки; требования; возражения; важная цитата клиента. Подтверждённое назначение/тип объекта (например, ИЖС) является критическим требованием и не должно исчезать из summary. Значения «не определено» и пустые сведения не выводи. Не показывай технические поля, confidence, ID, статусы или verification_status. Не используй телефоны и markdown-заголовки. Если среди фактов (facts.json) есть подтверждённое имя клиента, это НЕ карточный шум — начинай conversation_result с «Клиент {Имя}» (используй имя как есть в JSON, без домысливания); если такого факта нет, начинай просто с «Клиент». В «нужно уточнить» включай только вопросы из outcome.json → conversation_outcome.unresolved_questions; вопросы, уже попавшие в resolved_questions, — закрытые, их не поднимай.
 
 Связность текста обязательна: conversation_result и next_step — это связный деловой текст, а не цепочка отдельных коротких предложений по одному на факт. Объединяй логически связанные факты в одну фразу (кто клиент + что хочет + ключевое требование + бюджет — одним предложением), как в примере ниже. При этом каждое предложение должно оставаться грамматически самостоятельным: не обрывай его без подлежащего и не начинай со строчной буквы. Связность — не то же самое, что перечисление: если у клиента 3 и более мелких открытых вопроса (например, про управляющую компанию, расходы, коммунальные платежи и НДС), не перечисляй каждый через запятую в одном предложении-простыне — сверни их в одну компактную формулировку по общему смыслу («уточнить размер расходов и НДС»), опуская темы, которые не критичны для следующего шага. Итоговый conversation_result должен быть короче, а не длиннее черновика: старайся уложиться в 2 предложения там, где разговор не содержит явного конфликта интересов или множества договорённостей.
 
@@ -430,6 +452,27 @@ export const CRITERION_LABELS: Record<CriterionKey, string> = {
   format: "Формат, структура и краткость",
 };
 
+/**
+ * Groups the 12 error types from spec §17 under the criterion they most
+ * directly evidence -- shown as sub-headings in the human evaluation
+ * form's "Типы ошибок" list instead of one flat 12-item checkbox wall.
+ * Mirrors the original pipeline's own judge grouping (truth/critical-
+ * facts/context-utility/action/presentation): faithfulness gets invented/
+ * distorted-fact and role/quote errors; completeness gets missing-fact and
+ * wrong-need errors; agreements_next_step gets outcome/next-step errors;
+ * format gets duplication/verbosity/clarity/format errors. "Полезность
+ * для агента" has no type of its own in the spec's taxonomy -- every
+ * listed error already evidences one of the other four -- so its group is
+ * intentionally empty and not rendered.
+ */
+export const ERROR_TYPE_GROUPS: readonly Readonly<{ criterion: CriterionKey; types: readonly CallSummaryErrorType[] }>[] = [
+  { criterion: "faithfulness", types: ["FACT_INVENTED", "FACT_DISTORTED", "ROLE_CONFUSION", "QUOTE_INACCURATE"] },
+  { criterion: "completeness", types: ["CRITICAL_FACT_MISSING", "WRONG_CLIENT_NEED"] },
+  { criterion: "usefulness", types: [] },
+  { criterion: "agreements_next_step", types: ["WRONG_OUTCOME", "WRONG_NEXT_STEP"] },
+  { criterion: "format", types: ["CRM_DATA_DUPLICATION", "VERBOSE", "UNCLEAR_LANGUAGE", "FORMAT_VIOLATION"] },
+];
+
 // Равные веса по 20% на критерий -- прямое требование задачи (переопределяет
 // иллюстративный пример из §13 приложенной спеки, где веса были 30/25/20/15/10).
 export const CRITERION_WEIGHT = 0.2;
@@ -463,6 +506,13 @@ export const QualityJudgeRawSchema = z.object({
 export type QualityJudgeRaw = z.infer<typeof QualityJudgeRawSchema>;
 
 export type QualityDecision = "PASS" | "PASS_WITH_MINOR_ISSUES" | "REGENERATE_SUMMARY" | "REVIEW_REQUIRED";
+
+export const QUALITY_DECISION_LABELS: Record<QualityDecision, string> = {
+  PASS: "Пройдено",
+  PASS_WITH_MINOR_ISSUES: "Пройдено с замечаниями",
+  REGENERATE_SUMMARY: "Требуется перегенерация",
+  REVIEW_REQUIRED: "Требуется проверка",
+};
 
 export type QualityReport = Readonly<{
   evaluation_version: string;
@@ -906,7 +956,7 @@ export function stageStatChips(stageId: CallSummaryStageId, output: unknown): re
     case "outcome": {
       const data = output as Partial<Outcome>;
       return [
-        { label: "Тип", value: data.conversation_outcome?.type ?? "—" },
+        { label: "Тип", value: data.conversation_outcome?.type ? outcomeTypeLabel(data.conversation_outcome.type) : "—" },
         { label: "Договорённостей", value: String(data.agreements?.length ?? 0) },
         { label: "Шаг согласован", value: data.next_step?.is_agreed ? "да" : "нет" },
         { label: "Открытых вопросов", value: String(data.conversation_outcome?.unresolved_questions?.length ?? 0) },
@@ -926,7 +976,7 @@ export function stageStatChips(stageId: CallSummaryStageId, output: unknown): re
       const report = computeQualityDecision(data.scores, data.issues);
       return [
         { label: "Итог", value: `${report.overall_score}%` },
-        { label: "Решение", value: report.decision },
+        { label: "Решение", value: QUALITY_DECISION_LABELS[report.decision] },
         { label: "Блокеров", value: String(report.blocking_errors.length) },
       ];
     }

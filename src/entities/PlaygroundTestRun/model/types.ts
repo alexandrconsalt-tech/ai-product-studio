@@ -16,6 +16,7 @@ export type PlaygroundTestRun = Readonly<{
   durationMs: number;
   confidence?: number;
   qualityScore?: number;
+  manualQualityScore?: number;
   decision?: string;
   transcript?: string;
   report?: unknown;
