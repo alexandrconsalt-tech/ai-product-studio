@@ -17,16 +17,58 @@ import {
   type SummaryV2Config,
   type SummaryV2Run,
   type TechnicalEnvelope,
+  type TechnicalErrorDetails,
   type VerifierOutput,
   VerifierOutputSchema,
 } from "./contracts";
-import { callStructuredLlm } from "./structured-llm";
+import { callStructuredLlm, StructuredLlmError } from "./structured-llm";
 import { extractorPrompt, generatorPrompt, judgePrompt, PROMPT_VERSIONS, verifierPrompt } from "./prompts";
 
 const EXTRACTOR_JSON_SCHEMA = z.toJSONSchema(ExtractorOutputSchema) as Record<string, unknown>;
 const VERIFIER_JSON_SCHEMA = z.toJSONSchema(VerifierOutputSchema) as Record<string, unknown>;
 const SUMMARY_JSON_SCHEMA = z.toJSONSchema(SummaryOutputSchema) as Record<string, unknown>;
-const JUDGE_JSON_SCHEMA = z.toJSONSchema(JudgeOutputSchema) as Record<string, unknown>;
+const JUDGE_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["criterion", "decision", "score", "confidence", "critical_error", "issues", "passed_checks", "failed_checks", "recommendation"],
+  properties: {
+    criterion: { type: "string", enum: ["faithfulness", "completeness", "usefulness", "agreements_next_step", "format"] },
+    decision: { type: "string", enum: ["PASS", "FAIL", "REVIEW_REQUIRED"] },
+    score: { type: "number", minimum: 0, maximum: 100 },
+    confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
+    critical_error: { type: "boolean" },
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["severity", "type", "summary_fragment", "explanation", "evidence"],
+        properties: {
+          severity: { type: "string", enum: ["CRITICAL", "MAJOR", "MINOR"] },
+          type: { type: "string" },
+          summary_fragment: { type: "string" },
+          explanation: { type: "string" },
+          evidence: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["speaker", "quote", "turn_id"],
+              properties: {
+                speaker: { type: "string", enum: ["client", "agent", "operator", "unknown"] },
+                quote: { type: "string" },
+                turn_id: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+    passed_checks: { type: "array", items: { type: "string" } },
+    failed_checks: { type: "array", items: { type: "string" } },
+    recommendation: { type: ["string", "null"] },
+  },
+} satisfies Record<string, unknown>;
 
 const JUDGE_CRITERIA: readonly JudgeCriterion[] = ["faithfulness", "completeness", "usefulness", "agreements_next_step", "format"];
 
@@ -64,6 +106,7 @@ async function hash(value: unknown): Promise<string> {
 }
 
 function errorCode(error: unknown): string {
+  if (error instanceof StructuredLlmError) return error.errorCode;
   const message = error instanceof Error ? error.message : String(error);
   if (/timeout/i.test(message)) return "timeout";
   if (/schema_validation_failed/i.test(message)) return "schema_validation_failed";
@@ -71,6 +114,34 @@ function errorCode(error: unknown): string {
   if (/mock_provider/i.test(message)) return "provider_not_configured";
   if (/empty_structured_output/i.test(message)) return "empty_response";
   return "provider_or_internal_error";
+}
+
+function technicalErrorDetails(stageId: string, stageVersion: string, error: unknown, model: string | null): TechnicalErrorDetails {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof StructuredLlmError) {
+    return {
+      error_code: error.errorCode,
+      error_message: error.message,
+      provider: error.provider,
+      model: error.model ?? model,
+      stage_id: stageId,
+      schema_version: stageVersion,
+      retry_count: error.retryCount,
+      raw_response_available: error.rawResponseAvailable,
+      validation_errors: error.validationErrors,
+    };
+  }
+  return {
+    error_code: errorCode(error),
+    error_message: message,
+    provider: null,
+    model,
+    stage_id: stageId,
+    schema_version: stageVersion,
+    retry_count: 0,
+    raw_response_available: false,
+    validation_errors: [],
+  };
 }
 
 async function envelope<T>(
@@ -85,7 +156,7 @@ async function envelope<T>(
     confidence?: number | null;
     output?: T | null;
     issues?: readonly string[];
-    technicalError?: { code: string; message: string } | null;
+    technicalError?: TechnicalErrorDetails | null;
     durationMs?: number;
     model?: string | null;
     promptVersion?: string | null;
@@ -125,7 +196,6 @@ async function technicalErrorEnvelope<T>(
   promptVersion: string | null = null,
   model: string | null = null,
 ): Promise<TechnicalEnvelope<T>> {
-  const message = error instanceof Error ? error.message : String(error);
   return envelope<T>({
     stageId,
     stageVersion,
@@ -137,7 +207,7 @@ async function technicalErrorEnvelope<T>(
     confidence: null,
     output: null,
     issues: [],
-    technicalError: { code: errorCode(error), message },
+    technicalError: technicalErrorDetails(stageId, stageVersion, error, model),
     createdAt,
     promptVersion,
     model,
@@ -236,9 +306,26 @@ export function normalizeExtractorOutput(value: ExtractorOutput): NormalizationO
   if (value.financial_data.budget.amount_max !== budgetMax) rejected.push({ field: "financial_data.budget.amount_max", reason: "invalid_money_type" });
   if (value.financial_data.down_payment.amount !== downPayment) rejected.push({ field: "financial_data.down_payment.amount", reason: "invalid_money_type" });
 
-  const nextStep = value.next_step.status !== "NOT_DEFINED" && value.next_step.evidence.length === 0
+  let nextStep = value.next_step.status !== "NOT_DEFINED" && value.next_step.evidence.length === 0
     ? (rejected.push({ field: "next_step", reason: "evidence_missing" }), NextStepSchema.parse({ status: "NOT_DEFINED", action: null, responsible: "NOT_DEFINED", deadline: null, channel: null, evidence: [] }))
     : value.next_step;
+  const nextStepClientEvidence = nextStep.evidence.filter((item) => item.speaker === "client").map((item) => item.quote).join(" ");
+  if (nextStep.status === "CONFIRMED" && /(?:если|сначала|обсужу|посоветуюсь|поговорю).{0,80}(?:позвон|свяж)/iu.test(nextStepClientEvidence)) {
+    nextStep = { ...nextStep, status: "CONDITIONAL", responsible: "CLIENT", deadline: null, channel: /позвон/iu.test(nextStepClientEvidence) ? "PHONE" : nextStep.channel };
+    actions.push({ field: "next_step", reason: "conditional_client_action_preserved" });
+  }
+
+  const mortgageEvidence = [
+    ...value.facts,
+    ...value.requirements,
+    ...value.open_questions,
+  ].flatMap((item) => item.evidence).filter((item) => item.speaker === "client");
+  const explicitMortgageInterest = mortgageEvidence.some((item) => /ипотек/iu.test(item.quote) && /(?:консультац|плат[её]ж|первоначальн|взнос|услов)/iu.test(item.quote));
+  const interestedIn = [...new Set(value.structured_attributes.interested_in)];
+  if (explicitMortgageInterest && !interestedIn.includes("Ипотека")) {
+    interestedIn.push("Ипотека");
+    actions.push({ field: "structured_attributes.interested_in", reason: "explicit_mortgage_interest_from_client_evidence" });
+  }
 
   const normalized: ExtractorOutput = {
     ...value,
@@ -249,7 +336,7 @@ export function normalizeExtractorOutput(value: ExtractorOutput): NormalizationO
     agreements: normalizeFacts("agreements", value.agreements),
     next_step: nextStep,
     structured_attributes: {
-      interested_in: [...new Set(value.structured_attributes.interested_in)],
+      interested_in: interestedIn,
       funding_source: value.structured_attributes.funding_source,
       purchase_timeline: value.structured_attributes.purchase_timeline,
     },
@@ -327,7 +414,14 @@ export function renderSummary(summary: SummaryOutput): string {
 export function qualityGate(judges: readonly TechnicalEnvelope<JudgeOutput>[], verifierIssues: readonly string[]) {
   const criterionScores = Object.fromEntries(JUDGE_CRITERIA.map((criterion) => [criterion, null])) as Record<string, number | null>;
   if (judges.some((judge) => judge.status !== "SUCCESS" || !judge.output)) {
-    return { score: null, decision: "TECHNICAL_ERROR" as const, criterion_scores: criterionScores, critical_errors: [] as string[], warnings: ["Не все Judge завершились технически успешно."] };
+    return {
+      score: null,
+      decision: "TECHNICAL_ERROR" as const,
+      reason: "REQUIRED_JUDGE_RESULTS_MISSING" as const,
+      criterion_scores: criterionScores,
+      critical_errors: [] as string[],
+      warnings: ["Отсутствует обязательный результат хотя бы одной проверки качества."],
+    };
   }
   for (const judge of judges) criterionScores[judge.output!.criterion] = judge.output!.score;
   const score = JUDGE_CRITERIA.reduce((sum, criterion) => sum + (criterionScores[criterion] ?? 0) * 0.2, 0);
@@ -340,7 +434,7 @@ export function qualityGate(judges: readonly TechnicalEnvelope<JudgeOutput>[], v
   let decision: "AUTO_SAVE" | "SAVE_WITH_WARNING" | "REVIEW_REQUIRED" = "REVIEW_REQUIRED";
   if (allJudgesPassed && score >= 95 && scores.every((value) => value >= 90) && critical.length === 0 && major.length === 0 && verifierIssues.length === 0) decision = "AUTO_SAVE";
   else if (allJudgesPassed && score >= 90 && score < 95 && scores.every((value) => value >= 80) && critical.length === 0 && major.length === 0 && verifierIssues.length === 0) decision = "SAVE_WITH_WARNING";
-  return { score, decision, criterion_scores: criterionScores, critical_errors: critical, warnings: [...minor, ...verifierIssues] };
+  return { score, decision, reason: null, criterion_scores: criterionScores, critical_errors: critical, warnings: [...minor, ...verifierIssues] };
 }
 
 async function runLlmStage<T>(
@@ -529,7 +623,7 @@ export async function executeSummaryPipelineV2(transcript: string, config: Summa
   stages.push(generator);
   if (!generator.output) return finishTechnicalFailure(runId, transcript, config, startedAt, stages, [...JUDGE_CRITERIA.map((item) => `${item}_judge`), "quality_gate_v2", "crm_publish_v2"], randomId, now);
 
-  const judgeStages = await Promise.all(JUDGE_CRITERIA.map(async (criterion) => {
+  const settledJudgeStages = await Promise.allSettled(JUDGE_CRITERIA.map(async (criterion) => {
     const result = await runLlmStage({
       stageId: `${criterion}_judge`,
       stageVersion: "summary-quality-v2",
@@ -550,6 +644,18 @@ export async function executeSummaryPipelineV2(transcript: string, config: Summa
     if (!result.output) return result;
     return { ...result, decision: result.output.decision, score: result.output.score, confidence: result.output.confidence, issues: result.output.issues.map((issue) => issue.explanation) };
   }));
+  const judgeStages = await Promise.all(settledJudgeStages.map((settled, index) => settled.status === "fulfilled"
+    ? settled.value
+    : technicalErrorEnvelope<JudgeOutput>(
+      `${JUDGE_CRITERIA[index]}_judge`,
+      "summary-quality-v2",
+      randomId(),
+      { store, summary: generator.output },
+      settled.reason,
+      now().toISOString(),
+      PROMPT_VERSIONS[JUDGE_CRITERIA[index]],
+      config.judgeModel,
+    )));
   stages.push(...judgeStages);
 
   const gateStarted = performance.now();
@@ -559,12 +665,12 @@ export async function executeSummaryPipelineV2(transcript: string, config: Summa
     stageVersion: "summary-quality-v2",
     executionId: randomId(),
     input: judgeStages.map((judge) => judge.output),
-    status: gate.decision === "TECHNICAL_ERROR" ? "TECHNICAL_ERROR" : "SUCCESS",
+    status: "SUCCESS",
     decision: gate.decision === "TECHNICAL_ERROR" ? "TECHNICAL_ERROR" : gate.decision === "REVIEW_REQUIRED" ? "REVIEW_REQUIRED" : "PASS",
     score: gate.score,
     output: gate,
     issues: [...gate.critical_errors, ...gate.warnings],
-    technicalError: gate.decision === "TECHNICAL_ERROR" ? { code: "judge_technical_error", message: "Хотя бы один Judge завершился технической ошибкой." } : null,
+    technicalError: null,
     durationMs: Math.round(performance.now() - gateStarted),
     createdAt: now().toISOString(),
   }));

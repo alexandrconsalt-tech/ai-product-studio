@@ -49,7 +49,7 @@ async function mockSummaryV2Llm(page: Page) {
     } else {
       output = {
         criterion: body.schemaName.replace("_judge_v2", ""),
-        status: "SUCCESS", decision: "PASS", score: 100, confidence: 0.92, critical_error: false,
+        decision: "PASS", score: 100, confidence: 0.92, critical_error: false,
         issues: [], passed_checks: ["Проверка пройдена"], failed_checks: [], recommendation: null,
       };
     }
@@ -66,17 +66,20 @@ test("Summary Pipeline v2 независимо запускается и сох�
   await page.goto("/?view=playground");
   await page.getByLabel("Выбрать продукт").selectOption("project_summary_pipeline_v2");
 
-  await expect(page.getByRole("heading", { name: "Summary Pipeline v2", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Запустить Summary Pipeline v2" }).click();
+  await expect(page.getByRole("heading", { name: "Конвейер саммари v2", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Запустить конвейер саммари v2" }).click();
 
-  await expect(page.getByText("AUTO_SAVE", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("АВТОСОХРАНЕНИЕ", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("100.0%")).toBeVisible();
-  await expect(page.getByText("PUBLISHED", { exact: true })).toBeVisible();
-  await expect(page.getByText("CRM Publish v2", { exact: true })).toBeVisible();
+  await expect(page.getByText("ОПУБЛИКОВАНО", { exact: true })).toBeVisible();
+  await expect(page.getByText("Публикация в CRM v2", { exact: true })).toBeVisible();
   await expect(page.getByText("Оценка: не рассчитана").first()).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Скачать отчёт" }).click();
+  expect((await download).suggestedFilename()).toMatch(/^отчёт-саммари-v2-.+\.json$/);
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "Запустить Summary Pipeline v2" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Запустить конвейер саммари v2" })).toBeVisible();
   await page.goto("/?view=dashboard");
   await page.getByLabel("Выбрать продукт").selectOption("project_summary_pipeline_v2");
   await expect(page.getByTestId("run-history-row")).toHaveCount(1);

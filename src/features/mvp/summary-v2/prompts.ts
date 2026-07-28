@@ -1,14 +1,14 @@
 import type { JudgeCriterion } from "./contracts";
 
 export const PROMPT_VERSIONS = {
-  extractor: "call-intelligence-prompt-v1",
+  extractor: "call-intelligence-prompt-v2",
   verifier: "evidence-verifier-prompt-v1",
-  generator: "summary-generator-prompt-v1",
-  faithfulness: "faithfulness-judge-prompt-v1",
-  completeness: "completeness-judge-prompt-v1",
-  usefulness: "usefulness-judge-prompt-v1",
-  agreements_next_step: "agreements-judge-prompt-v1",
-  format: "format-judge-prompt-v1",
+  generator: "summary-generator-prompt-v2",
+  faithfulness: "faithfulness-judge-prompt-v2",
+  completeness: "completeness-judge-prompt-v2",
+  usefulness: "usefulness-judge-prompt-v2",
+  agreements_next_step: "agreements-judge-prompt-v2",
+  format: "format-judge-prompt-v2",
 } as const;
 
 const evidenceRule = `Каждый содержательный элемент обязан ссылаться на дословную короткую цитату и turn_id. Единственный источник фактов — транскрипция. Не делай выводов по косвенным признакам. Слова агента не являются позицией клиента. Условное или предложенное действие не является подтверждённой договорённостью.`;
@@ -20,7 +20,10 @@ ${evidenceRule}
 - interested_in: только "Новостройки", "Ипотека", "Строительство";
 - funding_source: "наличные / депозит", "ипотека одобрена", "ипотека в процессе", "продажа своей квартиры", "не определено";
 - purchase_timeline: "до 1 месяца", "2–3 месяца", "3–6 месяцев", "более 6 месяцев", "не определено".
-Не считай вопрос об ипотеке интересом. Не трактуй дату просмотра как срок покупки. Не смешивай бюджет, ипотеку, первый взнос и продажу своей квартиры.
+Вопрос агента об ипотеке сам по себе не является интересом. Но явный запрос клиента на ипотечную консультацию, расчёт платежа, условий или первоначального взноса означает interested_in=["Ипотека"]. Это не определяет funding_source и purchase_timeline: без прямого ответа клиента оставляй их "не определено".
+Если клиент сначала должен обсудить объект с супругой/супругом и только при сохранении интереса сам позвонит агенту, следующий шаг имеет status="CONDITIONAL", responsible="CLIENT", deadline=null и channel="PHONE".
+Отдельно фиксируй критичное изменение понимания объекта: например, клиент сначала считал объект отдельной частью таунхауса, а затем узнал, что кухня, санузел или комната общие с другим собственником.
+Не трактуй дату просмотра как срок покупки. Не смешивай бюджет, ипотеку, первый взнос и продажу своей квартиры.
 Транскрипция с turn_id:
 ${transcript}`;
 }
@@ -38,7 +41,10 @@ ${JSON.stringify(normalized)}`;
 export function generatorPrompt(transcript: string, store: unknown): string {
   return `Ты — Summary Generator. Верни только JSON по схеме. Используй только verified из Conversation Store v2; транскрипцию разрешено использовать лишь для выбора точных коротких цитат и проверки формулировки.
 Формат результата: overview — 2–4 кратких предложения; key_facts — максимум 4; quotes — максимум 2 дословные полезные цитаты; agreement_next_step — одно предложение либо null.
-Не выводи пустые разделы, "не определено", confidence, ID, статусы проверки, технические поля, телефон и дубли карточки CRM. Не придумывай мотив, срочность, срок, канал или следующий шаг.
+Не выводи пустые разделы, "не определено", confidence, ID, статусы проверки, технические поля, телефон и дубли карточки CRM. Не повторяй цену и тип объекта, если они уже находятся в карточке объекта и не влияют на итог разговора.
+В первую очередь отрази критичное изменение понимания клиента об объекте, включая общие помещения и наличие другого собственника, если это подтверждено.
+Цитаты должны быть дословными, полезными и принадлежать только клиенту. Не включай реплики агента, повреждённые фрагменты STT и бессодержательные междометия.
+Не придумывай мотив, срочность, срок, канал или следующий шаг. Условный звонок клиента после обсуждения с супругой не превращай в подтверждённую договорённость.
 ТРАНСКРИПЦИЯ:
 ${transcript}
 CONVERSATION STORE V2:
@@ -55,7 +61,7 @@ const criterionInstructions: Record<JudgeCriterion, string> = {
 
 export function judgePrompt(criterion: JudgeCriterion, transcript: string, store: unknown, summary: unknown): string {
   return `Ты — независимый Summary Judge. ${criterionInstructions[criterion]}
-Оцени только свой критерий. Не переписывай summary и Store. Верни только JSON по схеме с criterion="${criterion}". Не назначай универсальную оценку: score должен следовать конкретным найденным проблемам.
+Оцени только свой критерий. Не переписывай summary и Store. Верни только содержательный JSON по схеме с criterion="${criterion}". Не добавляй status, техническую оболочку или метаданные выполнения: их формирует код. Не назначай универсальную оценку: score должен следовать конкретным найденным проблемам.
 ТРАНСКРИПЦИЯ:
 ${transcript}
 STORE:

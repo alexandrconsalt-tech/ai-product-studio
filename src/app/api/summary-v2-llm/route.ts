@@ -18,11 +18,28 @@ function safeTunnelBaseUrl(value: string | undefined): string {
   return url.toString().replace(/\/+$/, "");
 }
 
+function errorResponse(input: {
+  status: number;
+  errorCode: string;
+  errorMessage: string;
+  provider: string | null;
+  model: string | null;
+  rawResponseAvailable: boolean;
+}) {
+  return NextResponse.json({
+    error_code: input.errorCode,
+    error_message: input.errorMessage,
+    provider: input.provider,
+    model: input.model,
+    raw_response_available: input.rawResponseAvailable,
+  }, { status: input.status });
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
     if (!body.provider || !body.apiKey || !body.model || !body.prompt || !body.schemaName || !body.jsonSchema) {
-      return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+      return errorResponse({ status: 400, errorCode: "invalid_request", errorMessage: "Не заполнены обязательные параметры запроса.", provider: body.provider ?? null, model: body.model ?? null, rawResponseAvailable: false });
     }
 
     if (body.provider === "anthropic-direct") {
@@ -42,10 +59,21 @@ export async function POST(request: Request) {
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) return NextResponse.json({ error: data?.error?.message ?? `anthropic_${response.status}` }, { status: response.status });
+      if (!response.ok) {
+        return errorResponse({
+          status: response.status,
+          errorCode: String(data?.error?.type ?? `anthropic_http_${response.status}`),
+          errorMessage: String(data?.error?.message ?? `Anthropic вернул HTTP ${response.status}.`),
+          provider: body.provider,
+          model: body.model,
+          rawResponseAvailable: true,
+        });
+      }
       const tool = Array.isArray(data.content) ? data.content.find((item: { type?: string; name?: string }) => item.type === "tool_use" && item.name === body.schemaName) : null;
-      if (!tool?.input) return NextResponse.json({ error: "empty_structured_output" }, { status: 502 });
-      return NextResponse.json({ output: tool.input, model: data.model ?? body.model });
+      if (!tool?.input) {
+        return errorResponse({ status: 502, errorCode: "empty_structured_output", errorMessage: "Anthropic не вернул обязательный структурированный результат.", provider: body.provider, model: String(data.model ?? body.model), rawResponseAvailable: true });
+      }
+      return NextResponse.json({ output: tool.input, model: data.model ?? body.model, provider: body.provider, raw_response_available: true });
     }
 
     const baseUrl = body.provider === "ai-tunnel" ? safeTunnelBaseUrl(body.baseUrl) : "https://api.openai.com/v1";
@@ -62,11 +90,33 @@ export async function POST(request: Request) {
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) return NextResponse.json({ error: data?.error?.message ?? `provider_${response.status}` }, { status: response.status });
+    if (!response.ok) {
+      return errorResponse({
+        status: response.status,
+        errorCode: String(data?.error?.code ?? data?.error?.type ?? `provider_http_${response.status}`),
+        errorMessage: String(data?.error?.message ?? `Провайдер вернул HTTP ${response.status}.`),
+        provider: body.provider,
+        model: body.model,
+        rawResponseAvailable: true,
+      });
+    }
     const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) return NextResponse.json({ error: "empty_structured_output" }, { status: 502 });
-    return NextResponse.json({ output: JSON.parse(content), model: data.model ?? body.model });
+    if (typeof content !== "string" || !content.trim()) {
+      return errorResponse({ status: 502, errorCode: "empty_structured_output", errorMessage: "Провайдер не вернул структурированный результат.", provider: body.provider, model: String(data.model ?? body.model), rawResponseAvailable: true });
+    }
+    try {
+      return NextResponse.json({ output: JSON.parse(content), model: data.model ?? body.model, provider: body.provider, raw_response_available: true });
+    } catch {
+      return errorResponse({ status: 502, errorCode: "invalid_json", errorMessage: "Провайдер вернул некорректный JSON.", provider: body.provider, model: String(data.model ?? body.model), rawResponseAvailable: true });
+    }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "internal_error" }, { status: 500 });
+    return errorResponse({
+      status: 500,
+      errorCode: "internal_error",
+      errorMessage: error instanceof Error ? error.message : "Внутренняя ошибка API.",
+      provider: null,
+      model: null,
+      rawResponseAvailable: false,
+    });
   }
 }

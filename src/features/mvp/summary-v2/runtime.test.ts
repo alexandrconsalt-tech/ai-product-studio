@@ -75,7 +75,7 @@ function fakeStructuredLlm(concurrency?: { active: number; max: number }) {
         await new Promise((resolve) => setTimeout(resolve, 5));
         concurrency.active -= 1;
       }
-      output = { criterion, status: "SUCCESS", decision: "PASS", score: 100, confidence: 0.91, critical_error: false, issues: [], passed_checks: ["ok"], failed_checks: [], recommendation: null };
+      output = { criterion, decision: "PASS", score: 100, confidence: 0.91, critical_error: false, issues: [], passed_checks: ["ok"], failed_checks: [], recommendation: null };
     }
     return { data: validator.parse(output), model, durationMs: 5 };
   };
@@ -107,6 +107,40 @@ describe("Summary Pipeline v2 — детерминированные гаран�
     const proposed = normalizeExtractorOutput({ ...extractor, next_step: { ...extractor.next_step, status: "PROPOSED" }, agreements: [] });
     expect(proposed.normalized_data.next_step.status).toBe("PROPOSED");
     expect(proposed.normalized_data.agreements).toEqual([]);
+  });
+
+  it("регрессия запуска summary_v2_52cbff87: сохраняет интерес к ипотеке и условный звонок клиента", () => {
+    const clientEvidence = [
+      { speaker: "client" as const, quote: "Мне нужна консультация по ипотеке и первоначальному взносу", turn_id: "turn-8" },
+      { speaker: "client" as const, quote: "Я обсужу с женой и, если интерес останется, сам вам позвоню", turn_id: "turn-14" },
+    ];
+    const target: ExtractorOutput = {
+      ...extractor,
+      facts: [{ id: "fact-mortgage", category: "mortgage_interest", value: "Нужна консультация по ипотеке", evidence: [clientEvidence[0]] }],
+      requirements: [],
+      agreements: [],
+      next_step: {
+        status: "CONFIRMED",
+        action: "Позвонить агенту после обсуждения с женой",
+        responsible: "CLIENT",
+        deadline: "завтра",
+        channel: "PHONE",
+        evidence: [clientEvidence[1]],
+      },
+      structured_attributes: { interested_in: [], funding_source: "не определено", purchase_timeline: "не определено" },
+      financial_data: {
+        ...extractor.financial_data,
+        funding_source: { value: "не определено", evidence: [] },
+        mortgage_status: { value: "INTERESTED", evidence: [clientEvidence[0]] },
+      },
+    };
+    const normalized = normalizeExtractorOutput(target).normalized_data;
+    expect(normalized.structured_attributes).toEqual({
+      interested_in: ["Ипотека"],
+      funding_source: "не определено",
+      purchase_timeline: "не определено",
+    });
+    expect(normalized.next_step).toMatchObject({ status: "CONDITIONAL", responsible: "CLIENT", deadline: null, channel: "PHONE" });
   });
 
   it("rejected и uncertain не попадают в verified Store", () => {
@@ -165,21 +199,61 @@ describe("Summary Pipeline v2 — интеграция", () => {
     expect(result.crm_publish.status).toBe("BLOCKED");
   });
 
+  it("сбой одной проверки не отменяет остальные, а контроль качества остаётся технически успешным", async () => {
+    const llm = fakeStructuredLlm();
+    const partiallyFailing: typeof llm = async (...args) => {
+      if (args[1] === "usefulness_judge_v2") throw new Error("timeout");
+      return llm(...args);
+    };
+    const result = await executeSummaryPipelineV2(
+      "Агент: Что ищете?\nКлиент: Новостройку. Бюджет до восьми миллионов.\nАгент: Отправлю варианты.\nКлиент: Хорошо.",
+      config,
+      { structuredLlm: partiallyFailing },
+    );
+    expect(result.stages.filter((stage) => stage.stage_id.endsWith("_judge") && stage.status === "SUCCESS")).toHaveLength(4);
+    expect(result.stages.find((stage) => stage.stage_id === "usefulness_judge")?.status).toBe("TECHNICAL_ERROR");
+    expect(result.stages.find((stage) => stage.stage_id === "quality_gate_v2")).toMatchObject({
+      status: "SUCCESS",
+      decision: "TECHNICAL_ERROR",
+      score: null,
+      technical_error: null,
+      output: { reason: "REQUIRED_JUDGE_RESULTS_MISSING" },
+    });
+  });
+
   it("Judge TECHNICAL_ERROR не усредняется по четырём", () => {
     const successful = (criterion: JudgeOutput["criterion"]): TechnicalEnvelope<JudgeOutput> => ({
       stage_id: `${criterion}_judge`, stage_version: "v2", execution_id: criterion, status: "SUCCESS", decision: "PASS", score: 100, confidence: 0.9, input_hash: "x",
-      output: { criterion, status: "SUCCESS", decision: "PASS", score: 100, confidence: 0.9, critical_error: false, issues: [], passed_checks: [], failed_checks: [], recommendation: null },
+      output: { criterion, decision: "PASS", score: 100, confidence: 0.9, critical_error: false, issues: [], passed_checks: [], failed_checks: [], recommendation: null },
       issues: [], technical_error: null, duration_ms: 1, model: "judge", prompt_version: "v1", input_contract_version: "v1", output_contract_version: "v1", created_at: "2026-07-28T00:00:00.000Z",
     });
     const judges = ["faithfulness", "completeness", "usefulness", "agreements_next_step", "format"].map((criterion) => successful(criterion as JudgeOutput["criterion"]));
-    judges[2] = { ...judges[2], status: "TECHNICAL_ERROR", decision: "TECHNICAL_ERROR", score: null, confidence: null, output: null, technical_error: { code: "timeout", message: "timeout" } };
-    expect(qualityGate(judges, [])).toMatchObject({ score: null, decision: "TECHNICAL_ERROR" });
+    judges[2] = {
+      ...judges[2],
+      status: "TECHNICAL_ERROR",
+      decision: "TECHNICAL_ERROR",
+      score: null,
+      confidence: null,
+      output: null,
+      technical_error: {
+        error_code: "timeout",
+        error_message: "timeout",
+        provider: "anthropic-direct",
+        model: "claude-sonnet-4.5",
+        stage_id: "usefulness_judge",
+        schema_version: "summary-quality-v2",
+        retry_count: 1,
+        raw_response_available: false,
+        validation_errors: [],
+      },
+    };
+    expect(qualityGate(judges, [])).toMatchObject({ score: null, decision: "TECHNICAL_ERROR", reason: "REQUIRED_JUDGE_RESULTS_MISSING" });
   });
 
   it("FAIL Judge или противоречие Verifier блокируют публикацию даже при высоком среднем", () => {
     const judge = (criterion: JudgeOutput["criterion"]): TechnicalEnvelope<JudgeOutput> => ({
       stage_id: `${criterion}_judge`, stage_version: "v2", execution_id: criterion, status: "SUCCESS", decision: "PASS", score: 100, confidence: 0.9, input_hash: "x",
-      output: { criterion, status: "SUCCESS", decision: "PASS", score: 100, confidence: 0.9, critical_error: false, issues: [], passed_checks: [], failed_checks: [], recommendation: null },
+      output: { criterion, decision: "PASS", score: 100, confidence: 0.9, critical_error: false, issues: [], passed_checks: [], failed_checks: [], recommendation: null },
       issues: [], technical_error: null, duration_ms: 1, model: "judge", prompt_version: "v1", input_contract_version: "v1", output_contract_version: "v1", created_at: "2026-07-28T00:00:00.000Z",
     });
     const judges = ["faithfulness", "completeness", "usefulness", "agreements_next_step", "format"].map((criterion) => judge(criterion as JudgeOutput["criterion"]));

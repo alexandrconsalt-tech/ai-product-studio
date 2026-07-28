@@ -150,7 +150,6 @@ export type SummaryOutput = z.infer<typeof SummaryOutputSchema>;
 export const JudgeCriterionSchema = z.enum(["faithfulness", "completeness", "usefulness", "agreements_next_step", "format"]);
 export const JudgeOutputSchema = z.object({
   criterion: JudgeCriterionSchema,
-  status: z.literal("SUCCESS"),
   decision: z.enum(["PASS", "FAIL", "REVIEW_REQUIRED"]),
   score: z.number().min(0).max(100),
   confidence: z.number().min(0).max(1).nullable(),
@@ -165,10 +164,29 @@ export const JudgeOutputSchema = z.object({
   passed_checks: z.array(z.string()),
   failed_checks: z.array(z.string()),
   recommendation: z.string().nullable(),
-});
+}).strict();
 
 export type JudgeOutput = z.infer<typeof JudgeOutputSchema>;
 export type JudgeCriterion = z.infer<typeof JudgeCriterionSchema>;
+
+export type TechnicalValidationError = Readonly<{
+  field: string;
+  message: string;
+  got: string | null;
+  allowed: readonly string[];
+}>;
+
+export type TechnicalErrorDetails = Readonly<{
+  error_code: string;
+  error_message: string;
+  provider: string | null;
+  model: string | null;
+  stage_id: string;
+  schema_version: string;
+  retry_count: number;
+  raw_response_available: boolean;
+  validation_errors: readonly TechnicalValidationError[];
+}>;
 
 export type TechnicalEnvelope<T> = Readonly<{
   stage_id: string;
@@ -181,7 +199,7 @@ export type TechnicalEnvelope<T> = Readonly<{
   input_hash: string;
   output: T | null;
   issues: readonly string[];
-  technical_error: { code: string; message: string } | null;
+  technical_error: TechnicalErrorDetails | null;
   duration_ms: number;
   model: string | null;
   prompt_version: string | null;
