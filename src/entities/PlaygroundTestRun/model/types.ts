@@ -1,6 +1,6 @@
 import type { EntityId, IsoDateTime, Version } from "@/entities/shared";
 
-export type PlaygroundTestRunSource = "pipeline-lab-v3" | "pipeline-executor" | "product-test-bench";
+export type PlaygroundTestRunSource = "pipeline-lab-v3" | "pipeline-executor" | "product-test-bench" | "summary-pipeline-v2";
 export type PlaygroundTestRunStatus = "succeeded" | "failed";
 
 export type PlaygroundTestRun = Readonly<{

@@ -14,6 +14,8 @@ const BACKUP_STORAGE_KEY = "ai-product-studio.repository.invalid-backup.v1";
 const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
+const SUMMARY_V2_PROJECT_ID = "project_summary_pipeline_v2";
+const SUMMARY_V2_PRODUCT_ID = "product_summary_pipeline_v2";
 
 function emptySnapshot(): RepositorySnapshot {
   return {
@@ -153,7 +155,7 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
     expect(loaded.reviews).toHaveLength(0);
   });
 
-  it("replaces a persisted unrelated product with the single supported module", () => {
+  it("replaces a persisted unrelated product with the two supported Summary products", () => {
     const repo = new LocalStorageProjectRepository();
     const userProject = createProject({ name: "My Own Product" });
     const legacySnapshot: RepositorySnapshot = { ...emptySnapshot(), projects: [userProject] };
@@ -162,13 +164,13 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
 
     const loaded = repo.load();
 
-    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID]);
-    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID]);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID]);
   });
 });
 
 describe("LocalStorageProjectRepository transcription products seed", () => {
-  it("keeps only the transcription and AI-summary module and preserves its saved settings", () => {
+  it("keeps v1 and independent v2 products and preserves v1 saved settings", () => {
     const repo = new LocalStorageProjectRepository();
     const originalProjectRenamedByMistake = createProject({
       id: "project_transcription_summary_module",
@@ -202,8 +204,8 @@ describe("LocalStorageProjectRepository transcription products seed", () => {
       name: "Модуль транскрибации и AI-саммари звонков",
     });
     expect(loaded.products.find((product) => product.id === originalProduct.id)).toEqual(originalProduct);
-    expect(loaded.projects).toHaveLength(1);
-    expect(loaded.products).toHaveLength(1);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID]);
   });
 });
 
@@ -392,8 +394,8 @@ describe("LocalStorageProjectRepository.load", () => {
     const loaded = repo.load();
 
     expect(stored.get(BACKUP_STORAGE_KEY)).toBe(JSON.stringify(invalidSnapshot));
-    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID]);
-    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID]);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID]);
     expect(loaded.pipelines).toHaveLength(0);
   });
 });

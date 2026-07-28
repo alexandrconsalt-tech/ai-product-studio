@@ -21,6 +21,9 @@ const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
 const TRANSCRIPTION_SUMMARY_NAME_PATTERN = /^Модуль транскрибации и AI-саммари звонков/i;
 const TRANSCRIPTION_SUMMARY_CREATED_AT = "2026-07-08T00:00:00.000Z";
+const SUMMARY_V2_PROJECT_ID = "project_summary_pipeline_v2";
+const SUMMARY_V2_PRODUCT_ID = "product_summary_pipeline_v2";
+const SUMMARY_V2_CREATED_AT = "2026-07-28T00:00:00.000Z";
 
 export const RepositorySnapshotSchema = z.object({
   projects: z.array(ProjectSchema).readonly(),
@@ -267,24 +270,87 @@ function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): Repositor
     version: "1.0.0",
   };
 
-  const projectsWithModule = hasProject
+  const summaryV2Project = {
+    id: SUMMARY_V2_PROJECT_ID,
+    name: "Summary Pipeline v2",
+    description: "Независимый 13-этапный пайплайн: verified Store, пять параллельных Judge, Quality Gate v2 и безопасная публикация в CRM.",
+    status: "testing" as const,
+    productId: SUMMARY_V2_PRODUCT_ID,
+    playgroundRunIds: [],
+    reviewIds: [],
+    createdAt: SUMMARY_V2_CREATED_AT,
+    updatedAt: SUMMARY_V2_CREATED_AT,
+    version: "2.0.0",
+  };
+
+  const summaryV2Product = {
+    id: SUMMARY_V2_PRODUCT_ID,
+    projectId: SUMMARY_V2_PROJECT_ID,
+    status: "ready" as const,
+    idea: {
+      statement: "Формировать доказательное AI-саммари звонка с независимой оценкой качества и публикацией только после прохождения Quality Gate.",
+      source: "Summary Pipeline v2 PRD",
+    },
+    discovery: "Каскадные LLM-проверки v1 создают зависимые ошибки, смешивают технический статус и качество и затрудняют воспроизводимую оценку.",
+    problem: {
+      statement: "Нужен независимый пайплайн с типизированными данными, evidence и раздельными техническими и бизнес-решениями.",
+      evidenceIds: [],
+    },
+    users: [
+      { id: "user_summary_v2_agent", name: "Агент", segment: "Продажи" },
+      { id: "user_summary_v2_quality", name: "Специалист качества", segment: "AI Quality" },
+    ],
+    jtbd: [{
+      statement: "После звонка получить краткое проверенное summary, чтобы продолжить работу без повторного прослушивания и без риска записать выдуманные данные в CRM.",
+      context: "После клиентского звонка",
+      desiredOutcome: "Verified summary и отдельные CRM-атрибуты опубликованы только при достаточном качестве",
+    }],
+    features: [
+      { id: "feature_summary_v2_verified_store", name: "Conversation Store v2", description: "Сохраняет только данные с подтверждающим evidence.", priority: "high" as const },
+      { id: "feature_summary_v2_judges", name: "Пять независимых Judge", description: "Параллельно оценивают достоверность, полноту, полезность, договорённости и формат.", priority: "high" as const },
+      { id: "feature_summary_v2_gate", name: "Quality Gate v2", description: "Разделяет TECHNICAL_ERROR, REVIEW_REQUIRED и решения публикации.", priority: "high" as const },
+    ],
+    mvp: "Полный проход транскрипции через 13 этапов, подробный технический отчёт, отдельная история запусков и CRM Publish v2.",
+    metrics: [
+      { name: "Summary Quality Score", target: ">= 95", category: "quality" as const },
+      { name: "Technical success rate", target: "100% без необработанных исключений", category: "success" as const },
+      { name: "Critical hallucinations", target: "0", category: "quality" as const },
+    ],
+    prd: "Summary Pipeline v2: Transcript Guard, единый Extractor, Normalizer, Evidence Verifier, Store v2, Generator, пять параллельных Judge, Quality Gate и CRM Publish.",
+    frameworkIds: ["framework_evaluation"],
+    valueProposition: "Воспроизводимое доказательное summary без каскадных исправляющих агентов и ложных PASS.",
+    targetAudience: "Команды продаж и AI Quality, тестирующие саммари звонков.",
+    acceptanceCriteria: "v2 запускается независимо от v1, сохраняет полный отчёт, не публикует REVIEW_REQUIRED/TECHNICAL_ERROR и не присваивает техническим ошибкам score.",
+    createdAt: SUMMARY_V2_CREATED_AT,
+    updatedAt: SUMMARY_V2_CREATED_AT,
+    version: "2.0.0",
+  };
+
+  const projectsWithV1 = hasProject
     ? snapshot.projects.map((item) => (item.id === targetProjectId ? { ...item, name: TRANSCRIPTION_SUMMARY_NAME, productId: TRANSCRIPTION_SUMMARY_PRODUCT_ID } : item))
     : [project, ...snapshot.projects];
-  const productsWithModule = hasProduct ? snapshot.products : [product, ...snapshot.products];
+  const projectsWithModule = projectsWithV1.some((item) => item.id === SUMMARY_V2_PROJECT_ID)
+    ? projectsWithV1.map((item) => (item.id === SUMMARY_V2_PROJECT_ID ? { ...item, name: summaryV2Project.name, productId: SUMMARY_V2_PRODUCT_ID } : item))
+    : [...projectsWithV1, summaryV2Project];
+  const productsWithV1 = hasProduct ? snapshot.products : [product, ...snapshot.products];
+  const productsWithModule = productsWithV1.some((item) => item.id === SUMMARY_V2_PRODUCT_ID)
+    ? productsWithV1
+    : [...productsWithV1, summaryV2Product];
   const hydratedSnapshot: RepositorySnapshot = {
     ...snapshot,
     projects: projectsWithModule,
     products: productsWithModule,
   };
 
-  const singleProjectSnapshot = hydratedSnapshot.projects.reduce<RepositorySnapshot>(
-    (current, item) => (item.id === targetProjectId ? current : cascadeDeleteProject(current, item.id)),
+  const allowedProjectIds = new Set([targetProjectId, SUMMARY_V2_PROJECT_ID]);
+  const productSnapshot = hydratedSnapshot.projects.reduce<RepositorySnapshot>(
+    (current, item) => (allowedProjectIds.has(item.id) ? current : cascadeDeleteProject(current, item.id)),
     hydratedSnapshot,
   );
 
   return {
-    ...singleProjectSnapshot,
-    products: singleProjectSnapshot.products.filter((item) => item.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID),
+    ...productSnapshot,
+    products: productSnapshot.products.filter((item) => item.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID || item.id === SUMMARY_V2_PRODUCT_ID),
   };
 }
 

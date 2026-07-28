@@ -10,7 +10,7 @@ import { EntityIdSchema, IsoDateTimeSchema, VersionSchema } from "@/entities/sha
 // retry loop (src/features/mvp/lib/ad-copy-test-bench.ts) -- something
 // the domain Pipeline's DAG-based executor cannot do at all. All three
 // feed the same Dashboard history uniformly.
-export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor", "product-test-bench"]);
+export const PlaygroundTestRunSourceSchema = z.enum(["pipeline-lab-v3", "pipeline-executor", "product-test-bench", "summary-pipeline-v2"]);
 export const PlaygroundTestRunStatusSchema = z.enum(["succeeded", "failed"]);
 
 export const PlaygroundTestRunSchema = z.object({

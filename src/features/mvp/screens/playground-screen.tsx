@@ -22,6 +22,8 @@ import { getProjectBundle } from "../selectors";
 import { PipelineLabV3Screen } from "./pipeline-lab-v3-screen";
 import { AdCopyTestBenchPanel } from "./ad-copy-test-bench-panel";
 import type { AdCopyPipelineResult } from "../lib/ad-copy-test-bench";
+import { SummaryV2Panel, summaryV2DashboardReport } from "./summary-v2-panel";
+import type { SummaryV2Run } from "../summary-v2/contracts";
 
 const IFRAME_SOURCE: PlaygroundTestRunSource = "pipeline-lab-v3";
 const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
@@ -35,6 +37,7 @@ const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
 // edited it) always wins over this regardless -- this only decides what a
 // browser with no saved config yet sees the first time.
 const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
+const SUMMARY_V2_PROJECT_ID = "project_summary_pipeline_v2";
 const TEST_BENCH_SOURCE: PlaygroundTestRunSource = "product-test-bench";
 const AD_COPY_PIPELINE_ID = "pipeline_ad_copy_generation";
 
@@ -289,6 +292,40 @@ export function PlaygroundScreen() {
     [selectedProjectId, recordRun],
   );
 
+  const handleSummaryV2RunComplete = React.useCallback(
+    (result: SummaryV2Run, transcript: string) => {
+      const technicalErrors = result.stages.filter((stage) => stage.status === "TECHNICAL_ERROR").length;
+      const warnings = result.stages.reduce((sum, stage) => sum + stage.issues.length, 0);
+      recordRun(
+        createPlaygroundTestRun({
+          id: result.run_id,
+          projectId: SUMMARY_V2_PROJECT_ID,
+          source: "summary-pipeline-v2",
+          status: technicalErrors === 0 ? "succeeded" : "failed",
+          stageCount: result.stages.length,
+          errorCount: technicalErrors,
+          warningCount: warnings,
+          tokens: 0,
+          costUsd: 0,
+          durationMs: Math.max(0, new Date(result.finished_at).getTime() - new Date(result.started_at).getTime()),
+          qualityScore: result.quality.score ?? undefined,
+          decision: result.quality.decision,
+          transcript,
+          report: summaryV2DashboardReport(result),
+          productName: "Summary Pipeline v2",
+          moduleName: "Summary Pipeline v2",
+          pipelineName: result.pipeline_version,
+          finalScore: result.quality.score ?? undefined,
+          finalDecision: result.quality.decision,
+          summary: result.summary ?? undefined,
+          startedAt: result.started_at,
+          finishedAt: result.finished_at,
+        }),
+      );
+    },
+    [recordRun],
+  );
+
   const handleRunPipeline = async () => {
     if (!pipeline) return;
     setExecuting(true);
@@ -368,6 +405,14 @@ export function PlaygroundScreen() {
 
       {!selectedProject ? (
         <EmptyState>Выберите продукт выше, чтобы открыть его pipeline.</EmptyState>
+      ) : selectedProject.id === SUMMARY_V2_PROJECT_ID ? (
+        <Section className="grid gap-3">
+          <div className="flex items-center gap-2">
+            <Layers className="size-4 text-text-muted" aria-hidden="true" />
+            <h2 className="text-lg font-semibold">{selectedProject.name}</h2>
+          </div>
+          <SummaryV2Panel onRunComplete={handleSummaryV2RunComplete} />
+        </Section>
       ) : !pipeline ? (
         <Section className="flex min-h-0 flex-1 flex-col gap-2">
           <div className="flex items-center gap-2">
