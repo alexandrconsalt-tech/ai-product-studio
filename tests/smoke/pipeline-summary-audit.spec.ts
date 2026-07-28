@@ -465,7 +465,7 @@ test("системный Summary получает достаточный output 
   expect(result).toEqual({ system: 8000, custom: 2500 });
 });
 
-test("Fact Check reserves enough output for verdicts and requires concise reasons", async ({ page }) => {
+test("Fact Check migrates to the v3 diagnostic contract and reserves enough output", async ({ page }) => {
   await page.goto(moduleUrl);
   const stage = await page.evaluate(() => eval(`(() => {
     const saved={...defaultPipeline().find(item=>item.outKey==='fact_check'),promptVersion:7,maxTokens:4000,userEdited:true,settingsEdited:true,promptEdited:false};
@@ -473,12 +473,12 @@ test("Fact Check reserves enough output for verdicts and requires concise reason
     const input={facts:[{id:'fact_1',category:'client_constraint'}],quotes:[]};
     let invalidCategory='';
     try{validateFactJudgeOutput({items:[{id:'fact_1',verdict:'needs_correction',reason:'неверная категория',confidence:.9,corrections:{category:'hard_constraint'}}],overall_confidence:.9,warnings:[]},input)}catch(error){invalidCategory=error.message}
-    return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.category};
+    return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_JUDGE_V3_JSON_SCHEMA.properties.fact_results.items.properties.suggested_correction.properties.category};
   })()`));
 
-  expect(stage).toMatchObject({ promptVersion: 9, maxTokens: 12000 });
-  expect(stage.prompt).toContain("reason — не более 6 слов");
-  expect(stage.prompt).toContain("hard_constraint, main_objection и budget_max не являются допустимыми category");
+  expect(stage).toMatchObject({ promptVersion: 10, maxTokens: 12000 });
+  expect(stage.prompt).toContain("PARTIALLY_VERIFIED");
+  expect(stage.prompt).toContain("missing_critical_facts");
   expect(stage.invalidCategory).toContain('unknown fact category');
   expect(stage.runtime).toContain('Math.max(Number(stage.maxTokens)||0,12000)');
   expect(stage.runtime).toContain("parseErr==='TRUNCATED_JSON'");
@@ -3022,6 +3022,84 @@ test("Проверка фактов валидирует вход, Judge и са
   expect(result.unknownJudge.output).toMatchObject({ status: "technical_error", error_code: "INVALID_JUDGE_OUTPUT" });
   expect(result.unknownJudge.output.schema_error).toContain('verified_facts[1].id: unknown input id "fact_missing"');
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, fact_check: { status: "technical_error", error_code: "SCHEMA_VALIDATION_FAILED" } });
+});
+
+test("Fact Judge v3 проверяет каждый факт, критическое покрытие и полезность цитат", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const transcript=[
+      'Клиент: Я хочу посмотреть квартиру, покупаю для себя.',
+      'Клиент: У меня деньги на счету.',
+      'Клиент: Родители покупают мне квартиру.',
+      'Агент: Один собственник, покупали по ДДУ, объект находится в ипотеке Сбербанка, никто не зарегистрирован.',
+      'Агент: Если квартира будет свободна, я позвоню вечером и при доступности возможен показ завтра.',
+      'Клиент: Да.',
+      'Клиент: Буду ждать звонка вечером.'
+    ].join('\\n');
+    const fact=(id,category,speaker,evidence,value=evidence)=>({id,category,name:category,value,normalized_value:value,speaker,evidence,confidence:.95,verification_status:'pending'});
+    const facts=[
+      fact('fact_view','client_intent','Клиент','Я хочу посмотреть квартиру, покупаю для себя.'),
+      fact('fact_money','client_finance','Клиент','У меня деньги на счету.','деньги на счёте'),
+      fact('fact_owner','legal_context','Агент','Один собственник, покупали по ДДУ, объект находится в ипотеке Сбербанка, никто не зарегистрирован.','один собственник'),
+      fact('fact_evening','communication_result','Клиент','Буду ждать звонка вечером.','контакт вечером согласован')
+    ];
+    const quotes=[
+      {id:'quote_strong',text:'У меня деньги на счету.',speaker:'Клиент',supports_fact_ids:['fact_money'],confidence:.95,verification_status:'pending'},
+      {id:'quote_weak',text:'Да.',speaker:'Клиент',supports_fact_ids:['fact_evening'],confidence:.9,verification_status:'pending'}
+    ];
+    const input={facts,quotes,extraction_meta:{fact_count:facts.length,quote_count:quotes.length,decision:'EXTRACTED'}};
+    const correction=()=>({speaker:null,category:null,value:null});
+    const evidence=(speaker,quote)=>[{speaker,quote}];
+    const factResult=(fact_id,status='VERIFIED',overrides={})=>({
+      fact_id,status,evidence:evidence(facts.find(item=>item.id===fact_id).speaker,facts.find(item=>item.id===fact_id).evidence),
+      reason:status==='VERIFIED'?'Факт прямо подтверждён.':'Требуется проверка.',confidence:.97,speaker_correct:true,
+      confirmed_parts:['подтверждённая часть'],unconfirmed_parts:[],error_type:'',severity:'warning',suggested_correction:correction(),...overrides
+    });
+    const quoteResult=(quote_id,status='VERIFIED',overrides={})=>({
+      quote_id,status,evidence:quotes.find(item=>item.id===quote_id).text,reason:status==='VERIFIED'?'Дословная полезная цитата.':'Цитата не проходит проверку.',
+      confidence:.96,speaker_correct:true,error_type:'',severity:'warning',...overrides
+    });
+    const missingParents={category:'client_finance',name:'помощь родителей',value:'родители покупают квартиру клиенту',speaker:'Клиент',evidence:evidence('Клиент','Родители покупают мне квартиру.'),reason:'Важный источник средств отсутствует отдельным фактом.',critical:true};
+    const judge=(factResults,quoteResults,missing=[])=>({
+      fact_results:factResults,quote_results:quoteResults,missing_critical_facts:missing,
+      coverage:{critical_facts_present:4,critical_facts_missing:missing.length,classes_checked:['client_intent','client_finance','legal_context','communication_result','next_step_context']},
+      overall_confidence:.96,warnings:[]
+    });
+    const run=(factResults,quoteResults,missing=[])=>{
+      const value=validateFactJudgeOutput(judge(factResults,quoteResults,missing),input);
+      return mergeFactCheck(CODE_FUNCS.factCheckCode({}, {facts:input,__transcript:transcript}),value,null,input,{facts:input,__transcript:transcript});
+    };
+    const verifiedFacts=facts.map(item=>factResult(item.id));
+    const usefulQuotes=[quoteResult('quote_strong'),quoteResult('quote_weak','LOW_VALUE',{reason:'Короткая реакция без самостоятельного смысла.'})];
+    const missingCritical=run(verifiedFacts,usefulQuotes,[missingParents]);
+    const wrongSpeaker=run(verifiedFacts.map(item=>item.fact_id==='fact_owner'?factResult('fact_owner','PARTIALLY_VERIFIED',{speaker_correct:false,error_type:'speaker_mismatch',severity:'critical',unconfirmed_parts:['speaker'],suggested_correction:{speaker:'Агент',category:'legal_context',value:'один собственник'}}):item),usefulQuotes);
+    const objectPriceAsBudget=run(verifiedFacts.map(item=>item.fact_id==='fact_money'?factResult('fact_money','REJECTED',{error_type:'object_price_as_budget',severity:'critical',confirmed_parts:[],unconfirmed_parts:['бюджет клиента']}):item),usefulQuotes);
+    const objectMortgageAsClient=run(verifiedFacts.map(item=>item.fact_id==='fact_money'?factResult('fact_money','REJECTED',{error_type:'object_mortgage_as_client_finance',severity:'critical',confirmed_parts:[],unconfirmed_parts:['ипотека клиента']}):item),usefulQuotes);
+    const damagedQuote=run(verifiedFacts,[quoteResult('quote_strong','REJECTED',{evidence:'У меня деньги... квартира.',error_type:'not_verbatim'}),quoteResult('quote_weak','LOW_VALUE')]);
+    const conditionalStep=run(verifiedFacts.map(item=>item.fact_id==='fact_evening'?factResult('fact_evening','REJECTED',{error_type:'conditional_step_as_confirmed',severity:'critical',confirmed_parts:['условный звонок'],unconfirmed_parts:['безусловный звонок']}):item),usefulQuotes);
+    const promptStage=defaultPipeline().find(stage=>stage.outKey==='fact_check');
+    return {missingCritical,wrongSpeaker,objectPriceAsBudget,objectMortgageAsClient,damagedQuote,conditionalStep,prompt:{version:promptStage.promptVersion,text:promptStage.prompt}};
+  })()`));
+
+  expect(result.missingCritical).toMatchObject({
+    decision: "REVIEW_REQUIRED",
+    confidence: 0.96,
+    verified_facts: expect.arrayContaining([expect.objectContaining({ id: "fact_owner", speaker: "Агент" })]),
+    rejected_quotes: [expect.objectContaining({ id: "quote_weak", quote_result_status: "LOW_VALUE" })],
+    fact_check_quality: { facts_checked: 4, critical_facts_missing: 1, precision_score: 1, critical_recall_score: 0.8, quote_score: 0.625, overall_score: 0.894, decision: "REVIEW_REQUIRED" }
+  });
+  expect(result.missingCritical.score).toBeLessThan(100);
+  expect(result.missingCritical.missing_critical_facts).toEqual([expect.objectContaining({ name: "помощь родителей" })]);
+  expect(result.missingCritical.verified_facts[0]).not.toHaveProperty("suggested_correction");
+  expect(result.missingCritical.verified_facts[0]).not.toHaveProperty("judge_evidence");
+  expect(result.wrongSpeaker).toMatchObject({ decision: "FAIL", fact_results: expect.arrayContaining([expect.objectContaining({ fact_id: "fact_owner", status: "PARTIALLY_VERIFIED", speaker_correct: false })]), rejected_facts: expect.arrayContaining([expect.objectContaining({ id: "fact_owner", error_type: "speaker_mismatch" })]) });
+  expect(result.objectPriceAsBudget).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "object_price_as_budget" })]) });
+  expect(result.objectMortgageAsClient).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "object_mortgage_as_client_finance" })]) });
+  expect(result.damagedQuote).toMatchObject({ decision: "REVIEW_REQUIRED", rejected_quotes: expect.arrayContaining([expect.objectContaining({ id: "quote_strong", error_type: "not_verbatim" })]) });
+  expect(result.conditionalStep).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "conditional_step_as_confirmed" })]) });
+  expect(result.prompt.version).toBe(10);
+  expect(result.prompt.text).toContain("60% точность фактов + 25% критическое покрытие + 15% качество цитат");
+  expect(result.prompt.text).toContain("object_mortgage_as_client_finance");
 });
 
 test("Need Agent использует новый контракт, канонические справочники и verified facts", async ({ page }) => {

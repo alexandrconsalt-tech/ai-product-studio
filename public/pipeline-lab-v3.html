@@ -726,27 +726,82 @@ ${factCategoryPromptBlock()}.
     },
     {
       id:s(), enabled:true, type:'hybrid', name:'Проверка фактов',
-      model:'gpt-5-mini', temperature:0, maxTokens:12000, codeFn:'factCheckCode', outKey:'fact_check', promptId:'fact-check-v2', promptVersion:9, promptUpdatedAt:'2026-07-24',
+      model:'gpt-5-mini', temperature:0, maxTokens:12000, codeFn:'factCheckCode', outKey:'fact_check', promptId:'fact-check-v2', promptVersion:10, promptUpdatedAt:'2026-07-28',
       prompt:
-`Ты — LLM Fact Judge. Код уже проверил технический контракт Fact Agent. Твоя задача — только смысловая сверка каждого факта и каждой цитаты с полной транскрипцией.
+`Ты — LLM Fact Judge. Код уже проверил технический контракт Fact Agent. Выполни независимую смысловую проверку по полной транскрипции. Не создавай summary, потребности или окончательный результат звонка.
 
-Для каждого входного fact id и quote id верни ровно одно решение в items. Не копируй исходный объект, value, evidence или текст цитаты. Не создавай новые id.
+Для каждого входного fact верни ровно один fact_results. Проверяй отдельно содержание, speaker, category, value/normalized_value и атомарность.
+Статусы фактов:
+- VERIFIED — весь атомарный факт прямо подтверждён;
+- PARTIALLY_VERIFIED — подтверждена только часть составного факта либо содержание верно, но speaker/category/value требуют явного исправления;
+- REJECTED — факт отсутствует, противоречит разговору, искажён или смешивает разные сущности;
+- AMBIGUOUS — смысл нельзя надёжно определить из-за STT, ролей, противоречия или неясного владельца действия.
 
-Проверь особенно строго:
-- цена объекта не должна считаться бюджетом клиента (error_type="object_price_as_budget", severity="critical");
-- вопрос агента без содержательного ответа клиента не является фактом (error_type="question_as_fact");
-- конкретный закрытый вопрос агента о требовании и непосредственно следующий однозначный ответ клиента «да/конечно/верно» образуют подтверждённый контекст; клиенту не обязательно повторять термин из вопроса;
-- speaker должен совпадать с реальным говорящим (error_type="speaker_mismatch"; при серьёзной путанице ролей severity="critical");
-- normalized_value должна точно сохранять смысл и числовую величину (error_type="incorrect_normalization"; спорную нормализацию критического числа отметь normalization_disputed=true);
-- один смысловой факт нельзя подтверждать дважды под разными id (error_type="duplicate_fact");
-- quote.text должен быть дословным фрагментом клиента, без искажения (error_type="distorted_quote").
+Не считай факт VERIFIED при неправильном speaker. Не применяй suggested_correction скрытно: это только диагностическое предложение, исходный факт не становится verified.
 
-Если в транскрипции есть пропущенный критический факт, кратко опиши его в warnings. Не добавляй поля вне JSON-схемы.
+Критические проверки:
+- цена объявления не является бюджетом клиента: error_type="object_price_as_budget";
+- ипотека/обременение объекта не является ипотекой или источником средств клиента: error_type="object_mortgage_as_client_finance";
+- деньги на счёте и помощь родителей — финансирование клиента, а не ипотека объекта;
+- условное действие нельзя превращать в подтверждённое: error_type="conditional_step_as_confirmed";
+- вопрос или предложение не является состоявшимся фактом без ответа;
+- неверный speaker: error_type="speaker_mismatch";
+- выдуманная нормализация: error_type="incorrect_normalization";
+- составной факт оценивай по частям через confirmed_parts и unconfirmed_parts.
 
-Верни строго валидный JSON без markdown и без текста вокруг:
-{"items":[{"id":"fact_1","verdict":"verified","reason":"смысл и источник подтверждены","confidence":0.98,"corrections":{}}],"overall_confidence":0.96,"warnings":[]}
+Для каждого quote верни ровно один quote_results:
+- VERIFIED — дословно, правильный speaker, смысл не склеен и цитата полезна;
+- LOW_VALUE — дословная, но не несёт самостоятельного смысла («Да», «Угу», имя, «Хорошо»);
+- REJECTED — не дословная, искажена, склеена или speaker неверен.
 
-verdict: "verified", "rejected" или "needs_correction". reason — не более 6 слов, без пересказа evidence. Для verified/rejected corrections={}. Для needs_correction разрешены только value, normalized_value, speaker, category, source_turn_ids и confidence. category можно исправлять только на одно из значений: ${factCategoryPromptBlock()}. Минимальная площадь остаётся client_constraint, возражение — client_objection; hard_constraint, main_objection и budget_max не являются допустимыми category Fact Agent. id и evidence исправлять запрещено. Если source_turn_ids изменены, код сам восстановит evidence из транскрипции. В warnings перечисли пропущенные критические факты обычным текстом. Score, status и decision не возвращай: их рассчитает код после reconciliation.
+Отдельно сравни весь входной facts с транскрипцией. В missing_critical_facts добавляй только явно присутствующие и важные пропуски классов client_intent, client_requirements, client_finance, purchase_timeline, objection, legal_context, communication_result, agreement, next_step_context. Не требуй каждый класс в каждом звонке. Не создавай новый verified-факт: missing_critical_facts — только диагностика.
+
+Особенно проверь: запрос на просмотр, покупку для себя, деньги на счёте, помощь родителей, одного собственника, ДДУ, ипотеку Сбербанка как обременение объекта, отсутствие зарегистрированных лиц и согласованный контакт вечером. Условный показ сегодня/завтра сохраняй условным. Фраза «буду ждать звонка» не означает, что клиент должен позвонить агенту.
+
+Верни строго один JSON без markdown:
+{
+  "fact_results": [{
+    "fact_id": "fact_1",
+    "status": "VERIFIED",
+    "evidence": [{"speaker": "Клиент", "quote": "точный фрагмент"}],
+    "reason": "Факт прямо подтверждён.",
+    "confidence": 0.98,
+    "speaker_correct": true,
+    "confirmed_parts": ["подтверждённый смысл"],
+    "unconfirmed_parts": [],
+    "error_type": "",
+    "severity": "warning",
+    "suggested_correction": {"speaker": null, "category": null, "value": null}
+  }],
+  "quote_results": [{
+    "quote_id": "quote_1",
+    "status": "VERIFIED",
+    "evidence": "точная цитата",
+    "reason": "Дословная полезная цитата.",
+    "confidence": 0.98,
+    "speaker_correct": true,
+    "error_type": "",
+    "severity": "warning"
+  }],
+  "missing_critical_facts": [{
+    "category": "client_finance",
+    "name": "деньги на счёте",
+    "value": "деньги находятся на счёте",
+    "speaker": "Клиент",
+    "evidence": [{"speaker": "Клиент", "quote": "У меня деньги на счету"}],
+    "reason": "Важный источник средств отсутствует во входных facts.",
+    "critical": true
+  }],
+  "coverage": {
+    "critical_facts_present": 1,
+    "critical_facts_missing": 1,
+    "classes_checked": ["client_finance"]
+  },
+  "overall_confidence": 0.96,
+  "warnings": []
+}
+
+Все fact_id и quote_id скопируй из входа; каждый id классифицируй ровно один раз. evidence.quote и quote_results.evidence должны быть дословными фрагментами транскрипции. suggested_correction заполняй только для PARTIALLY_VERIFIED/AMBIGUOUS, иначе верни null-поля. category исправления — только из: ${factCategoryPromptBlock()}. error_type="" допустим только для VERIFIED/LOW_VALUE. Score, confidence результата этапа и decision не возвращай: score и decision рассчитает код по формуле 60% точность фактов + 25% критическое покрытие + 15% качество цитат; overall_confidence останется отдельной уверенностью Judge.
 
 Факты от Fact Agent, уже прошедшие код-проверку схемы (verification_status="pending"):
 {{ctx.facts}}
@@ -7838,6 +7893,35 @@ const VERDICT_ONLY_JSON_SCHEMA={type:'object',additionalProperties:false,require
 }};
 const FACT_VERDICT_ONLY_JSON_SCHEMA=JSON.parse(JSON.stringify(VERDICT_ONLY_JSON_SCHEMA));
 FACT_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.category={type:'string',enum:[...FACT_CATEGORY_VALUES]};
+const FACT_JUDGE_V3_JSON_SCHEMA={
+  type:'object',additionalProperties:false,
+  required:['fact_results','quote_results','missing_critical_facts','coverage','overall_confidence','warnings'],
+  properties:{
+    fact_results:{type:'array',items:{type:'object',additionalProperties:false,required:['fact_id','status','evidence','reason','confidence','speaker_correct','confirmed_parts','unconfirmed_parts','error_type','severity','suggested_correction'],properties:{
+      fact_id:{type:'string',minLength:1},status:{type:'string',enum:['VERIFIED','PARTIALLY_VERIFIED','REJECTED','AMBIGUOUS']},
+      evidence:{type:'array',items:{type:'object',additionalProperties:false,required:['speaker','quote'],properties:{speaker:{type:'string',enum:[...FACT_SPEAKERS]},quote:{type:'string',minLength:1}}}},
+      reason:{type:'string',minLength:1},confidence:{type:'number',minimum:0,maximum:1},speaker_correct:{type:'boolean'},
+      confirmed_parts:{type:'array',items:{type:'string'}},unconfirmed_parts:{type:'array',items:{type:'string'}},
+      error_type:{type:'string'},severity:{type:'string',enum:['warning','critical']},
+      suggested_correction:{type:'object',additionalProperties:false,required:['speaker','category','value'],properties:{
+        speaker:{type:['string','null'],enum:[...FACT_SPEAKERS,null]},category:{type:['string','null'],enum:[...FACT_CATEGORY_VALUES,null]},value:{type:['string','null']}
+      }}
+    }}},
+    quote_results:{type:'array',items:{type:'object',additionalProperties:false,required:['quote_id','status','evidence','reason','confidence','speaker_correct','error_type','severity'],properties:{
+      quote_id:{type:'string',minLength:1},status:{type:'string',enum:['VERIFIED','REJECTED','LOW_VALUE']},evidence:{type:'string'},
+      reason:{type:'string',minLength:1},confidence:{type:'number',minimum:0,maximum:1},speaker_correct:{type:'boolean'},error_type:{type:'string'},severity:{type:'string',enum:['warning','critical']}
+    }}},
+    missing_critical_facts:{type:'array',items:{type:'object',additionalProperties:false,required:['category','name','value','speaker','evidence','reason','critical'],properties:{
+      category:{type:'string',minLength:1},name:{type:'string',minLength:1},value:{type:'string',minLength:1},speaker:{type:'string',enum:[...FACT_SPEAKERS]},
+      evidence:{type:'array',items:{type:'object',additionalProperties:false,required:['speaker','quote'],properties:{speaker:{type:'string',enum:[...FACT_SPEAKERS]},quote:{type:'string',minLength:1}}}},
+      reason:{type:'string',minLength:1},critical:{type:'boolean',const:true}
+    }}},
+    coverage:{type:'object',additionalProperties:false,required:['critical_facts_present','critical_facts_missing','classes_checked'],properties:{
+      critical_facts_present:{type:'integer',minimum:0},critical_facts_missing:{type:'integer',minimum:0},classes_checked:{type:'array',items:{type:'string'}}
+    }},
+    overall_confidence:{type:'number',minimum:0,maximum:1},warnings:{type:'array',items:{type:'string'}}
+  }
+};
 const NEED_VERDICT_ONLY_JSON_SCHEMA={type:'object',additionalProperties:false,required:['items','overall_confidence','warnings'],properties:{
   items:{type:'array',items:{type:'object',additionalProperties:false,required:['id','verdict','reason','confidence','corrections'],properties:{
     id:{type:'string',minLength:1},verdict:{type:'string',enum:['verified','rejected','needs_correction']},reason:{type:'string',minLength:1},confidence:{type:'number',minimum:0,maximum:1},
@@ -7998,6 +8082,86 @@ function validateFactCheckInput(value){
 }
 
 const FACT_CHECK_QUALITY_KEYS=['facts_checked','facts_verified','facts_rejected','quotes_checked','quotes_verified','quotes_rejected','critical_facts_missing','precision_score','critical_recall_score','quote_score','overall_score','decision'];
+const FACT_JUDGE_V3_FACT_STATUSES=new Set(['VERIFIED','PARTIALLY_VERIFIED','REJECTED','AMBIGUOUS']);
+const FACT_JUDGE_V3_QUOTE_STATUSES=new Set(['VERIFIED','REJECTED','LOW_VALUE']);
+
+function factJudgeV3ExactKeys(value,path,keys){
+  if(!value||typeof value!=='object'||Array.isArray(value)) throw new FactJudgeSchemaError(path+': expected object, received '+factSchemaType(value));
+  for(const key of keys) if(!Object.prototype.hasOwnProperty.call(value,key)) throw new FactJudgeSchemaError((path?path+'.':'')+key+': expected defined, received undefined');
+  const extra=Object.keys(value).find(key=>!keys.includes(key));
+  if(extra) throw new FactJudgeSchemaError((path?path+'.':'')+extra+': unexpected field');
+}
+
+function validateFactJudgeV3Evidence(value,path){
+  if(!Array.isArray(value)) throw new FactJudgeSchemaError(path+': expected array, received '+factSchemaType(value));
+  value.forEach((item,index)=>{
+    const itemPath=path+'['+index+']';
+    factJudgeV3ExactKeys(item,itemPath,['speaker','quote']);
+    if(!FACT_SPEAKERS.has(item.speaker)) throw new FactJudgeSchemaError(itemPath+'.speaker: unknown speaker');
+    if(typeof item.quote!=='string'||!item.quote.trim()) throw new FactJudgeSchemaError(itemPath+'.quote: expected non-empty string');
+  });
+}
+
+function validateFactJudgeV3Output(value,input){
+  factJudgeV3ExactKeys(value,'',['fact_results','quote_results','missing_critical_facts','coverage','overall_confidence','warnings']);
+  ['fact_results','quote_results','missing_critical_facts','warnings'].forEach(key=>{
+    if(!Array.isArray(value[key])) throw new FactJudgeSchemaError(key+': expected array, received '+factSchemaType(value[key]));
+  });
+  if(value.warnings.some(item=>typeof item!=='string')) throw new FactJudgeSchemaError('warnings: expected string[]');
+  if(typeof value.overall_confidence!=='number'||!Number.isFinite(value.overall_confidence)||value.overall_confidence<0||value.overall_confidence>1) throw new FactJudgeSchemaError('overall_confidence: expected number from 0 to 1');
+  const factIds=new Set((input?.facts||[]).map(item=>item.id)),quoteIds=new Set((input?.quotes||[]).map(item=>item.id));
+  const seenFacts=new Set(),seenQuotes=new Set();
+  value.fact_results.forEach((item,index)=>{
+    const path='fact_results['+index+']';
+    factJudgeV3ExactKeys(item,path,['fact_id','status','evidence','reason','confidence','speaker_correct','confirmed_parts','unconfirmed_parts','error_type','severity','suggested_correction']);
+    if(!factIds.has(item.fact_id)) throw new FactJudgeSchemaError(path+'.fact_id: unknown input id "'+item.fact_id+'"');
+    if(seenFacts.has(item.fact_id)) throw new FactJudgeSchemaError(path+'.fact_id: duplicate judge classification "'+item.fact_id+'"');
+    seenFacts.add(item.fact_id);
+    if(!FACT_JUDGE_V3_FACT_STATUSES.has(item.status)) throw new FactJudgeSchemaError(path+'.status: unknown enum value "'+item.status+'"');
+    validateFactJudgeV3Evidence(item.evidence,path+'.evidence');
+    if(typeof item.reason!=='string'||!item.reason.trim()) throw new FactJudgeSchemaError(path+'.reason: expected non-empty string');
+    if(typeof item.confidence!=='number'||!Number.isFinite(item.confidence)||item.confidence<0||item.confidence>1) throw new FactJudgeSchemaError(path+'.confidence: expected number from 0 to 1');
+    if(typeof item.speaker_correct!=='boolean') throw new FactJudgeSchemaError(path+'.speaker_correct: expected boolean');
+    ['confirmed_parts','unconfirmed_parts'].forEach(key=>{if(!Array.isArray(item[key])||item[key].some(part=>typeof part!=='string')) throw new FactJudgeSchemaError(path+'.'+key+': expected string[]');});
+    if(typeof item.error_type!=='string') throw new FactJudgeSchemaError(path+'.error_type: expected string');
+    if(!['warning','critical'].includes(item.severity)) throw new FactJudgeSchemaError(path+'.severity: expected warning | critical');
+    factJudgeV3ExactKeys(item.suggested_correction,path+'.suggested_correction',['speaker','category','value']);
+    if(item.suggested_correction.speaker!==null&&!FACT_SPEAKERS.has(item.suggested_correction.speaker)) throw new FactJudgeSchemaError(path+'.suggested_correction.speaker: unknown speaker');
+    if(item.suggested_correction.category!==null&&!FACT_CATEGORIES.has(item.suggested_correction.category)) throw new FactJudgeSchemaError(path+'.suggested_correction.category: unknown fact category');
+    if(item.suggested_correction.value!==null&&typeof item.suggested_correction.value!=='string') throw new FactJudgeSchemaError(path+'.suggested_correction.value: expected string | null');
+    if(item.status==='VERIFIED'&&(!item.speaker_correct||item.unconfirmed_parts.length||item.error_type)) throw new FactJudgeSchemaError(path+': VERIFIED cannot contain speaker, atomicity or error issues');
+  });
+  (input?.facts||[]).forEach(item=>{if(!seenFacts.has(item.id)) throw new FactJudgeSchemaError('fact_results: input id "'+item.id+'" was not classified');});
+  value.quote_results.forEach((item,index)=>{
+    const path='quote_results['+index+']';
+    factJudgeV3ExactKeys(item,path,['quote_id','status','evidence','reason','confidence','speaker_correct','error_type','severity']);
+    if(!quoteIds.has(item.quote_id)) throw new FactJudgeSchemaError(path+'.quote_id: unknown input id "'+item.quote_id+'"');
+    if(seenQuotes.has(item.quote_id)) throw new FactJudgeSchemaError(path+'.quote_id: duplicate judge classification "'+item.quote_id+'"');
+    seenQuotes.add(item.quote_id);
+    if(!FACT_JUDGE_V3_QUOTE_STATUSES.has(item.status)) throw new FactJudgeSchemaError(path+'.status: unknown enum value "'+item.status+'"');
+    if(typeof item.evidence!=='string') throw new FactJudgeSchemaError(path+'.evidence: expected string');
+    if(typeof item.reason!=='string'||!item.reason.trim()) throw new FactJudgeSchemaError(path+'.reason: expected non-empty string');
+    if(typeof item.confidence!=='number'||!Number.isFinite(item.confidence)||item.confidence<0||item.confidence>1) throw new FactJudgeSchemaError(path+'.confidence: expected number from 0 to 1');
+    if(typeof item.speaker_correct!=='boolean') throw new FactJudgeSchemaError(path+'.speaker_correct: expected boolean');
+    if(typeof item.error_type!=='string') throw new FactJudgeSchemaError(path+'.error_type: expected string');
+    if(!['warning','critical'].includes(item.severity)) throw new FactJudgeSchemaError(path+'.severity: expected warning | critical');
+    if(item.status==='VERIFIED'&&(!item.speaker_correct||item.error_type)) throw new FactJudgeSchemaError(path+': VERIFIED cannot contain speaker or error issues');
+  });
+  (input?.quotes||[]).forEach(item=>{if(!seenQuotes.has(item.id)) throw new FactJudgeSchemaError('quote_results: input id "'+item.id+'" was not classified');});
+  value.missing_critical_facts.forEach((item,index)=>{
+    const path='missing_critical_facts['+index+']';
+    factJudgeV3ExactKeys(item,path,['category','name','value','speaker','evidence','reason','critical']);
+    ['category','name','value','reason'].forEach(key=>{if(typeof item[key]!=='string'||!item[key].trim()) throw new FactJudgeSchemaError(path+'.'+key+': expected non-empty string');});
+    if(!FACT_SPEAKERS.has(item.speaker)) throw new FactJudgeSchemaError(path+'.speaker: unknown speaker');
+    validateFactJudgeV3Evidence(item.evidence,path+'.evidence');
+    if(item.critical!==true) throw new FactJudgeSchemaError(path+'.critical: expected true');
+  });
+  factJudgeV3ExactKeys(value.coverage,'coverage',['critical_facts_present','critical_facts_missing','classes_checked']);
+  ['critical_facts_present','critical_facts_missing'].forEach(key=>{if(!Number.isInteger(value.coverage[key])||value.coverage[key]<0) throw new FactJudgeSchemaError('coverage.'+key+': expected non-negative integer');});
+  if(!Array.isArray(value.coverage.classes_checked)||value.coverage.classes_checked.some(item=>typeof item!=='string')) throw new FactJudgeSchemaError('coverage.classes_checked: expected string[]');
+  if(value.coverage.critical_facts_missing!==value.missing_critical_facts.length) throw new FactJudgeSchemaError('coverage.critical_facts_missing: expected '+value.missing_critical_facts.length);
+  return {...value,__judge_contract:'fact-judge-v3'};
+}
 
 function normalizeFactJudgeOutput(value,input){
   if(!value||typeof value!=='object'||Array.isArray(value)) return value;
@@ -8070,6 +8234,7 @@ function factJudgeExactKeys(value,path,keys){
 }
 
 function validateFactJudgeOutput(value,input){
+  if(value&&Array.isArray(value.fact_results)) return validateFactJudgeV3Output(value,input);
   if(value&&Array.isArray(value.items)) return validateVerdictOnlyJudge(value,factJudgeEntries(input),FactJudgeSchemaError);
   value=normalizeFactJudgeOutput(value,input);
   factJudgeExactKeys(value,'',['verified_facts','rejected_facts','verified_quotes','rejected_quotes','missing_critical_facts','fact_check_quality','criteria']);
@@ -8151,6 +8316,98 @@ function factMissingBelongsToOutcome(item){
   return /agent follow up|follow up timing|callback|next step|call result|agreement|agent callback|срок обратн.*связ|срок следующ.*шаг|следующ.*шаг|договоренн|обещан.*агент|агент.*(?:свяж|перезвон|позвон|сообщ)/.test(identity);
 }
 
+function factJudgeMissingAlreadyCovered(item,input){
+  const missingEvidence=new Set(toList(item&&item.evidence).map(entry=>normalizedSemanticText(entry&&entry.quote)).filter(Boolean));
+  const missingValue=normalizedSemanticText([item&&item.name,item&&item.value].join(' '));
+  return toList(input&&input.facts).some(fact=>{
+    const factEvidence=normalizedSemanticText(fact&&fact.evidence);
+    if(factEvidence&&missingEvidence.has(factEvidence)) return true;
+    const factValue=normalizedSemanticText([fact&&fact.name,fact&&fact.value,fact&&fact.normalized_value].join(' '));
+    if(!missingValue||!factValue) return false;
+    const tokens=missingValue.split(' ').filter(token=>token.length>3);
+    return tokens.length>0&&tokens.filter(token=>factValue.includes(token)).length/tokens.length>=.7;
+  });
+}
+
+function mergeFactJudgeV3(codeResult,llmParsed,input,ctx){
+  const transcript=String(transcriptText(ctx)||'');
+  const factsById=new Map(input.facts.map(item=>[item.id,item]));
+  const quotesById=new Map(input.quotes.map(item=>[item.id,item]));
+  const evidenceIsVerbatim=list=>toList(list).length>0&&toList(list).every(item=>typeof item.quote==='string'&&transcript.includes(item.quote));
+  const fact_results=llmParsed.fact_results.map(item=>{
+    if(evidenceIsVerbatim(item.evidence)) return item;
+    return {...item,status:item.status==='REJECTED'?'REJECTED':'AMBIGUOUS',error_type:item.error_type||'judge_evidence_not_verbatim',severity:'warning',reason:'Judge не привёл дословное evidence.',speaker_correct:false};
+  });
+  const verified_facts=[],rejected_facts=[];
+  fact_results.forEach(result=>{
+    const fact=factsById.get(result.fact_id);
+    const diagnostic={fact_result_status:result.status,speaker_correct:result.speaker_correct,confirmed_parts:result.confirmed_parts,unconfirmed_parts:result.unconfirmed_parts,suggested_correction:result.suggested_correction,judge_evidence:result.evidence,verification_confidence:result.confidence};
+    if(result.status==='VERIFIED'){
+      verified_facts.push({...fact,verification_status:'verified',verified:true,source:'fact_check',verification_reason:result.reason,verification_confidence:result.confidence});
+      return;
+    }
+    rejected_facts.push({...fact,verification_status:result.status.toLowerCase(),verified:false,source:'fact_check',rejection_reason:result.reason,error_type:result.error_type||result.status.toLowerCase(),severity:result.severity,normalization_disputed:result.error_type==='incorrect_normalization',original_fact:fact,...diagnostic});
+  });
+  const verifiedFactIds=new Set(verified_facts.map(item=>item.id));
+  const quote_results=llmParsed.quote_results.map(result=>{
+    const quote=quotesById.get(result.quote_id);
+    const brokenRefs=toList(quote&&quote.supports_fact_ids).filter(id=>!verifiedFactIds.has(id));
+    if(result.status==='VERIFIED'&&(!result.evidence||!transcript.includes(result.evidence))) return {...result,status:'REJECTED',error_type:'not_verbatim',severity:'warning',reason:'Цитата не найдена в транскрипции.'};
+    if(result.status==='VERIFIED'&&brokenRefs.length) return {...result,status:'REJECTED',error_type:'quote_supports_unverified_fact',severity:'warning',reason:'Опорный факт не прошёл полную проверку.'};
+    return result;
+  });
+  const verified_quotes=[],rejected_quotes=[];
+  quote_results.forEach(result=>{
+    const quote=quotesById.get(result.quote_id);
+    if(result.status==='VERIFIED'){
+      verified_quotes.push({...quote,verification_status:'verified',verified:true,source:'fact_check',verification_reason:result.reason,verification_confidence:result.confidence,quote_result_status:result.status,speaker_correct:result.speaker_correct});
+      return;
+    }
+    rejected_quotes.push({...quote,verification_status:result.status.toLowerCase(),verified:false,source:'fact_check',rejection_reason:result.reason,error_type:result.error_type||result.status.toLowerCase(),severity:result.severity,original_quote:quote,quote_result_status:result.status,speaker_correct:result.speaker_correct,verification_confidence:result.confidence});
+  });
+  const invalidMissing=[],duplicateMissing=[];
+  const missing_critical_facts=llmParsed.missing_critical_facts.filter(item=>{
+    if(!evidenceIsVerbatim(item.evidence)){invalidMissing.push(item);return false;}
+    if(factJudgeMissingAlreadyCovered(item,input)){duplicateMissing.push(item);return false;}
+    return true;
+  });
+  const facts_checked=input.facts.length,facts_verified=verified_facts.length,facts_rejected=rejected_facts.length;
+  const quotes_checked=input.quotes.length,quotes_verified=verified_quotes.length,quotes_rejected=rejected_quotes.length;
+  const factWeights={VERIFIED:1,PARTIALLY_VERIFIED:.5,AMBIGUOUS:.25,REJECTED:0};
+  const quoteWeights={VERIFIED:1,LOW_VALUE:.25,REJECTED:0};
+  const precision_score=facts_checked?fact_results.reduce((sum,item)=>sum+(factWeights[item.status]||0),0)/facts_checked:1;
+  const quote_score=quotes_checked?quote_results.reduce((sum,item)=>sum+(quoteWeights[item.status]||0),0)/quotes_checked:1;
+  const coveragePresent=Math.max(0,Number(llmParsed.coverage.critical_facts_present)||0);
+  const critical_facts_missing=missing_critical_facts.length;
+  const criticalDenominator=coveragePresent+critical_facts_missing;
+  const critical_recall_score=criticalDenominator?coveragePresent/criticalDenominator:1;
+  const overall_score=precision_score*.60+critical_recall_score*.25+quote_score*.15;
+  const criticalErrorTypes=new Set(['object_price_as_budget','object_mortgage_as_client_finance','speaker_mismatch','conditional_step_as_confirmed','not_in_transcript','value_distortion','entity_confusion']);
+  const critical_errors=rejected_facts.filter(item=>item.severity==='critical');
+  const partialOrAmbiguous=fact_results.some(item=>['PARTIALLY_VERIFIED','AMBIGUOUS'].includes(item.status));
+  const quoteIssues=quote_results.some(item=>item.status!=='VERIFIED');
+  let decision;
+  if(precision_score<.5||critical_recall_score<.5||critical_errors.some(item=>criticalErrorTypes.has(item.error_type))) decision='FAIL';
+  else if(critical_facts_missing||partialOrAmbiguous||facts_rejected||quoteIssues) decision='REVIEW_REQUIRED';
+  else decision='PASS';
+  const roundedScore=Math.round(overall_score*100);
+  const fact_check_quality={
+    facts_checked,facts_verified,facts_rejected,quotes_checked,quotes_verified,quotes_rejected,critical_facts_missing,
+    precision_score:+precision_score.toFixed(3),critical_recall_score:+critical_recall_score.toFixed(3),quote_score:+quote_score.toFixed(3),overall_score:+overall_score.toFixed(3),decision
+  };
+  const warnings=[...llmParsed.warnings,...invalidMissing.map(item=>'Missing fact rejected: non-verbatim evidence — '+item.name),...duplicateMissing.map(item=>'Missing fact ignored: already covered — '+item.name)];
+  return {
+    verified_facts,rejected_facts,verified_quotes,rejected_quotes,missing_critical_facts,fact_results,quote_results,
+    coverage:{...llmParsed.coverage,critical_facts_missing,critical_facts_expected:coveragePresent+critical_facts_missing},
+    fact_check_quality,score:roundedScore,confidence:llmParsed.overall_confidence,decision,status:decision==='FAIL'?'fail':decision==='REVIEW_REQUIRED'?'warn':'ok',
+    critical_errors:critical_errors.map(item=>({id:item.id,type:item.error_type,reason:item.rejection_reason})),
+    warnings,criteria:[...(codeResult.criteria||[]),{name:'Проверка каждого факта',status:decision==='FAIL'?'fail':facts_rejected||partialOrAmbiguous?'warning':'pass',score:Math.round(precision_score*100),explanation:'Каждый входной факт проверен по содержанию, speaker, category, value и атомарности.'},{name:'Критическое покрытие',status:critical_facts_missing?'warning':'pass',score:Math.round(critical_recall_score*100),explanation:'Пропущено критических фактов: '+critical_facts_missing+'.'},{name:'Качество цитат',status:quoteIssues?'warning':'pass',score:Math.round(quote_score*100),explanation:'Дословность, speaker и самостоятельная полезность проверены.'}],
+    reconciliation:{input_items_count:facts_checked+quotes_checked,judge_items_count:fact_results.length+quote_results.length,verified_count:facts_verified+quotes_verified,partially_verified_count:fact_results.filter(item=>item.status==='PARTIALLY_VERIFIED').length,ambiguous_count:fact_results.filter(item=>item.status==='AMBIGUOUS').length,rejected_count:facts_rejected+quotes_rejected,missing_critical_count:critical_facts_missing,duplicate_missing_ignored:duplicateMissing.length,invalid_missing_ignored:invalidMissing.length},
+    raw_response:{fact_results:llmParsed.fact_results,quote_results:llmParsed.quote_results,missing_critical_facts:llmParsed.missing_critical_facts,coverage:llmParsed.coverage,overall_confidence:llmParsed.overall_confidence,warnings:llmParsed.warnings},
+    issues:[]
+  };
+}
+
 function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
   if(codeResult.hardFail){
     const schemaError=codeResult.schemaError||codeResult.issues?.[0]||'facts: invalid input schema';
@@ -8159,6 +8416,7 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
   if(parseErr||!llmParsed){
     return {status:'technical_error',decision:'ERROR',score:null,error_code:parseErr&&parseErr.startsWith('verified_')?'INVALID_JUDGE_OUTPUT':'JUDGE_RESULT_UNAVAILABLE',schema_error:parseErr||'нет ответа',parse_error:parseErr||'нет ответа',verified_facts:[],rejected_facts:[],verified_quotes:[],rejected_quotes:[],missing_critical_facts:[],fact_check_quality:{facts_checked:input.facts.length,facts_verified:0,facts_rejected:0,quotes_checked:input.quotes.length,quotes_verified:0,quotes_rejected:0,critical_facts_missing:0,precision_score:null,critical_recall_score:null,quote_score:null,overall_score:null,decision:'ERROR'},criteria:codeResult.criteria||[],issues:[parseErr||'JUDGE_RESULT_UNAVAILABLE']};
   }
+  if(llmParsed.__judge_contract==='fact-judge-v3') return mergeFactJudgeV3(codeResult,llmParsed,input,ctx);
   if(llmParsed.__judge_contract==='verdict-only-v2'){
     const reconciled=reconcileVerdictOnly(llmParsed,ctx);
     reconciled.warnings=relevantFactJudgeWarnings(reconciled.warnings,input);
@@ -9461,8 +9719,8 @@ async function runStage(stage, ctx){
     const promptContext=isNeedCheckStage?{...ctx,needs:codeResult.input}:ctx;
     const promptAudit=ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, promptContext), promptContext);
     const prompt=promptAudit.prompt;
-    const verdictSchemaId=isNeedCheckStage?'judge_need_verdict_only_v2':'judge_verdict_only_v1';
-    const verdictResponseFormat=(isFactCheckStage||isNeedCheckStage||isOutcomeCheckStage)?{type:'json_schema',json_schema:{name:verdictSchemaId,strict:true,schema:isFactCheckStage?FACT_VERDICT_ONLY_JSON_SCHEMA:isNeedCheckStage?NEED_VERDICT_ONLY_JSON_SCHEMA:VERDICT_ONLY_JSON_SCHEMA}}:null;
+    const verdictSchemaId=isFactCheckStage?'fact_judge_v3':isNeedCheckStage?'judge_need_verdict_only_v2':'judge_verdict_only_v1';
+    const verdictResponseFormat=(isFactCheckStage||isNeedCheckStage||isOutcomeCheckStage)?{type:'json_schema',json_schema:{name:verdictSchemaId,strict:true,schema:isFactCheckStage?FACT_JUDGE_V3_JSON_SCHEMA:isNeedCheckStage?NEED_VERDICT_ONLY_JSON_SCHEMA:VERDICT_ONLY_JSON_SCHEMA}}:null;
     const effectiveHybridMaxTokens=isFactCheckStage
       ? Math.max(Number(stage.maxTokens)||0,12000)
       : (isNeedCheckStage||isOutcomeCheckStage)
@@ -9495,10 +9753,13 @@ async function runStage(stage, ctx){
     // if the retry doesn't fix it, a saved run if it does.
     if(parseErr){
       hybridRetryCount=1;
-      const verdictOnlyRepair=(isFactCheckStage||isNeedCheckStage||isOutcomeCheckStage)
+      const factJudgeRepair=isFactCheckStage
+        ? prompt+'\n\nSCHEMA REPAIR — ПОСЛЕДНЯЯ ПОПЫТКА. Ошибка проверки: '+parseErr+(parseErr==='TRUNCATED_JSON'?'\nПредыдущий JSON был оборван: сформируй полный ответ заново.':'\nИсходный ответ: '+String(raw||''))+'\nВерни только полный JSON Fact Judge v3 с fact_results, quote_results, missing_critical_facts, coverage, overall_confidence и warnings. Классифицируй каждый входной fact_id и quote_id ровно один раз; не меняй смысл решений.'
+        : '';
+      const verdictOnlyRepair=(!isFactCheckStage&&(isNeedCheckStage||isOutcomeCheckStage))
         ? prompt+'\n\nSCHEMA REPAIR — ПОСЛЕДНЯЯ ПОПЫТКА. Ошибка проверки: '+parseErr+(parseErr==='TRUNCATED_JSON'?'\nПредыдущий JSON был оборван: сформируй полный ответ заново и не продолжай оборванный фрагмент.':'\nИсходный ответ: '+String(raw||''))+'\nТребуемая схема: {"items":[{"id":"входной id","verdict":"verified|rejected|needs_correction","reason":"до 6 слов","confidence":0.0,"corrections":{}}],"overall_confidence":0.0,"warnings":[]}.'+'\nВерни только исправленный JSON. Не меняй смысл решений, не копируй исходные объекты и не добавляй новые id.'
         : '';
-      const retryPrompt=verdictOnlyRepair||(parseErr==='INCOMPLETE_NEED_JUDGE_CONTRACT'
+      const retryPrompt=factJudgeRepair||verdictOnlyRepair||(parseErr==='INCOMPLETE_NEED_JUDGE_CONTRACT'
         ? prompt+'\n\nПРЕДЫДУЩИЙ ОТВЕТ НАРУШИЛ КОНТРАКТ: verified_needs и failed_needs одновременно пусты при непустом входе. Повтори проверку и классифицируй каждый исходный элемент ровно в один из этих массивов со всеми пятью булевыми флагами.'
         : parseErrKind==='schema'
         ? prompt+'\n\nПРЕДЫДУЩИЙ ОТВЕТ НАРУШИЛ КОНТРАКТ: '+parseErr+'. Каждый элемент verified_*/rejected_* обязан включать поле "id" со значением ИЗ ВХОДНЫХ ДАННЫХ (facts/needs/requirements/call_results/agreements выше) -- скопируй id дословно, не придумывай новый и не пропускай поле.'
@@ -9549,7 +9810,9 @@ async function runStage(stage, ctx){
       model:actualModel, timestamp:new Date().toISOString(),
       contract_audit:{structured_output_requested:Boolean(verdictResponseFormat),structured_output_applied:structuredOutputApplied==null?Boolean(verdictResponseFormat&&['AI Tunnel','OpenAI Direct'].includes(actualProvider)):Boolean(structuredOutputApplied),response_schema_id:verdictResponseFormat&&verdictResponseFormat.json_schema?verdictResponseFormat.json_schema.name:null,parser_schema_id:(isFactCheckStage||isNeedCheckStage||isOutcomeCheckStage)?verdictSchemaId:null,warnings:verdictResponseFormat&&structuredOutputApplied===false?['STRUCTURED_OUTPUT_UNSUPPORTED_PARSER_FALLBACK']:[]},
       status: statusFromDecision(merged.decision),
-      metrics:[['Провайдер',actualProvider],['Модель',modelLabel],['Decision',merged.decision],['Score',merged.score],['Токены',tokens],['Стоимость','$'+cost.toFixed(4)],['Время',ms+' мс']] };
+      metrics:[['Провайдер',actualProvider],['Модель',modelLabel],['Technical status',merged.status==='technical_error'?'ERROR':'SUCCESS'],['Decision',merged.decision],['Score',merged.score],['Confidence',merged.confidence==null?'—':Number(merged.confidence).toFixed(2)],
+        ...(isFactCheckStage?[['Input facts',ctx.facts?.facts?.length||0],['Verified facts',merged.verified_facts?.length||0],['Partially verified facts',merged.fact_results?.filter(item=>item.status==='PARTIALLY_VERIFIED').length||0],['Rejected facts',merged.rejected_facts?.length||0],['Missing critical facts',merged.missing_critical_facts?.length||0],['Input quotes',ctx.facts?.quotes?.length||0],['Verified quotes',merged.verified_quotes?.length||0],['Rejected / low-value quotes',merged.rejected_quotes?.length||0],['Critical issues',merged.critical_errors?.length||0],['Warnings',merged.warnings?.length||0]]:[]),
+        ['Токены',tokens],['Стоимость','$'+cost.toFixed(4)],['Время',ms+' мс']] };
     rep.meta=buildStageMeta(stage,rep);
     return rep;
   }
@@ -10274,6 +10537,18 @@ function renderVerdictOnlyJudgePanel(output){
   return '<div class="kvlist" style="margin-top:10px"><div><span class="k">Вход / Judge</span> <b>'+audit.input_items_count+' / '+audit.judge_items_count+'</b></div><div><span class="k">Verified / Corrected / Rejected</span> <b>'+audit.verified_count+' / '+audit.corrected_count+' / '+audit.rejected_count+'</b></div></div><div style="overflow:auto;max-width:100%;margin-top:10px"><table style="width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px">ID</th><th style="text-align:left;padding:6px">Verdict</th><th style="text-align:left;padding:6px">Confidence</th><th style="text-align:left;padding:6px">Reason</th><th style="text-align:left;padding:6px">Corrections</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
+function renderFactJudgeV3Panel(output){
+  const facts=toList(output&&output.fact_results),quotes=toList(output&&output.quote_results),missing=toList(output&&output.missing_critical_facts);
+  if(!facts.length&&!quotes.length&&!missing.length) return '';
+  const cell='style="padding:6px;word-break:break-word;overflow-wrap:anywhere;vertical-align:top"';
+  const evidenceText=list=>toList(list).map(item=>(item.speaker?item.speaker+': ':'')+(item.quote||'')).join(' · ')||'—';
+  const factRows=facts.map(item=>'<tr><td '+cell+'>'+escapeHtml(item.fact_id)+'</td><td '+cell+'>'+escapeHtml(item.status)+'</td><td '+cell+'>'+(item.speaker_correct?'да':'нет')+'</td><td '+cell+'>'+Number(item.confidence).toFixed(2)+'</td><td '+cell+'>'+escapeHtml(item.reason)+'</td><td '+cell+'>'+escapeHtml(evidenceText(item.evidence))+'</td></tr>').join('');
+  const quoteRows=quotes.map(item=>'<tr><td '+cell+'>'+escapeHtml(item.quote_id)+'</td><td '+cell+'>'+escapeHtml(item.status)+'</td><td '+cell+'>'+(item.speaker_correct?'да':'нет')+'</td><td '+cell+'>'+Number(item.confidence).toFixed(2)+'</td><td '+cell+'>'+escapeHtml(item.reason)+'</td><td '+cell+'>'+escapeHtml(item.evidence||'—')+'</td></tr>').join('');
+  const missingList=missing.length?'<p class="fl" style="margin-top:10px">Missing critical facts</p><ul class="chklist">'+missing.map(item=>'<li class="fail"><span class="ic">✕</span><span><b>'+escapeHtml(item.category)+' · '+escapeHtml(item.name)+'</b><br>'+escapeHtml(item.reason)+'<br><span style="color:var(--muted)">'+escapeHtml(evidenceText(item.evidence))+'</span></span></li>').join('')+'</ul>':'';
+  const table=(title,headers,rows)=>rows?'<p class="fl" style="margin-top:10px">'+title+'</p><div style="overflow:auto;max-width:100%"><table style="width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px"><thead><tr>'+headers.map(label=>'<th style="text-align:left;padding:6px">'+label+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'';
+  return table('Проверка каждого факта',['ID','Status','Speaker','Confidence','Reason','Evidence'],factRows)+table('Проверка цитат',['ID','Status','Speaker','Confidence','Reason','Evidence'],quoteRows)+missingList;
+}
+
 function renderReport(stage, rep, num){
   const M=stageTypeMeta(stage);
   const el=document.createElement('div'); el.className='report collapsed';
@@ -10349,7 +10624,8 @@ function renderReport(stage, rep, num){
       '<div><span class="k">'+b.label+' <span class="tag">'+(b.w*100)+'%</span></span> <b>'+(b.val*100).toFixed(0)+'%</b></div>').join('')+'</div>';
   }
 
-  if(rep.output&&rep.output.judge_items) body+=renderVerdictOnlyJudgePanel(rep.output);
+  if(rep.output&&rep.output.fact_results) body+=renderFactJudgeV3Panel(rep.output);
+  else if(rep.output&&rep.output.judge_items) body+=renderVerdictOnlyJudgePanel(rep.output);
 
   if(rep.isSummaryQualityGate && rep.output){
     body+=renderSummaryQualityPanel(rep.output);
