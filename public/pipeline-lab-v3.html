@@ -655,7 +655,7 @@ function defaultPipeline(){
     },
     {
       id:s(), enabled:true, type:'llm', name:'Извлечение фактов и цитат',
-      model:'gpt-5-mini', outKey:'facts', promptId:'fact-agent-v2', promptVersion:6, promptUpdatedAt:'2026-07-24', maxTokens:6000,
+      model:'gpt-5-mini', outKey:'facts', promptId:'fact-agent-v2', promptVersion:7, promptUpdatedAt:'2026-07-28', maxTokens:6000,
       prompt:
 `Ты — Fact Agent пайплайна анализа звонков по недвижимости.
 Извлеки только явно подтверждённые факты и значимые дословные цитаты клиента. Факты ещё не считаются проверенными: следующий этап выполнит независимую смысловую проверку.
@@ -699,7 +699,10 @@ ${factCategoryPromptBlock()}.
 Правила:
 - value: только string, number, boolean, string[] или number[]. normalized_value может быть null, если однозначной нормализации нет.
 - speaker факта: "Клиент", "Агент", "Оператор" или "Третье лицо".
-- Quote разрешён только для speaker="Клиент" и должен ссылаться на существующие fact id.
+- Извлекай рабочие факты независимо от роли источника. Особенно сохраняй подтверждённые агентом юридические и финансовые сведения об объекте (например: один собственник, ДДУ, ипотека Сбербанка, никто не зарегистрирован), обязательства агента, доступность показа и договорённость о контакте.
+- В приоритете: цель и потребности клиента, критерии поиска, бюджет и способ оплаты, срок, вопросы клиента и ответы на них, возражения, договорённости, обязательства и фактический следующий шаг.
+- Quote разрешён только для speaker="Клиент" и должен ссылаться на существующие fact id. Верни не более 4 самостоятельных содержательных цитат, которые понятны вне соседних реплик.
+- Не возвращай как quote имя или короткую реакцию без самостоятельного смысла: «Александра», «Да», «Да, себе», «Угу», «Хорошо», «Да, можете».
 - Все id уникальны. evidence и quote.text — точные фрагменты транскрипции.
 - confidence от 0 до 1; verification_status всегда "pending".
 - Самостоятельный вопрос клиента допустим только как category="client_question" и не должен выдаваться за подтверждённый ответ. Ответ на вопрос извлекай отдельным атомарным фактом.
@@ -709,7 +712,10 @@ ${factCategoryPromptBlock()}.
 - Не извлекай телефоны, email и другие PII. Это правило применяется также кодом после ответа модели.
 - Каждую названную клиентом область поиска верни отдельным фактом category="search_location".
 - Канал связи верни отдельным фактом category="communication_channel", каждое обещанное действие агента — отдельным category="agent_commitment".
-- Не индексируй малозначимые характеристики объекта, если они не влияют на потребность, ограничение, возражение, результат звонка или следующий шаг.
+- category="object_information" используй только когда характеристика прямо отвечает на вопрос клиента, влияет на решение/возражение/следующий шаг либо имеет юридическое или финансовое значение.
+- Не индексируй адрес, код объекта, этаж, площадь, цену объявления, название комплекса и число комнат без рабочей причины из предыдущего правила. Не дублируй повреждённые варианты одного адреса и не пытайся угадывать правильный адрес.
+- Если согласован только контакт вечером, верни нейтральный communication_result о согласии связаться вечером. Не придумывай владельца действия, канал связи и подтверждённый показ.
+- Локальный код после модели может только удалить шум и пересчитать счётчики, поэтому все значимые факты должны присутствовать уже в этом JSON.
 - fact_count и quote_count точно равны длинам массивов.
 - Если подтверждённых фактов нет, верни facts=[], quotes=[], fact_count=0, quote_count=0, decision="NO_FACTS".
 - Если facts не пуст, decision="EXTRACTED".
@@ -7678,141 +7684,114 @@ function recoverLegacyFactRootArray(value){
 }
 
 function factContainsPii(item){
-  const text=JSON.stringify(item||'');
+  const text=JSON.stringify(item&&typeof item==='object'
+    ? [item.name,item.value,item.normalized_value,item.evidence,item.text]
+    : item||'');
   if(/(?:\+?7|8)[\s(.-]*\d{3}[\s). -]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}/.test(text)) return true;
   if(/(?:телефон|номер|контакт|phone|email|e-mail)/i.test(text)&&(text.match(/\d/g)||[]).length>=4) return true;
   return /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(text);
+}
+
+function factPolicyKey(item){
+  return normalizedSemanticText([
+    item&&item.category,item&&item.name,
+    JSON.stringify(item&&item.value),JSON.stringify(item&&item.normalized_value),
+    item&&item.speaker,item&&item.evidence
+  ].join(' '));
+}
+
+function factTurnHasDirectClientQuestion(item,transcript){
+  if(!transcript||!item||typeof item.evidence!=='string') return false;
+  const evidence=normalizedSemanticText(item.evidence);
+  const turns=parseTranscriptTurns(transcript);
+  const index=turns.findIndex(turn=>{
+    const text=normalizedSemanticText(turn.text);
+    return evidence&&text&&(text.includes(evidence)||evidence.includes(text));
+  });
+  if(index<0) return false;
+  const itemText=normalizedSemanticText([item.name,JSON.stringify(item.value),JSON.stringify(item.normalized_value),item.evidence].join(' '));
+  const subjects=['собственник','владел','дду','ипотек','зарегистр','пропис','адрес','улиц','цен','стоим','этаж','площад','комнат','жк','комплекс','код объект'];
+  for(let offset=1;offset<=2&&index-offset>=0;offset++){
+    const turn=turns[index-offset];
+    if(!/клиент/.test(normalizedSemanticText(turn.role))) continue;
+    const text=String(turn.text||'');
+    const questionText=normalizedSemanticText(text);
+    const sameSubject=subjects.some(subject=>itemText.includes(subject)&&questionText.includes(subject));
+    if(sameSubject&&(/[?？]/.test(text)||/(?:^|\s)(?:сколько|какая|какой|какие|где|когда|кто|чей|можно ли|есть ли|подскажите|уточните)(?:\s|$)/i.test(text))) return true;
+  }
+  return false;
+}
+
+function factObjectInformationIsNoise(item,transcript,addressAlreadyKept){
+  if(!item||!['object_information','object_context'].includes(item.category)) return false;
+  const text=normalizedSemanticText([item.name,JSON.stringify(item.value),JSON.stringify(item.normalized_value),item.evidence].join(' '));
+  const legalOrFinancial=/(?:собственник|владелец|дду|договор долевого|ипотек|сбербанк|обременен|залог|зарегистрирован|прописан|дол[яи]|совместн|нотари|право собственност|кадастр|разрешен|назначен)/.test(text);
+  const workRelevant=/(?:вопрос|решени|возраж|отказ|не подходит|соглас|договор|следующ|связ|контакт|показ|просмотр|доступ|вечер|оплат|кредит|рассроч)/.test(text);
+  if(legalOrFinancial||workRelevant||factTurnHasDirectClientQuestion(item,transcript)) return false;
+  const addressLike=/(?:адрес|улиц|проспект|переул|шоссе|набережн|барклая|брутлая|арлаева|бараклая)/.test(text);
+  if(addressLike&&addressAlreadyKept) return true;
+  return addressLike||/(?:код\s+объект|артикул|этаж|площад|цен[аы]\s+(?:объект|квартир|предложен|объявлен)|стоимост[ьи]\s+(?:объект|квартир)|жил(?:ой|ого)\s+комплекс|\bжк\b|количеств[оа]\s+комнат|\bкомнатн)/.test(text);
+}
+
+function factQuoteIsWeak(text){
+  const normalized=normalizedSemanticText(text).replace(/[.!?]+$/,'').trim();
+  if(!normalized) return true;
+  if(/^(?:александра|да|угу|ага|хорошо|ладно|понятно|конечно|верно|спасибо|да\s+себе|да\s+можете)$/.test(normalized)) return true;
+  if(/^да(?:\s+да)*(?:\s+конечно)?(?:\s+я\s+понял)?$/.test(normalized)) return true;
+  const words=normalized.split(/\s+/).filter(Boolean);
+  if(words.length>=4) return false;
+  return !/(?:не\s+подход|не\s+устра|смуща|дорог|бюджет|ипотек|наличн|куп|ищ|нуж|хочу|показ|просмотр|позвон|связ|ждать|срок|район|метро|комнат|миллион|тысяч)/.test(normalized);
 }
 
 function applyFactExtractionPolicies(value,ctx){
   if(!value||typeof value!=='object'||Array.isArray(value)||!Array.isArray(value.facts)) return {value,warnings:[]};
   const transcript=String(transcriptText(ctx)||'');
   const modelOutputFactCount=value.facts.length,modelOutputQuoteCount=Array.isArray(value.quotes)?value.quotes.length:0;
-  let recoveredFactCount=0,recoveredQuoteCount=0;
-  const removedIds=new Set(),warnings=[];
+  const removedIds=new Set(),factKeys=new Set(),warnings=[],removalReasons={};
+  let addressAlreadyKept=false;
+  const remove=(id,reason)=>{if(id) removedIds.add(id);removalReasons[reason]=(removalReasons[reason]||0)+1;warnings.push(reason);return false;};
   const facts=value.facts.filter(item=>{
-    if(factContainsPii(item)){removedIds.add(item&&item.id);warnings.push('PII_FACT_REMOVED');return false;}
-    if(transcript&&typeof item.evidence==='string'&&!transcript.includes(item.evidence)){removedIds.add(item&&item.id);warnings.push('NON_VERBATIM_EVIDENCE_REMOVED');return false;}
+    if(factContainsPii(item)) return remove(item&&item.id,'PII_FACT_REMOVED');
+    if(transcript&&typeof item.evidence==='string'&&!transcript.includes(item.evidence)) return remove(item&&item.id,'NON_VERBATIM_EVIDENCE_REMOVED');
+    const key=factPolicyKey(item);
+    if(factKeys.has(key)) return remove(item&&item.id,'DUPLICATE_FACT_REMOVED');
+    if(factObjectInformationIsNoise(item,transcript,addressAlreadyKept)) return remove(item&&item.id,'LOW_VALUE_OBJECT_INFORMATION_REMOVED');
+    const itemText=normalizedSemanticText([item&&item.name,item&&item.value,item&&item.evidence].join(' '));
+    if(['object_information','object_context'].includes(item&&item.category)&&/(?:адрес|улиц|проспект|переул|шоссе|набережн|барклая|брутлая|арлаева|бараклая)/.test(itemText)) addressAlreadyKept=true;
+    factKeys.add(key);
     return true;
   });
-  if(transcript){
-    const turns=parseTranscriptTurns(transcript);
-    facts.forEach(item=>{
-      if(!item||item.category!=='search_location'||Array.isArray(item.value)) return;
-      const evidence=normalizedSemanticText(item.evidence||item.value);
-      const index=turns.findIndex(turn=>/клиент/.test(normalizedSemanticText(turn.role))&&normalizedSemanticText(turn.text).includes(evidence));
-      const previous=index>0?turns[index-1]:null;
-      if(previous&&/(?:агент|оператор|менеджер)/.test(normalizedSemanticText(previous.role))&&/(?:где находится|где расположен|местоположение|адрес).*(?:участок|объект)|(?:участок|объект).*(?:где находится|где расположен|местоположение|адрес)/.test(normalizedSemanticText(previous.text))){
-        item.category='object_context';item.name='локация обсуждаемого объекта';
-        warnings.push('OBJECT_LOCATION_RECLASSIFIED');
-      }
-    });
-  }
-  const quotes=(Array.isArray(value.quotes)?value.quotes:[]).filter(item=>{
-    if(factContainsPii(item)) return false;
-    if(transcript&&typeof item.text==='string'&&!transcript.includes(item.text)) return false;
-    return Array.isArray(item.supports_fact_ids)&&item.supports_fact_ids.every(id=>!removedIds.has(id));
+  const keptFactIds=new Set(facts.map(item=>item&&item.id));
+  const quoteKeys=new Set();
+  const filteredQuotes=(Array.isArray(value.quotes)?value.quotes:[]).filter(item=>{
+    if(factContainsPii(item)){removalReasons.PII_QUOTE_REMOVED=(removalReasons.PII_QUOTE_REMOVED||0)+1;warnings.push('PII_QUOTE_REMOVED');return false;}
+    if(transcript&&typeof item.text==='string'&&!transcript.includes(item.text)){removalReasons.NON_VERBATIM_QUOTE_REMOVED=(removalReasons.NON_VERBATIM_QUOTE_REMOVED||0)+1;warnings.push('NON_VERBATIM_QUOTE_REMOVED');return false;}
+    if(!Array.isArray(item.supports_fact_ids)||!item.supports_fact_ids.length||item.supports_fact_ids.some(id=>removedIds.has(id)||!keptFactIds.has(id))){removalReasons.ORPHAN_QUOTE_REMOVED=(removalReasons.ORPHAN_QUOTE_REMOVED||0)+1;warnings.push('ORPHAN_QUOTE_REMOVED');return false;}
+    if(factQuoteIsWeak(item.text)){removalReasons.WEAK_QUOTE_REMOVED=(removalReasons.WEAK_QUOTE_REMOVED||0)+1;warnings.push('WEAK_QUOTE_REMOVED');return false;}
+    const key=normalizedSemanticText(item.text);
+    if(quoteKeys.has(key)){removalReasons.DUPLICATE_QUOTE_REMOVED=(removalReasons.DUPLICATE_QUOTE_REMOVED||0)+1;warnings.push('DUPLICATE_QUOTE_REMOVED');return false;}
+    quoteKeys.add(key);
+    return true;
   });
-  const hasClientObjection=facts.some(item=>/client_objection|main_objection|возражен/i.test(String(item&&item.category||'')+' '+String(item&&item.name||'')));
-  if(transcript&&!hasClientObjection){
-    const clientTurns=[...transcript.matchAll(/(?:^|\n)Клиент:\s*\n?\s*[—-]?\s*([^\n]+)/g)].map(match=>String(match[1]||'').trim()).filter(Boolean);
-    const evidence=clientTurns.find(turn=>/(?:не устраива|не нравится|смуща|возраж|дорог|побор|взнос)/i.test(turn)&&/(?:не устраива|не нравится|смуща|возраж|дорог|побор|не это|не подходит)/i.test(turn));
-    if(evidence){
-      const factIds=new Set(facts.map(item=>item&&item.id)),quoteIds=new Set(quotes.map(item=>item&&item.id));
-      let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
-      let quoteIndex=quotes.length+1;while(quoteIds.has('quote_'+quoteIndex)) quoteIndex++;
-      const factId='fact_'+factIndex;
-      facts.push({id:factId,category:'client_objection',name:'главное возражение',value:evidence,normalized_value:evidence,speaker:'Клиент',evidence,confidence:.9,verification_status:'pending'});
-      quotes.push({id:'quote_'+quoteIndex,text:evidence,speaker:'Клиент',supports_fact_ids:[factId],confidence:.9,verification_status:'pending'});
-      recoveredFactCount++;recoveredQuoteCount++;
-      warnings.push('CLIENT_OBJECTION_POLICY_ADDED');
-    }
-  }
-  if(transcript){
-    const parsedTurns=parseTranscriptTurns(transcript);
-    const clientTurns=parsedTurns.filter(turn=>/клиент/.test(normalizedSemanticText(turn.role))).map(turn=>String(turn.text||'').trim()).filter(Boolean);
-    const evidence=clientTurns.find(turn=>/(?:^|[.!?]\s*)там,\s*[а-яё-]+(?:,\s*[а-яё-]+){1,4},?\s*что-нибудь такое/i.test(turn));
-    const match=evidence&&evidence.match(/(?:^|[.!?]\s*)там,\s*([а-яё-]+(?:,\s*[а-яё-]+){1,4}),?\s*что-нибудь такое/i);
-    const locations=match?match[1].split(',').map(item=>item.trim()).filter(Boolean):[];
-    const alreadyCovered=locations.length&&facts.some(item=>{
-      if(item&&item.category!=='search_location') return false;
-      const factText=moduleSummaryNorm([item.value,item.normalized_value,item.evidence].flat().join(' '));
-      return locations.every(location=>factText.includes(moduleSummaryNorm(location)));
-    });
-    if(locations.length>=2&&!alreadyCovered){
-      const factIds=new Set(facts.map(item=>item&&item.id));
-      let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
-      facts.push({id:'fact_'+factIndex,category:'search_location',name:'районы поиска',value:locations,normalized_value:locations,speaker:'Клиент',evidence,confidence:.95,verification_status:'pending'});
-      recoveredFactCount++;
-      warnings.push('SEARCH_LOCATION_RANGE_POLICY_ADDED');
-    }
-    const turns=parsedTurns;
-    const hasClientIntent=facts.some(item=>item&&item.category==='client_intent');
-    if(!hasClientIntent){
-      const intentTurn=turns.find(turn=>/клиент/.test(normalizedSemanticText(turn.role))&&/(?:по поводу|насч[её]т)\s+(?:земельного\s+)?участк[а-яё]*\s+(?:звоню|обращаюсь)|(?:звоню|обращаюсь).*(?:по поводу|насч[её]т).*(?:участк|земл)/.test(normalizedSemanticText(turn.text)));
-      if(intentTurn){
-        const factIds=new Set(facts.map(item=>item&&item.id));let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
-        facts.push({id:'fact_'+factIndex,category:'client_intent',name:'цель обращения',value:'покупка участка',normalized_value:'покупка участка',speaker:'Клиент',evidence:String(intentTurn.text||'').trim(),confidence:.95,verification_status:'pending'});
-        recoveredFactCount++;warnings.push('CLIENT_INTENT_POLICY_ADDED');
-      }
-    }
-    const hasIzhFact=facts.some(item=>item&&item.category==='search_criteria'&&/ижс/i.test([item.value,item.normalized_value,item.evidence].flat().join(' ')));
-    if(!hasIzhFact){
-      for(let index=0;index<turns.length-1;index++){
-        const question=turns[index],answer=turns[index+1];
-        const questionRole=normalizedSemanticText(question.role),answerRole=normalizedSemanticText(answer.role);
-        const closedIzhQuestion=/ижс/.test(normalizedSemanticText(question.text))&&/[?？]|(?:^|\s)да(?:\s|$)/i.test(String(question.text||''));
-        const answerText=String(answer.text||'').trim().replace(/^[\s—–-]+/,'');
-        const affirmative=/^(?:да(?:\s*,\s*да)*|конечно|верно|угу|ага)(?=\s|[,!.?]|$)/i.test(answerText)&&!/(?:\sне(?:\s|[,!.?]|$)|нет|неверно)/i.test(answerText);
-        if(!/(?:агент|оператор|менеджер|консультант)/.test(questionRole)||!/клиент/.test(answerRole)||!closedIzhQuestion||!affirmative) continue;
-        const factIds=new Set(facts.map(item=>item&&item.id));
-        let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
-        facts.push({id:'fact_'+factIndex,category:'search_criteria',name:'назначение участка',value:'ИЖС',normalized_value:'ИЖС',speaker:'Клиент',evidence:String(answer.text||'').trim(),confidence:.9,verification_status:'pending'});
-        recoveredFactCount++;
-        warnings.push('CONTEXTUAL_IZHS_CRITERION_ADDED');
-        break;
-      }
-    }
-    const parsedClientTurns=turns.filter(turn=>/клиент/.test(normalizedSemanticText(turn.role)));
-    const hasBudget=facts.some(item=>item&&item.category==='client_finance'&&Number(item.normalized_value)===5500000);
-    if(!hasBudget){
-      const budgetTurn=parsedClientTurns.find(turn=>/(?:цена|бюджет)\s+до\s+пяти\s+с\s+половин/i.test(normalizedSemanticText(turn.text)));
-      if(budgetTurn){
-        const factIds=new Set(facts.map(item=>item&&item.id));let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
-        facts.push({id:'fact_'+factIndex,category:'client_finance',name:'максимальный бюджет',value:'до 5,5 млн ₽',normalized_value:5500000,speaker:'Клиент',evidence:String(budgetTurn.text||'').trim(),confidence:.95,verification_status:'pending'});
-        recoveredFactCount++;warnings.push('CLIENT_BUDGET_POLICY_ADDED');
-      }
-    }
-    const hasInspectCommitment=facts.some(item=>item&&item.category==='agent_commitment'&&/(?:провер|посмотр|подбер).*(?:вариант|что есть)|(?:вариант|что есть).*(?:провер|посмотр|подбер)/.test(normalizedSemanticText([item.name,item.value].join(' '))));
-    if(!hasInspectCommitment){
-      const inspectTurn=turns.find(turn=>/(?:агент|оператор)/.test(normalizedSemanticText(turn.role))&&/(?:я\s+)?(?:сейчас\s+)?посмотрю\s+что\s+есть\s+еще|проверю.*вариант|подберу.*вариант/.test(normalizedSemanticText(turn.text)));
-      if(inspectTurn){
-        const factIds=new Set(facts.map(item=>item&&item.id));let factIndex=facts.length+1;while(factIds.has('fact_'+factIndex)) factIndex++;
-        facts.push({id:'fact_'+factIndex,category:'agent_commitment',name:'проверить дополнительные варианты',value:'проверить дополнительные варианты',normalized_value:'проверить дополнительные варианты',speaker:'Агент',evidence:String(inspectTurn.text||'').trim(),confidence:.95,verification_status:'pending'});
-        recoveredFactCount++;warnings.push('AGENT_INSPECTION_COMMITMENT_ADDED');
-      }
-    }
-    const canonicalIzh=facts.find(item=>item&&item.category==='search_criteria'&&/ижс/i.test(String(item.normalized_value??item.value)));
-    if(canonicalIzh){
-      const canonicalEvidence=normalizedSemanticText(canonicalIzh.evidence);
-      const duplicateIds=[];
-      for(let index=facts.length-1;index>=0;index--){
-        const item=facts[index];
-        if(item===canonicalIzh||item.category!=='search_criteria') continue;
-        const identity=normalizedSemanticText([item.name,item.value,item.normalized_value].join(' '));
-        if(!/(?:ижс|назначение)/.test(identity)||normalizedSemanticText(item.evidence)!==canonicalEvidence) continue;
-        duplicateIds.push(item.id);facts.splice(index,1);
-      }
-      if(duplicateIds.length){
-        quotes.forEach(quote=>{quote.supports_fact_ids=toList(quote.supports_fact_ids).map(id=>duplicateIds.includes(id)?canonicalIzh.id:id).filter((id,index,list)=>list.indexOf(id)===index);});
-        warnings.push('CONTEXTUAL_IZHS_DUPLICATE_REMOVED');
-      }
-    }
+  const quotes=filteredQuotes.slice(0,4);
+  if(filteredQuotes.length>4){
+    removalReasons.QUOTE_LIMIT_APPLIED=filteredQuotes.length-4;
+    warnings.push('QUOTE_LIMIT_APPLIED');
   }
   return {
     value:{...value,facts,quotes,extraction_meta:{fact_count:facts.length,quote_count:quotes.length,decision:facts.length?'EXTRACTED':'NO_FACTS'}},
     warnings:[...new Set(warnings)],
-    audit:{model_output_fact_count:modelOutputFactCount,final_fact_count:facts.length,recovered_fact_count:recoveredFactCount,model_output_quote_count:modelOutputQuoteCount,final_quote_count:quotes.length,recovered_quote_count:recoveredQuoteCount}
+    audit:{
+      model_output_fact_count:modelOutputFactCount,
+      final_fact_count:facts.length,
+      removed_fact_count:modelOutputFactCount-facts.length,
+      recovered_fact_count:0,
+      model_output_quote_count:modelOutputQuoteCount,
+      final_quote_count:quotes.length,
+      removed_quote_count:modelOutputQuoteCount-quotes.length,
+      recovered_quote_count:0,
+      removal_reasons:removalReasons
+    }
   };
 }
 
@@ -9669,7 +9648,7 @@ async function runStage(stage, ctx){
       parsed=isSummaryNewStage(stage)?parseSummaryNewResponse(raw):parseJSON(raw);
       if(isFactsExtraction){
         const recovered=recoverLegacyFactRootArray(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);
-        const policy=applyFactExtractionPolicies(parsed,ctx);parsed=policy.value;extractionAudit=policy.audit||null;contractWarnings.push(...policy.warnings);
+        const policy=applyFactExtractionPolicies(parsed,ctx);parsed=policy.value;extractionAudit=policy.audit||null;
       }
       if(stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))) parsed=validateExtractionRoot(moduleStageKind(stage),parsed,ctx);
     }catch(e){ parseErr=e.message; parseErrKind=['FactSchemaError','NeedSchemaError','OutcomeSchemaError'].includes(e.name)?'schema':'json'; }
@@ -9699,7 +9678,7 @@ async function runStage(stage, ctx){
         parsed=parseJSON(raw); parseErr=null;
         if(isFactsExtraction){
           const recovered=recoverLegacyFactRootArray(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);
-          const policy=applyFactExtractionPolicies(parsed,ctx);parsed=policy.value;extractionAudit=policy.audit||null;contractWarnings.push(...policy.warnings);
+          const policy=applyFactExtractionPolicies(parsed,ctx);parsed=policy.value;extractionAudit=policy.audit||null;
         }
         parsed=validateExtractionRoot(extractionKind,parsed,ctx);
         parseErrKind=null;
@@ -9760,6 +9739,8 @@ async function runStage(stage, ctx){
       status: isSummaryNewStage(stage)?(summaryNewFailure?'bad':'ok'):(parseErr?'bad':contractWarnings.length?'warn':'ok'),
       metrics:isSummaryNewStage(stage)
         ? [['Статус выполнения',summaryNewFailure?'техническая ошибка':'успешно'],['JSON',parseErr?'ошибка':'корректный'],['Транскрибация',promptAudit.transcriptInjected?'передана':'не передана'],['Модель',actualModel||'—'],['Fallback',fallbackNote?'да':'нет'],...(summaryNewFailure?[['Причина',summaryNewFailure.reason]]:[])]
+        : isFactsExtraction
+        ? [['Статус извлечения',parseErr?'ошибка':'успешно'],['Фактов на выходе',output&&Array.isArray(output.facts)?output.facts.length:0],['Цитат на выходе',output&&Array.isArray(output.quotes)?output.quotes.length:0],['Удалено локальным фильтром',Number(extractionAudit&&extractionAudit.removed_fact_count||0)+Number(extractionAudit&&extractionAudit.removed_quote_count||0)],['Провайдер',actualProvider],['Модель',modelLabel],['Токены',tokens],['Стоимость','$'+cost.toFixed(4)],['Время',ms+' мс'],['JSON',parseErr?'ошибка':'ок']]
         : [['Провайдер',actualProvider],['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],['JSON', parseErr?'ошибка':'ок']] };
     rep.meta=buildStageMeta(stage,rep);
     return rep;

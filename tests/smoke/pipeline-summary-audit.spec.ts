@@ -726,16 +726,18 @@ test("неизвестные funding/term и пустой Store не созда�
   expect(result.output).toMatchObject({ status: "pass", score: 100, critical_items_total: 0, critical_items_missing: 0 });
 });
 
-test("production report 2026-07-23 восстанавливает явное возражение и не считает ожидание материалов целью клиента", async ({ page }) => {
+test("Fact Agent сохраняет извлечённое возражение и не синтезирует факты из транскрипции", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
     const transcript='Клиент:\\n— Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.\\nАгент:\\n— Я отправлю видео.';
-    const extracted={facts:[{id:'fact_1',category:'client_intent',name:'ожидание видеообзора',value:'ожидает видеообзор',normalized_value:'ожидает видеообзор',speaker:'Клиент',evidence:'Я жду от вас видео.',confidence:.9,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
+    const evidence='Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.';
+    const extracted={facts:[{id:'fact_1',category:'client_objection',name:'главное возражение',value:'не устраивает взнос 9600',normalized_value:9600,speaker:'Клиент',evidence,confidence:.9,verification_status:'pending'}],quotes:[{id:'quote_1',text:evidence,speaker:'Клиент',supports_fact_ids:['fact_1'],confidence:.9,verification_status:'pending'}],extraction_meta:{fact_count:1,quote_count:1,decision:'EXTRACTED'}};
     const policy=applyFactExtractionPolicies(extracted,{__transcript:transcript});
     const required=[...criticalCompletenessRequiredCategories({conversation_store:{conversation:{facts:policy.value.facts,requirements:[],attributes:{},call_results:[]}}})];
     return {policy,required};
   })()`));
-  expect(result.policy.warnings).toContain("CLIENT_OBJECTION_POLICY_ADDED");
+  expect(result.policy.warnings).toEqual([]);
+  expect(result.policy.audit.recovered_fact_count).toBe(0);
   expect(result.policy.value.facts).toContainEqual(expect.objectContaining({
     category: "client_objection",
     name: "главное возражение",
@@ -759,7 +761,7 @@ test("production report 2026-07-24 сохраняет подтверждённо
       'Клиент:',
       '— Да, да, конечно, я понял.'
     ].join('\\n');
-    const extracted={facts:[],quotes:[],extraction_meta:{fact_count:0,quote_count:0,decision:'NO_FACTS'}};
+    const extracted={facts:[{id:'fact_1',category:'search_criteria',name:'назначение участка',value:'ИЖС',normalized_value:'ИЖС',speaker:'Клиент',evidence:'— Да, да, конечно, я понял.',confidence:.9,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
     const policy=applyFactExtractionPolicies(extracted,{__transcript:transcript});
     const contextual=policy.value.facts.find(item=>item.category==='search_criteria'&&item.normalized_value==='ИЖС');
     const verified={...contextual,verification_status:'verified',verified:true,source:'fact_check'};
@@ -770,7 +772,8 @@ test("production report 2026-07-24 сохраняет подтверждённо
     return {policy,contextual,needs,recovered,required};
   })()`));
 
-  expect(result.policy.warnings).toContain("CONTEXTUAL_IZHS_CRITERION_ADDED");
+  expect(result.policy.warnings).toEqual([]);
+  expect(result.policy.audit.recovered_fact_count).toBe(0);
   expect(result.contextual).toMatchObject({
     category: "search_criteria",
     name: "назначение участка",
@@ -795,12 +798,17 @@ test("pipeline report 2026-07-24T062250 проходит deterministic regressio
   const result = await page.evaluate((fixture) => {
     const seed={facts:[
       {id:'fact_1',category:'client_intent',name:'цель обращения',value:'поиск участка',normalized_value:'поиск участка',speaker:'Клиент',evidence:'Слушайте, по поводу участка звоню вам.',confidence:.95,verification_status:'pending'},
-      {id:'fact_2',category:'search_location',name:'область поиска',value:'Деревня Мистолово',normalized_value:'Деревня Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',confidence:.95,verification_status:'pending'},
+      {id:'fact_2',category:'object_context',name:'локация обсуждаемого объекта',value:'Деревня Мистолово',normalized_value:'Деревня Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',confidence:.95,verification_status:'pending'},
       {id:'fact_3',category:'client_constraint',name:'минимальная площадь участка',value:'6 соток',normalized_value:6,speaker:'Клиент',evidence:'Ну, минимум шесть соток мне надо.',confidence:.95,verification_status:'pending'},
       {id:'fact_4',category:'communication_channel',name:'канал',value:'MAX',normalized_value:'MAX',speaker:'Клиент',evidence:'Да, давайте в Макс лучше.',confidence:.95,verification_status:'pending'},
       {id:'fact_5',category:'agent_commitment',name:'отправить видеообзор',value:'отправить видеообзор',normalized_value:'отправить видеообзор',speaker:'Агент',evidence:'Я могу скинуть вам подробный видеообзор.',confidence:.95,verification_status:'pending'},
-      {id:'fact_6',category:'agent_commitment',name:'отправить подборку',value:'отправить ссылку на подбор',normalized_value:'отправить ссылку на подбор',speaker:'Агент',evidence:'Скину видео и сейчас посмотрю, что у нас есть, скину ссылку на подбор.',confidence:.95,verification_status:'pending'}
-    ],quotes:[],extraction_meta:{fact_count:6,quote_count:0,decision:'EXTRACTED'}};
+      {id:'fact_6',category:'agent_commitment',name:'отправить подборку',value:'отправить ссылку на подбор',normalized_value:'отправить ссылку на подбор',speaker:'Агент',evidence:'Скину видео и сейчас посмотрю, что у нас есть, скину ссылку на подбор.',confidence:.95,verification_status:'pending'},
+      {id:'fact_7',category:'client_objection',name:'возражение против взноса',value:'не устраивает взнос 9600',normalized_value:9600,speaker:'Клиент',evidence:'Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.',confidence:.95,verification_status:'pending'},
+      {id:'fact_8',category:'search_location',name:'районы поиска',value:['Мистолово','Капитолова','Лаврики'],normalized_value:['Мистолово','Капитолова','Лаврики'],speaker:'Клиент',evidence:'Блин, в Мистолово вот прям вообще до пяти с половиной ничего. Честно. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',confidence:.95,verification_status:'pending'},
+      {id:'fact_9',category:'search_criteria',name:'назначение участка',value:'ИЖС',normalized_value:'ИЖС',speaker:'Клиент',evidence:'Да, да, конечно, я понял.',confidence:.9,verification_status:'pending'},
+      {id:'fact_10',category:'client_finance',name:'максимальный бюджет',value:'до 5,5 млн ₽',normalized_value:5500000,speaker:'Клиент',evidence:'Не, ну у меня просто цена до пяти с половиной, вот так.',confidence:.95,verification_status:'pending'},
+      {id:'fact_11',category:'agent_commitment',name:'проверить дополнительные варианты',value:'проверить дополнительные варианты',normalized_value:'проверить дополнительные варианты',speaker:'Агент',evidence:'Я посмотрю, что есть ещё.',confidence:.95,verification_status:'pending'}
+    ],quotes:[],extraction_meta:{fact_count:11,quote_count:0,decision:'EXTRACTED'}};
     const policy=applyFactExtractionPolicies(seed,{__transcript:fixture.transcript});
     const verifiedFacts=policy.value.facts.map((fact) => ({...fact,verified:true,verification_status:'verified'}));
     const recovered=conversationStoreRecoveredRequirements(verifiedFacts,[]).map((item) => ({...item,verified:true}));
@@ -813,21 +821,14 @@ test("pipeline report 2026-07-24T062250 проходит deterministic regressio
   }, pipelineReportRegression);
 
   expect(result.policy.audit).toMatchObject({
-    model_output_fact_count: 6,
-    final_fact_count: expect.any(Number),
-    recovered_fact_count: expect.any(Number),
+    model_output_fact_count: 11,
+    final_fact_count: 11,
+    recovered_fact_count: 0,
     model_output_quote_count: 0,
     final_quote_count: expect.any(Number),
-    recovered_quote_count: expect.any(Number),
+    recovered_quote_count: 0,
   });
-  expect(result.policy.audit.recovered_fact_count).toBeGreaterThanOrEqual(5);
-  expect(result.policy.warnings).toEqual(expect.arrayContaining([
-    "CLIENT_OBJECTION_POLICY_ADDED",
-    "SEARCH_LOCATION_RANGE_POLICY_ADDED",
-    "CONTEXTUAL_IZHS_CRITERION_ADDED",
-    "CLIENT_BUDGET_POLICY_ADDED",
-    "AGENT_INSPECTION_COMMITMENT_ADDED",
-  ]));
+  expect(result.policy.warnings).toEqual([]);
   expect(result.deduplicated.requirements).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: "property_type", value: "ИЖС" }),
     expect.objectContaining({ type: "minimum_land_area", normalized_value: 6 }),
@@ -2811,6 +2812,107 @@ test("Fact Agent использует новый root schema, точные ош�
   expect(result.pipelineStop.facts.facts).toBeUndefined();
 });
 
+test("Fact Agent v7 сохраняет рабочие факты и локально удаляет только шум", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(async () => {
+    const transcript=[
+      'Клиент: Ищу двухкомнатную квартиру для себя, бюджет до 12 миллионов.',
+      'Клиент: У квартиры один собственник?',
+      'Агент: Да, один собственник, покупали по ДДУ, ипотека в Сбербанке, никто не зарегистрирован.',
+      'Агент: Адрес Барклая, дом 8.',
+      'Агент: В карточке также встречается Брутлая, дом 8.',
+      'Агент: Код объекта 7712, этаж пятый, площадь 61 метр.',
+      'Клиент: Какая цена в объявлении?',
+      'Агент: Цена объекта 15 миллионов.',
+      'Клиент: Это выше моего бюджета, такой вариант не подходит.',
+      'Клиент: Тогда свяжемся вечером.',
+      'Агент: Хорошо, свяжемся вечером.',
+      'Клиент: Мой номер +7 999 123-45-67.'
+    ].join('\\n');
+    const fact=(id,category,name,value,speaker,evidence,normalized_value=value)=>({id,category,name,value,normalized_value,speaker,evidence,confidence:.95,verification_status:'pending'});
+    const facts=[
+      fact('fact_1','client_intent','цель обращения','купить квартиру для себя','Клиент','Ищу двухкомнатную квартиру для себя, бюджет до 12 миллионов.'),
+      fact('fact_2','client_finance','максимальный бюджет',12000000,'Клиент','Ищу двухкомнатную квартиру для себя, бюджет до 12 миллионов.'),
+      fact('fact_3','client_question','вопрос о собственнике','У квартиры один собственник?','Клиент','У квартиры один собственник?'),
+      fact('fact_4','legal_context','число собственников','один собственник','Агент','Да, один собственник, покупали по ДДУ, ипотека в Сбербанке, никто не зарегистрирован.'),
+      fact('fact_5','legal_context','основание приобретения','ДДУ','Агент','Да, один собственник, покупали по ДДУ, ипотека в Сбербанке, никто не зарегистрирован.'),
+      fact('fact_6','object_information','ипотека','ипотека в Сбербанке','Агент','Да, один собственник, покупали по ДДУ, ипотека в Сбербанке, никто не зарегистрирован.'),
+      fact('fact_7','legal_context','регистрация','никто не зарегистрирован','Агент','Да, один собственник, покупали по ДДУ, ипотека в Сбербанке, никто не зарегистрирован.'),
+      fact('fact_8','object_information','адрес объекта','Барклая, дом 8','Агент','Адрес Барклая, дом 8.'),
+      fact('fact_9','object_information','адрес объекта','Брутлая, дом 8','Агент','В карточке также встречается Брутлая, дом 8.'),
+      fact('fact_10','object_information','код объекта и характеристики','7712, этаж 5, площадь 61','Агент','Код объекта 7712, этаж пятый, площадь 61 метр.'),
+      fact('fact_11','object_information','цена объявления',15000000,'Агент','Цена объекта 15 миллионов.'),
+      fact('fact_12','client_objection','цена выше бюджета','вариант не подходит из-за цены','Клиент','Это выше моего бюджета, такой вариант не подходит.'),
+      fact('fact_13','communication_result','результат контакта','клиент согласился связаться вечером','Клиент','Тогда свяжемся вечером.'),
+      fact('fact_14','legal_context','число собственников','один собственник','Агент','Да, один собственник, покупали по ДДУ, ипотека в Сбербанке, никто не зарегистрирован.'),
+      fact('fact_15','communication_context','телефон клиента','+7 999 123-45-67','Клиент','Мой номер +7 999 123-45-67.')
+    ];
+    const quote=(id,text,factId)=>({id,text,speaker:'Клиент',supports_fact_ids:[factId],confidence:.95,verification_status:'pending'});
+    const quotes=[
+      quote('quote_1','Ищу двухкомнатную квартиру для себя, бюджет до 12 миллионов.','fact_1'),
+      quote('quote_2','Это выше моего бюджета, такой вариант не подходит.','fact_12'),
+      quote('quote_3','Да','fact_1'),
+      quote('quote_4','Да, себе','fact_1'),
+      quote('quote_5','Угу','fact_1'),
+      quote('quote_6','Хорошо','fact_13'),
+      quote('quote_7','Да, можете','fact_13')
+    ];
+    const value={facts,quotes,extraction_meta:{fact_count:facts.length,quote_count:quotes.length,decision:'EXTRACTED'}};
+    const policy=applyFactExtractionPolicies(value,{__transcript:transcript});
+    const validated=validateFactExtractionRoot(policy.value);
+    const precheck=CODE_FUNCS.factCheckCode({}, {facts:validated,__transcript:transcript});
+    const stage=defaultPipeline().find(item=>item.outKey==='facts');
+    const original=callModelWithTransientRetry;
+    callModelWithTransientRetry=async()=>({text:JSON.stringify(value),tokens:120,actualModel:'gpt-5-mini',actualProvider:'test',finishReason:'stop',structuredOutputApplied:true});
+    const report=await runStage({...stage,provider:'mock'},{__transcript:transcript});
+    callModelWithTransientRetry=original;
+    return {policy,validated,precheck:{hardFail:precheck.hardFail,schemaError:precheck.schemaError},stage:{promptVersion:stage.promptVersion,promptUpdatedAt:stage.promptUpdatedAt,prompt:stage.prompt},report};
+  })()`));
+
+  expect(result.stage).toMatchObject({ promptVersion: 7, promptUpdatedAt: "2026-07-28" });
+  expect(result.stage.prompt).toContain('Верни не более 4 самостоятельных содержательных цитат');
+  expect(result.stage.prompt).toContain('один собственник, ДДУ, ипотека Сбербанка, никто не зарегистрирован');
+  expect(result.stage.prompt).toContain('верни нейтральный communication_result');
+  expect(result.policy.audit).toMatchObject({
+    model_output_fact_count: 15,
+    final_fact_count: 10,
+    removed_fact_count: 5,
+    recovered_fact_count: 0,
+    model_output_quote_count: 7,
+    final_quote_count: 2,
+    removed_quote_count: 5,
+    recovered_quote_count: 0,
+  });
+  expect(result.validated.facts).toEqual(expect.arrayContaining([
+    expect.objectContaining({ category: "client_finance", normalized_value: 12000000 }),
+    expect.objectContaining({ speaker: "Агент", name: "число собственников", value: "один собственник" }),
+    expect.objectContaining({ speaker: "Агент", name: "основание приобретения", value: "ДДУ" }),
+    expect.objectContaining({ speaker: "Агент", name: "ипотека", value: "ипотека в Сбербанке" }),
+    expect.objectContaining({ speaker: "Агент", name: "регистрация", value: "никто не зарегистрирован" }),
+    expect.objectContaining({ category: "object_information", name: "цена объявления", normalized_value: 15000000 }),
+    expect.objectContaining({ category: "communication_result", value: "клиент согласился связаться вечером" }),
+  ]));
+  expect(result.validated.facts.filter((fact: any) => /барклая|брутлая|код объекта|этаж|площадь/i.test(JSON.stringify(fact)))).toHaveLength(0);
+  expect(result.validated.facts.filter((fact: any) => fact.name === "число собственников")).toHaveLength(1);
+  expect(result.validated.facts.some((fact: any) => /телефон|\+7 999/.test(JSON.stringify(fact)))).toBe(false);
+  expect(result.validated.quotes.map((quote: any) => quote.text)).toEqual([
+    "Ищу двухкомнатную квартиру для себя, бюджет до 12 миллионов.",
+    "Это выше моего бюджета, такой вариант не подходит.",
+  ]);
+  expect(result.precheck).toEqual({ hardFail: false, schemaError: undefined });
+  expect(result.report).toMatchObject({
+    parseErr: null,
+    status: "ok",
+    output: { extraction_meta: { fact_count: 10, quote_count: 2, decision: "EXTRACTED" } },
+    metrics: expect.arrayContaining([
+      ["Статус извлечения", "успешно"],
+      ["Фактов на выходе", 10],
+      ["Цитат на выходе", 2],
+      ["Удалено локальным фильтром", 10],
+    ]),
+  });
+});
+
 test("Проверка фактов валидирует вход, Judge и сама рассчитывает решение", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(async () => {
@@ -3846,16 +3948,18 @@ test("Summary выбирает доказательные цитаты и сох
   expect(result.value.quotes).not.toContain("Слушайте, по поводу участка звоню вам.");
 });
 
-test("Fact policy добавляет перечисленные клиентом районы в проверяемый контракт", async ({ page }) => {
+test("Fact policy сохраняет перечисленные моделью районы и ничего не синтезирует", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
     const transcript='Клиент:\n— Деревня Мистолово.\nКлиент:\n— Блин, в Мистолово ничего. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.';
     const evidence='Деревня Мистолово.';
-    const value={facts:[{id:'fact_1',category:'search_location',name:'область поиска',value:'Мистолово',normalized_value:'Мистолово',speaker:'Клиент',evidence,confidence:.9,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
+    const locations='Блин, в Мистолово ничего. Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.';
+    const value={facts:[{id:'fact_1',category:'search_location',name:'область поиска',value:'Мистолово',normalized_value:'Мистолово',speaker:'Клиент',evidence,confidence:.9,verification_status:'pending'},{id:'fact_2',category:'search_location',name:'районы поиска',value:['Мистолово','Капитолова','Лаврики'],normalized_value:['Мистолово','Капитолова','Лаврики'],speaker:'Клиент',evidence:locations,confidence:.95,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:2,quote_count:0,decision:'EXTRACTED'}};
     return applyFactExtractionPolicies(value,{__transcript:transcript});
   });
 
-  expect(result.warnings).toContain("SEARCH_LOCATION_RANGE_POLICY_ADDED");
+  expect(result.warnings).toEqual([]);
+  expect(result.audit.recovered_fact_count).toBe(0);
   expect(result.value.facts).toContainEqual(expect.objectContaining({
     category: "search_location",
     name: "районы поиска",
@@ -3926,13 +4030,14 @@ test("локация из ответа на вопрос об объекте н�
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
     const transcript=["Оператор: Где находится участок?","Клиент: Деревня Мистолово.","Оператор: Какие районы рассматриваете?","Клиент: Там, Мистолово, Капитолова, Лаврики, что-нибудь такое."].join("\n");
-    const value={facts:[{id:'fact_1',category:'search_location',name:'поиск: локация',value:'Деревня Мистолово',normalized_value:'Деревня Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',confidence:.98,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:1,quote_count:0,decision:'EXTRACTED'}};
+    const value={facts:[{id:'fact_1',category:'object_context',name:'локация обсуждаемого объекта',value:'Деревня Мистолово',normalized_value:'Деревня Мистолово',speaker:'Клиент',evidence:'Деревня Мистолово.',confidence:.98,verification_status:'pending'},{id:'fact_2',category:'search_location',name:'районы поиска',value:['Мистолово','Капитолова','Лаврики'],normalized_value:['Мистолово','Капитолова','Лаврики'],speaker:'Клиент',evidence:'Там, Мистолово, Капитолова, Лаврики, что-нибудь такое.',confidence:.98,verification_status:'pending'}],quotes:[],extraction_meta:{fact_count:2,quote_count:0,decision:'EXTRACTED'}};
     const policy=applyFactExtractionPolicies(value,{__transcript:transcript});
     const recovered=conversationStoreRecoveredRequirements(policy.value.facts,[]);
     return {policy,requirements:deduplicateSearchLocationRequirements(recovered)};
   });
 
-  expect(result.policy.warnings).toContain("OBJECT_LOCATION_RECLASSIFIED");
+  expect(result.policy.warnings).toEqual([]);
+  expect(result.policy.audit.recovered_fact_count).toBe(0);
   expect(result.policy.value.facts).toContainEqual(expect.objectContaining({ id: "fact_1", category: "object_context" }));
   expect(result.policy.value.facts).toContainEqual(expect.objectContaining({ category: "search_location", value: ["Мистолово", "Капитолова", "Лаврики"] }));
   expect(result.requirements.requirements.filter((item: any) => item.type === "search_location")).toEqual([
@@ -3976,7 +4081,7 @@ test("production-вариативность восстанавливает ло�
   const result = await page.evaluate(() => {
     const transcript="Агент:\n— Вам ИЖС?\nКлиент:\n— Да, да, конечно, я понял.";
     const extracted=applyFactExtractionPolicies({
-      facts:[{id:'fact_1',category:'search_criteria',name:'требование по назначению (ИЖС)',value:true,normalized_value:true,speaker:'Клиент',evidence:'Да, да, конечно, я понял.',confidence:.9,verification_status:'pending'}],
+      facts:[{id:'fact_1',category:'search_criteria',name:'требование по назначению (ИЖС)',value:'ИЖС',normalized_value:'ИЖС',speaker:'Клиент',evidence:'Да, да, конечно, я понял.',confidence:.9,verification_status:'pending'}],
       quotes:[{id:'quote_1',text:'Да, да, конечно, я понял.',speaker:'Клиент',supports_fact_ids:['fact_1'],confidence:.9,verification_status:'pending'}],
       extraction_meta:{fact_count:1,quote_count:1,decision:'EXTRACTED'}
     },{transcript});
@@ -4015,7 +4120,7 @@ test("production-вариативность восстанавливает ло�
     const presentationQuoteRepeat=validatePresentationIssue({type:'semantic_repetition',field:'quotes',summary_fragment:'покупка участка',problem:'Информация дублируется в conversation_result и quotes.'},'errors[1]',{summary});
     return {
       facts:extracted.value.facts,
-      quoteRefs:extracted.value.quotes[0].supports_fact_ids,
+      quotes:extracted.value.quotes,
       locations:needs.requirements.find((item: any)=>item.type==='search_location').value,
       area:needs.requirements.find((item: any)=>item.type==='minimum_land_area').value,
       marketPriceRequirements:needs.requirements.filter((item: any)=>item.type==='price_limit'),
@@ -4035,7 +4140,7 @@ test("production-вариативность восстанавливает ло�
   });
 
   expect(result.facts.filter((item: any) => /ижс/i.test(String(item.normalized_value ?? item.value)))).toHaveLength(1);
-  expect(result.quoteRefs).toEqual([result.facts[0].id]);
+  expect(result.quotes).toEqual([]);
   expect(result.locations).toEqual(["Мистолово", "Капитолово", "Лаврики"]);
   expect(result.area).toBe(6);
   expect(result.marketPriceRequirements).toEqual([]);
