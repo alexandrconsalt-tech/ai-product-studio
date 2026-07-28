@@ -460,7 +460,7 @@ const MODULE_AGENT_UTILITY_PROMPT = `Ты — независимый Judge пр�
 Допустимые problem type: unclear_client_goal, unclear_client_situation, unclear_result, unclear_next_step, unclear_owner, missing_action_context, fragmented_information, excessive_detail, difficult_to_scan, crm_data_without_working_context, recording_required, ambiguous_wording.
 Допустимые missing type: client_goal, client_situation, call_result, next_step, owner, action_context, working_context.
 
-Если запись нужна только для второстепенной детали, не используй recording_required: это небольшая рабочая неясность. Формулировка «будем на связи» без конкретного действия означает низкую actionability. Каждое summary_fragment должно быть точным непустым фрагментом summary.
+Если запись нужна только для второстепенной детали, не используй recording_required: это небольшая рабочая неясность. Формулировка «будем на связи» без конкретного действия означает низкую actionability. Если проверенный результат звонка — отказ и primary_next_step.status="not_defined", отсутствие следующего шага является корректным терминальным исходом: не требуй next_step, owner или action_context и не снижай actionability из-за их отсутствия. Каждое summary_fragment должно быть точным непустым фрагментом summary.
 
 Верни строго JSON без markdown и дополнительных полей:
 {
@@ -615,7 +615,7 @@ Conversation Store (проверенные факты/потребности/р�
     {
       id:s(), enabled:true, type:'check', name:'Проверка полезности для агента',
       provider:'ai-tunnel', model:'gpt-5-mini', temperature:0, maxTokens:8000,
-      outKey:'agent_utility_check', promptVersion:6, prompt:MODULE_AGENT_UTILITY_PROMPT
+      outKey:'agent_utility_check', promptVersion:7, prompt:MODULE_AGENT_UTILITY_PROMPT
     },
     {
       id:s(), enabled:true, type:'check', name:'Проверка договорённостей и следующего шага',
@@ -1445,7 +1445,7 @@ function migratePipelineConfig(stages, deletedOutKeys){
     if(!stage||!(stage.outKey==='context_utility_check'||stage.outKey==='context_check'||/Проверка полезности для агента/i.test(stage.name||''))) return;
     if(stage.contractVersion) return;
     stage.type='check';stage.name='Проверка полезности для агента';stage.outKey='agent_utility_check';
-    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=6;stage.prompt=MODULE_AGENT_UTILITY_PROMPT;
+    stage.provider='ai-tunnel';stage.model='gpt-5-mini';stage.temperature=0;stage.maxTokens=2500;stage.promptVersion=7;stage.prompt=MODULE_AGENT_UTILITY_PROMPT;
     delete stage.codeFn;delete stage.vendor;
   });
   result.forEach(stage=>{
@@ -7637,6 +7637,11 @@ function agentUtilityHasClearNextStep(ctx){
   const ownerCovered=primary.owner==='агент'?/(?:^|\s)агент(?:\s|$)/.test(next):primary.owner==='клиент'?/(?:^|\s)клиент(?:\s|$)/.test(next):true;
   return actionCovered&&ownerCovered&&!/(?:не|нет)\s+(?:согласован|определен|определён)/.test(next);
 }
+function agentUtilityHasTerminalOutcome(ctx){
+  const store=actionCheckStore(ctx),primary=store.primary_next_step||{};
+  const terminalResult=store.call_results.some(item=>/^(?:отказ|не заинтересован|нецелевой звонок|ошибочный номер)$/.test(moduleSummaryNorm(item&&item.value)));
+  return terminalResult&&primary.status==='not_defined';
+}
 function agentUtilityOutOfScopeProblem(item){
   const type=String(item&&item.type||''),text=moduleSummaryNorm(JSON.stringify(item||{}));
   if(type==='ambiguous_wording'&&/(?:цитат|quotes?)/.test(text)&&/(?:заполнител|э э|разговорн|слово паразит)/.test(text)) return true;
@@ -7664,7 +7669,7 @@ function validateAgentUtilityJudgeOutput(value,ctx){
   if(!Array.isArray(value.missing_for_next_agent)) truthFail('missing_for_next_agent','expected array');
   if(!Array.isArray(value.useful_summary_elements)) truthFail('useful_summary_elements','expected array');
   if(!Array.isArray(value.problems)) truthFail('problems','expected array');
-  const clearNextStep=agentUtilityHasClearNextStep(ctx);
+  const clearNextStep=agentUtilityHasClearNextStep(ctx),terminalOutcome=agentUtilityHasTerminalOutcome(ctx);
   const missing=value.missing_for_next_agent.map((item,index)=>{
     const path='missing_for_next_agent['+index+']';
     truthExactObject(item,path,['type','description']);
@@ -7676,19 +7681,19 @@ function validateAgentUtilityJudgeOutput(value,ctx){
     if(['funding_source','purchase_term'].includes(item.type)) return null;
     if(!AGENT_UTILITY_MISSING_TYPES.has(item.type)) truthFail(path+'.type','unknown missing type '+JSON.stringify(item.type));
     if(outOfScope) return null;
-    if(clearNextStep&&['next_step','owner','action_context'].includes(item.type)) return null;
+    if((clearNextStep||terminalOutcome)&&['next_step','owner','action_context'].includes(item.type)) return null;
     return item;
   }).filter(item=>item&&!agentUtilityDuplicateCriticalMissing(item,ctx));
   const useful=value.useful_summary_elements.map((item,index)=>{const path='useful_summary_elements['+index+']';truthExactObject(item,path,['type','description','summary_fragment']);truthString(item.type,path+'.type',{required:true});truthString(item.description,path+'.description',{required:true});truthString(item.summary_fragment,path+'.summary_fragment',{required:true});if(!agentUtilityFragmentExists(item.summary_fragment,ctx)){if(/\.\.\.|…|^\s*[\[{]/.test(item.summary_fragment))return null;truthFail(path+'.summary_fragment','fragment is absent from summary');}return item;}).filter(Boolean);
   const problems=[];
-  value.problems.forEach((item,index)=>{const path='problems['+index+']';truthExactObject(item,path,['type','field','summary_fragment','problem']);truthString(item.type,path+'.type',{required:true});truthString(item.field,path+'.field',{required:true});truthString(item.summary_fragment,path+'.summary_fragment',{required:true});truthString(item.problem,path+'.problem',{required:true});if(agentUtilityOutOfScopeProblem(item)) return;if(!AGENT_UTILITY_PROBLEM_TYPES.has(item.type)) truthFail(path+'.type','unknown utility problem type '+JSON.stringify(item.type));if(!agentUtilityFragmentExists(item.summary_fragment,ctx)) truthFail(path+'.summary_fragment','fragment is absent from summary');if(clearNextStep&&['unclear_next_step','unclear_owner','missing_action_context','ambiguous_wording'].includes(item.type)&&/(?:не согласован|противореч|кто.*отвеч|неясно.*отправ)/.test(moduleSummaryNorm(item.problem))) return;problems.push(item);});
+  value.problems.forEach((item,index)=>{const path='problems['+index+']';truthExactObject(item,path,['type','field','summary_fragment','problem']);truthString(item.type,path+'.type',{required:true});truthString(item.field,path+'.field',{required:true});truthString(item.summary_fragment,path+'.summary_fragment',{required:true});truthString(item.problem,path+'.problem',{required:true});if(agentUtilityOutOfScopeProblem(item)) return;if(!AGENT_UTILITY_PROBLEM_TYPES.has(item.type)) truthFail(path+'.type','unknown utility problem type '+JSON.stringify(item.type));if(!agentUtilityFragmentExists(item.summary_fragment,ctx)) truthFail(path+'.summary_fragment','fragment is absent from summary');if(terminalOutcome&&['unclear_next_step','unclear_owner','missing_action_context'].includes(item.type)) return;if(clearNextStep&&['unclear_next_step','unclear_owner','missing_action_context','ambiguous_wording'].includes(item.type)&&/(?:не согласован|противореч|кто.*отвеч|неясно.*отправ)/.test(moduleSummaryNorm(item.problem))) return;problems.push(item);});
   truthString(value.explanation,'explanation',{required:true});return {...value,missing_for_next_agent:missing,useful_summary_elements:useful,problems};
 }
 function agentUtilityRecalculate(judge,ctx){
-  const clearNextStep=agentUtilityHasClearNextStep(ctx);
-  let actionability=clearNextStep?Math.max(90,judge.actionability):judge.actionability,problems=judge.problems.slice(),scanability=judge.scanability;
-  let contextClarity=clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.context_clarity):judge.context_clarity;
-  let recordingIndependence=clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.recording_independence):judge.recording_independence;
+  const clearNextStep=agentUtilityHasClearNextStep(ctx),terminalOutcome=agentUtilityHasTerminalOutcome(ctx);
+  let actionability=terminalOutcome?100:clearNextStep?Math.max(90,judge.actionability):judge.actionability,problems=judge.problems.slice(),scanability=terminalOutcome?Math.max(90,judge.scanability):judge.scanability;
+  let contextClarity=terminalOutcome?Math.max(90,judge.context_clarity):clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.context_clarity):judge.context_clarity;
+  let recordingIndependence=terminalOutcome?Math.max(95,judge.recording_independence):clearNextStep&&!problems.length&&!judge.missing_for_next_agent.length?Math.max(90,judge.recording_independence):judge.recording_independence;
   const next=String(ctx.summary.next_step||'');
   if(/будем\s+на\s+связи|остаемся\s+на\s+связи|остаёмся\s+на\s+связи/i.test(next)&&!/(отправ|позвон|перезвон|подготов|уточн|покаж|встрет|согласу)/i.test(next)){
     actionability=Math.min(actionability,60);

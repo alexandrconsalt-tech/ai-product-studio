@@ -1420,7 +1420,22 @@ test("Utility parser отбрасывает составной summary_fragment 
   })()`));
   expect(result.validated.useful_summary_elements).toEqual([]);
   expect(result.output).toMatchObject({ status: "pass", score: 100 });
-  expect(result.version).toBe(6);
+  expect(result.version).toBe(7);
+});
+
+test("терминальный отказ без следующего шага остаётся полезным и не блокирует CRM", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => eval(`(() => {
+    const summary={status:'GENERATED',conversation_result:'Клиент отказался: 8 800 не подходит, так как нужно много денег на ремонт.',key_facts:[{label:'Возражение по цене',value:'8 800 не подходит'}],quotes:['8 800 нам не очень подходит, так как ещё нужно куча денег в ремонт.'],next_step:'Следующий шаг не согласован.',error:''};
+    const ctx={summary,critical_completeness_check:{missing_items:[]},conversation_store:{conversation:{facts:[],requirements:[],attributes:{},call_results:[{value:'отказ',verification_status:'verified'}],agreements:[],primary_next_step:{action:'',owner:'',deadline:'не определено',channel:'',status:'not_defined',agreement_ids:[]}}}};
+    const judge={status:'fail',score:74,can_continue_without_recording:false,context_clarity:80,actionability:60,scanability:70,recording_independence:90,missing_for_next_agent:[{type:'action_context',description:'Нет инструкции по дальнейшим действиям.'}],useful_summary_elements:[],problems:[{type:'unclear_next_step',field:'next_step',summary_fragment:'Следующий шаг не согласован.',problem:'Нет конкретного действия.'},{type:'fragmented_information',field:'conversation_result',summary_fragment:'Клиент отказался',problem:'Есть небольшая рабочая неясность.'}],explanation:'Недостаточно полезно.'};
+    const validated=validateAgentUtilityJudgeOutput(judge,ctx),output=agentUtilityRecalculate(validated,ctx);
+    return {validated,output,terminal:agentUtilityHasTerminalOutcome(ctx)};
+  })()`));
+  expect(result.terminal).toBe(true);
+  expect(result.validated.missing_for_next_agent).toEqual([]);
+  expect(result.validated.problems.map((item: any) => item.type)).toEqual(["fragmented_information"]);
+  expect(result.output).toMatchObject({ status: "warning", score: 94, can_continue_without_recording: true, context_clarity: 90, actionability: 100, scanability: 90, recording_independence: 95 });
 });
 
 test("идеальное и эталонное summary по участку получают 100/pass без требований данных карточки", async ({ page }) => {
