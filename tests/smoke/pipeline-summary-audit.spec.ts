@@ -5232,6 +5232,86 @@ test("Conversation Store восстанавливает критические r
   expect(result.snapshotA.semantic_hash).toBe(result.snapshotB.semantic_hash);
 });
 
+test("production-регрессии 2026-07-28 соблюдают инварианты Fact, Need, Outcome и Store", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const pending = (value, factId, evidence) => ({ value, confidence: 0.95, evidence, source_fact_ids: [factId], verification_status: "pending" });
+    const empty = { value: "не определено", confidence: 0.95, evidence: "", source_fact_ids: [], verification_status: "pending" };
+    const verified = (item, source) => ({ ...item, confidence: item.confidence ?? 0.95, verification_status: item.verification_status ?? "verified", verified: true, source });
+    const refusalFact = verified({ id: "fact_refusal", category: "client_preference", name: "потребность в консультации по ипотеке", value: false, normalized_value: false, speaker: "Клиент", evidence: "Нет." }, "fact_check");
+    const multiFundingFact = verified({ id: "fact_formats", category: "client_finance", name: "варианты оплаты", value: "рассматривает разные форматы (ипотека/наличные)", speaker: "Клиент", evidence: "У меня разные форматы. Вопрос: как дешевле, лучше, быстрее и экономичнее." }, "fact_check");
+    const budgetQuestion = verified({ id: "fact_budget_question", category: "client_question", name: "другие варианты в бюджете", value: "есть ли другие варианты в этом ценовом бюджете", speaker: "Клиент", evidence: "Есть у вас что-нибудь ещё в ценовом бюджете в этом?" }, "fact_check");
+    const refusalNeeds = normalizeNeedExtractionSemantics({
+      attributes: { interest: [pending("Ипотека", "fact_refusal", "Нет.")], funding_source: pending("наличные / депозит", "fact_refusal", "Нет."), purchase_term: empty },
+      requirements: [], need_meta: { interest_count: 1, requirements_count: 0, decision: "EXTRACTED" },
+    }, { fact_check: { verified_facts: [refusalFact] } });
+    const multiNeeds = normalizeNeedExtractionSemantics({
+      attributes: { interest: [pending("Ипотека", "fact_formats", multiFundingFact.evidence)], funding_source: pending("наличные / депозит", "fact_formats", multiFundingFact.evidence), purchase_term: empty },
+      requirements: [{ id: "req_auto_1", type: "price_limit", value: "в этом ценовом бюджете", normalized_value: "в этом ценовом бюджете", confidence: 0.9, evidence: budgetQuestion.evidence, source_fact_ids: ["fact_budget_question"], verification_status: "pending" }],
+      need_meta: { interest_count: 1, requirements_count: 1, decision: "EXTRACTED" },
+    }, { fact_check: { verified_facts: [multiFundingFact, budgetQuestion] } });
+    const transcript = [
+      "Клиент: Актуальна она ещё?",
+      "Агент: Да, актуально, но показы пока на стопе.",
+      "Клиент: Есть что-нибудь ещё в этом ценовом бюджете?",
+      "Агент: Могу поспрашивать коллег, завтра в офисе буду.",
+    ].join("\n");
+    const outcome = normalizeOutcomeSemantics({
+      call_results: [],
+      agreements: [{ id: "agreement_1", action: "организовать просмотры после связи с собственником", owner: "агент", recipient: "клиент", deadline: "", channel: "", status: "promised", evidence: "Я как только свяжусь с собственником, буду организовывать просмотры.", confidence: 0.9, verification_status: "pending" }],
+      primary_next_step: { action: "организовать просмотры; поспрашивать коллег о вариантах", owner: "агент", deadline: "", channel: "", status: "promised", agreement_ids: ["agreement_1"], confidence: 0.9, verification_status: "pending" },
+      outcome_meta: { result_count: 0, agreement_count: 1, decision: "EXTRACTED" },
+    }, { __transcript: transcript, fact_check: { verified_facts: [] } });
+    const questionStatus = conversationStoreQuestionStatus({ category: "client_question", name: "актуальность", value: "Актуальна она ещё?", evidence: "Актуальна она ещё?", question_status: "unanswered" }, { __transcript: transcript, outcome_check: {} });
+    const ownerRecipient = outcomeRecipientForAction("связаться с собственником и согласовать просмотр", "клиент");
+    const warnings = relevantFactJudgeWarnings([
+      "локация поиска — Плесецкая, 10",
+      "Не извлечён код объекта 22-33-052",
+      "Отсутствует факт локации поиска: Большевиков, 4, корпус 1",
+    ], { facts: [] });
+
+    const runId = "run_production_regression";
+    const ctx = {
+      __run_id: runId, __transcript_hash: "7548b19e", __pipeline_configuration_hash: "contract_v2", __transcript: transcript,
+      fact_check: { status: "ok", decision: "PASS", verified_facts: [verified({ id: "fact_question", category: "client_question", name: "актуальность", value: "Актуальна она ещё?", speaker: "Клиент", evidence: "Актуальна она ещё?", question_status: "unanswered" }, "fact_check")], verified_quotes: [], fact_check_quality: { overall_score: 1, decision: "PASS" } },
+      need_check: { status: "ok", decision: "PASS", verified_attributes: { interest: [], funding_source: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check"), purchase_term: verified({ value: "не определено", evidence: "", source_fact_ids: [] }, "need_check") }, verified_requirements: [], need_check_quality: { overall_score: 1, decision: "PASS" } },
+      outcome_check: {
+        status: "ok", decision: "PASS", verified_call_results: [],
+        verified_agreements: [verified({ id: "agreement_1", action: "связаться с собственником и согласовать просмотр", owner: "агент", recipient: "клиент", deadline: "после звонка", channel: "", status: "promised", evidence: "Сейчас свяжусь с собственником." }, "outcome_check")],
+        verified_primary_next_step: verified({ action: "связаться с собственником и согласовать просмотр; перезвонить клиенту", owner: "агент", deadline: "после звонка", channel: "телефон", status: "promised", agreement_ids: ["agreement_1"] }, "outcome_check"),
+        missing_critical_outcomes: [], outcome_check_quality: { overall_score: 1, decision: "PASS" },
+      },
+      __stage_provenance: {},
+    };
+    ["fact_check", "need_check", "outcome_check"].forEach((key, index) => {
+      ctx.__stage_provenance[key] = { run_id: runId, transcript_hash: ctx.__transcript_hash, pipeline_configuration_hash: ctx.__pipeline_configuration_hash, stage_execution_id: runId + ":0" + (index + 1) + ":stage" };
+    });
+    const store = buildConversationStoreV1(ctx);
+    return { refusalNeeds, multiNeeds, outcome, questionStatus, ownerRecipient, warnings, store };
+  });
+
+  expect(result.warnings).toEqual([]);
+  expect(result.refusalNeeds.attributes.interest).toEqual([]);
+  expect(result.refusalNeeds.attributes.funding_source.value).toBe("не определено");
+  expect(result.multiNeeds.attributes.interest).toEqual([]);
+  expect(result.multiNeeds.attributes.funding_source.value).toBe("не определено");
+  expect(result.multiNeeds.requirements).toEqual([]);
+  expect(result.questionStatus).toBe("answered");
+  expect(result.ownerRecipient).toBe("собственник");
+  expect(result.outcome.agreements).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "agreement_1" }),
+    expect.objectContaining({ action: "поспрашивать коллег о вариантах", recipient: "третье лицо", deadline: "завтра" }),
+  ]));
+  expect(result.outcome.primary_next_step.agreement_ids).toHaveLength(2);
+  expect(result.store.conversation.agreements[0].deadline).toBe("после звонка");
+  expect(result.store.conversation.facts[0].question_status).toBe("answered");
+  expect(result.store.store_meta.status).toBe("MANUAL_REVIEW");
+  expect(result.store.store_issues).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: "PRIMARY_ACTION_WITHOUT_AGREEMENT", severity: "critical" }),
+    expect.objectContaining({ code: "AGREEMENT_RECIPIENT_MISMATCH", severity: "critical" }),
+  ]));
+});
+
 test("Summary не превращает boolean finance в бюджет и канонизирует следующий шаг", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
