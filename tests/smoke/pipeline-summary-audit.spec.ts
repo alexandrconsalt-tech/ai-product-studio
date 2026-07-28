@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import regressionCases from "../fixtures/transcription-summary-regression-32-36.json";
 import pipelineReportRegression from "../fixtures/pipeline-report-2026-07-24T062250.414.regression.json";
+import july28Regression from "../fixtures/pipeline-report-2026-07-28T140014.026.regression.json";
 
 const moduleUrl = "/pipeline-lab-v3.html?projectId=project_transcription_summary_module&productName=" +
   encodeURIComponent("Модуль транскрибации и AI-саммари звонков");
@@ -206,7 +207,7 @@ test("регрессии AI Summary: цитаты, бюджет, локация,
   expect(result.needs.attributes.funding_source.value).toBe("не определено");
   expect(result.outcome.agreements[0].deadline).toBe("");
   expect(result.outcome.primary_next_step.deadline).toBe("");
-  expect(result.correctionAllowed).toEqual([]);
+  expect(result.correctionAllowed).toEqual(["action", "owner", "recipient", "deadline", "channel", "status", "confidence", "source_turn_ids"]);
   expect(result.gate).toMatchObject({
     status: "TECHNICAL_ERROR",
     decision: "TECHNICAL_ERROR",
@@ -607,7 +608,7 @@ test("системный Summary получает достаточный output 
   expect(result).toEqual({ system: 8000, custom: 2500 });
 });
 
-test("Fact Check migrates to the v3 diagnostic contract and reserves enough output", async ({ page }) => {
+test("Fact Check migrates to the single verdict-only contract and reserves enough output", async ({ page }) => {
   await page.goto(moduleUrl);
   const stage = await page.evaluate(() => eval(`(() => {
     const saved={...defaultPipeline().find(item=>item.outKey==='fact_check'),promptVersion:7,maxTokens:4000,userEdited:true,settingsEdited:true,promptEdited:false};
@@ -615,12 +616,12 @@ test("Fact Check migrates to the v3 diagnostic contract and reserves enough outp
     const input={facts:[{id:'fact_1',category:'client_constraint'}],quotes:[]};
     let invalidCategory='';
     try{validateFactJudgeOutput({items:[{id:'fact_1',verdict:'needs_correction',reason:'неверная категория',confidence:.9,corrections:{category:'hard_constraint'}}],overall_confidence:.9,warnings:[]},input)}catch(error){invalidCategory=error.message}
-    return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_JUDGE_V3_JSON_SCHEMA.properties.fact_results.items.properties.suggested_correction.properties.category};
+    return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.category};
   })()`));
 
-  expect(stage).toMatchObject({ promptVersion: 10, maxTokens: 12000 });
-  expect(stage.prompt).toContain("PARTIALLY_VERIFIED");
-  expect(stage.prompt).toContain("missing_critical_facts");
+  expect(stage).toMatchObject({ promptVersion: 11, maxTokens: 12000 });
+  expect(stage.prompt).toContain('"items"');
+  expect(stage.prompt).toContain("Не возвращай fact_results");
   expect(stage.invalidCategory).toContain('unknown fact category');
   expect(stage.runtime).toContain('Math.max(Number(stage.maxTokens)||0,12000)');
   expect(stage.runtime).toContain("parseErr==='TRUNCATED_JSON'");
@@ -639,6 +640,244 @@ test("все verdict-only Judge получают безопасный output bud
 
   expect(result.budgets).toEqual({ fact_check: 12000, need_check: 8000, outcome_check: 8000 });
   expect(result.runtime).toContain("Math.max(Number(stage.maxTokens)||0,8000)");
+});
+
+test("pipeline report 2026-07-28: цитаты, contextual confirmation и отказ проходят production runtime", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(async (fixture) => {
+    const fact = (id: string, category: string, value: string, evidence: string) => ({
+      id, category, name: category, value, normalized_value: value, speaker: "Клиент",
+      evidence, confidence: 0.97, verification_status: "pending",
+    });
+    const facts = [
+      fact("fact_object", "object_context", "двухкомнатная квартира", fixture.quotes[0]),
+      fact("fact_question", "client_question", "юридическая схема сделки", fixture.quotes[1]),
+      fact("fact_objection", "client_objection", "цена не подходит с учётом ремонта", fixture.quotes[2]),
+      fact("fact_end", "communication_result", "клиент завершил разговор", fixture.quotes[3]),
+    ];
+    const quotes = fixture.quotes.map((text: string, index: number) => ({
+      id: `quote_${index + 1}`, text, speaker: "Клиент", supports_fact_ids: [facts[index].id],
+      confidence: 0.97, verification_status: "pending",
+    }));
+    const input = { facts, quotes, extraction_meta: { fact_count: 4, quote_count: 4, decision: "EXTRACTED" } };
+    const verdict = validateFactJudgeOutput({
+      items: [
+        ...facts.map((item) => ({ id: item.id, verdict: "verified", reason: "подтверждено", confidence: 0.98, corrections: {} })),
+        ...quotes.map((item) => ({ id: item.id, verdict: "rejected", reason: "LLM ошибочно счёл недословной", confidence: 0.7, corrections: {} })),
+      ],
+      overall_confidence: 0.96,
+      warnings: [],
+    }, input);
+    const factOutput = mergeFactCheck(
+      CODE_FUNCS.factCheckCode({}, { facts: input, __transcript: fixture.transcript }),
+      verdict,
+      null,
+      input,
+      { facts: input, __transcript: fixture.transcript },
+    );
+
+    const weakOutcome = {
+      call_results: [{ id: "result_1", value: "звонок состоялся без результата", evidence: fixture.quotes[2], confidence: 0.8, verification_status: "pending" }],
+      agreements: [],
+      primary_next_step: { action: "", owner: "", deadline: "", channel: "", status: "not_defined", agreement_ids: [], confidence: 0, verification_status: "pending" },
+      outcome_meta: { result_count: 1, agreement_count: 0, decision: "EXTRACTED" },
+    };
+    const normalizedOutcome = normalizeOutcomeSemantics(weakOutcome, { __transcript: fixture.transcript, fact_check: { verified_facts: factOutput.verified_facts } });
+    const corrected = validateOutcomeJudgeOutput({
+      items: [
+        { id: "result_1", verdict: "needs_correction", reason: "явный отказ", confidence: 0.99, corrections: { value: "отказ от предложения: цена не устраивает" } },
+        { id: "primary_next_step", verdict: "verified", reason: "шаг не согласован", confidence: 0.99, corrections: {} },
+      ],
+      overall_confidence: 0.99,
+      warnings: [],
+    }, weakOutcome);
+    let invalidCorrection = "";
+    try {
+      validateOutcomeJudgeOutput({
+        items: [
+          { id: "result_1", verdict: "needs_correction", reason: "неизвестное значение", confidence: 0.8, corrections: { value: "что-то неопределённое" } },
+          { id: "primary_next_step", verdict: "verified", reason: "шаг не согласован", confidence: 0.9, corrections: {} },
+        ],
+        overall_confidence: 0.8,
+        warnings: [],
+      }, weakOutcome);
+    } catch (error) {
+      invalidCorrection = (error as Error).message;
+    }
+
+    const stage = defaultPipeline().find((item) => item.outKey === "fact_check");
+    const originalCall = callModelWithTransientRetry;
+    let calls = 0;
+    callModelWithTransientRetry = async () => {
+      calls++;
+      return {
+        text: JSON.stringify({ fact_results: [], quote_results: [], missing_critical_facts: [] }),
+        tokens: 4,
+        actualModel: "gpt-5-mini",
+        actualProvider: "AI Tunnel",
+        structuredOutputApplied: false,
+      };
+    };
+    const legacyReport = await runStage(stage, { facts: input, __transcript: fixture.transcript });
+    callModelWithTransientRetry = originalCall;
+
+    return {
+      factOutput,
+      normalizedOutcome,
+      corrected,
+      invalidCorrection,
+      legacyReport,
+      calls,
+      outcomeSchemaValue: OUTCOME_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.value,
+    };
+  }, july28Regression);
+
+  expect(result.factOutput.verified_quotes).toHaveLength(4);
+  expect(result.factOutput.fact_check_quality.quote_score).toBe(1);
+  expect(result.factOutput.verified_facts.find((item: any) => item.id === "fact_object")).toMatchObject({
+    verification_type: "contextual_confirmation",
+    assertion_turn_id: "turn_1",
+    confirmation_turn_id: "turn_2",
+    evidence_turn_ids: ["turn_1", "turn_2"],
+  });
+  expect(result.normalizedOutcome.call_results).toEqual([expect.objectContaining({ value: "отказ" })]);
+  expect(result.normalizedOutcome.primary_next_step.status).toBe("not_defined");
+  expect(result.corrected.items[0].corrections.value).toBe("отказ");
+  expect(result.corrected.normalization_audit).toEqual([expect.objectContaining({
+    raw_value: "отказ от предложения: цена не устраивает",
+    normalized_value: "отказ",
+    normalization_rule: "EXPLICIT_REFUSAL_WITH_PRICE_OR_REPAIR",
+  })]);
+  expect(result.invalidCorrection).toContain("expected canonical call_result enum");
+  expect(result.outcomeSchemaValue.enum).toContain("отказ");
+  expect(result.outcomeSchemaValue.enum).not.toContain("отказ от предложения: цена не устраивает");
+  expect(result.calls).toBe(2);
+  expect(result.legacyReport.output).toMatchObject({ status: "technical_error", score: null });
+  expect(result.legacyReport.contract_audit).toMatchObject({
+    response_schema_id: "judge_fact_verdict_only_v2",
+    parser_schema_id: "judge_fact_verdict_only_v2",
+    schema_version: "v2",
+    parse_status: "TECHNICAL_ERROR",
+    schema_status: "INVALID",
+    repair_attempted: true,
+    repair_result: "FAILED",
+    warnings: [],
+  });
+});
+
+test("pipeline report 2026-07-28 выполняет все 16 production stages до CRM", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(async (fixture) => {
+    localStorage.setItem("selectedLlmProvider", "mock");
+    pipeline = defaultPipeline();
+    document.getElementById("transcript").value = fixture.transcript;
+    const originalCall = callModelWithTransientRetry;
+    const unique = (values) => [...new Set(values)];
+    callModelWithTransientRetry = async (prompt, model, provider, temperature, maxTokens, responseFormat) => {
+      let output;
+      if (prompt.startsWith("Ты — Fact Agent")) {
+        const facts = [
+          { id: "fact_1", category: "client_question", name: "юридическая схема сделки", value: "клиент уточняет собственников и дарение долей", normalized_value: "юридическая схема сделки", speaker: "Клиент", evidence: fixture.quotes[1], confidence: 0.98, verification_status: "pending" },
+          { id: "fact_2", category: "legal_context", name: "переоформление долей", value: "доли будут переоформлены", normalized_value: "доли будут переоформлены", speaker: "Агент", evidence: "Собственники переоформят доли, коммунальный долг будет погашен до сделки.", confidence: 0.98, verification_status: "pending" },
+          { id: "fact_3", category: "legal_context", name: "коммунальный долг", value: "коммунальный долг будет погашен до сделки", normalized_value: "коммунальный долг будет погашен до сделки", speaker: "Агент", evidence: "Собственники переоформят доли, коммунальный долг будет погашен до сделки.", confidence: 0.98, verification_status: "pending" },
+          { id: "fact_4", category: "client_objection", name: "возражение по совокупной стоимости", value: "цена 8,8 млн ₽ не подходит с учётом ремонта", normalized_value: "цена не подходит с учётом ремонта", speaker: "Клиент", evidence: fixture.quotes[2], confidence: 0.99, verification_status: "pending" },
+          { id: "fact_5", category: "communication_result", name: "завершение разговора", value: "клиент завершил рассмотрение объекта", normalized_value: "отказ от объекта", speaker: "Клиент", evidence: fixture.quotes[3], confidence: 0.96, verification_status: "pending" },
+        ];
+        output = {
+          facts,
+          quotes: [
+            { id: "quote_1", text: fixture.quotes[1], speaker: "Клиент", supports_fact_ids: ["fact_1"], confidence: 0.98, verification_status: "pending" },
+            { id: "quote_2", text: fixture.quotes[2], speaker: "Клиент", supports_fact_ids: ["fact_4"], confidence: 0.99, verification_status: "pending" },
+          ],
+          extraction_meta: { fact_count: 5, quote_count: 2, decision: "EXTRACTED" },
+        };
+      } else if (prompt.startsWith("Ты — LLM Fact Judge")) {
+        const ids = unique([...prompt.matchAll(/"id"\s*:\s*"((?:fact|quote)_\d+)"/g)].map((match) => match[1]));
+        output = { items: ids.map((id) => ({ id, verdict: "verified", reason: "подтверждено", confidence: 0.99, corrections: {} })), overall_confidence: 0.99, warnings: [] };
+      } else if (prompt.startsWith("Ты — Need Agent")) {
+        const unknown = { value: "не определено", confidence: 0.99, evidence: "", source_fact_ids: [], verification_status: "pending" };
+        output = { attributes: { interest: [], funding_source: unknown, purchase_term: unknown }, requirements: [], need_meta: { interest_count: 0, requirements_count: 0, decision: "NO_NEEDS" } };
+      } else if (prompt.startsWith("Ты — LLM Need Judge")) {
+        output = { items: ["funding_source", "purchase_term"].map((id) => ({ id, verdict: "verified", reason: "в разговоре не определено", confidence: 0.99, corrections: {} })), overall_confidence: 0.99, warnings: [] };
+      } else if (prompt.startsWith("Ты — Outcome Agent")) {
+        output = {
+          call_results: [{ id: "result_1", value: "отказ", evidence: fixture.quotes[2], confidence: 0.99, verification_status: "pending" }],
+          agreements: [],
+          primary_next_step: { action: "", owner: "", deadline: "", channel: "", status: "not_defined", agreement_ids: [], confidence: 0, verification_status: "pending" },
+          outcome_meta: { result_count: 1, agreement_count: 0, decision: "EXTRACTED" },
+        };
+      } else if (prompt.startsWith("Ты — LLM Outcome Judge")) {
+        output = {
+          items: [
+            { id: "result_1", verdict: "verified", reason: "явный отказ", confidence: 0.99, corrections: {} },
+            { id: "primary_next_step", verdict: "verified", reason: "шаг не согласован", confidence: 0.99, corrections: {} },
+          ],
+          overall_confidence: 0.99,
+          warnings: [],
+        };
+      } else if (prompt.startsWith("Ты — Summary Agent для CRM")) {
+        output = {
+          status: "GENERATED",
+          conversation_result: "Клиент уточнил юридическую схему сделки. После разъяснения отказался от дальнейшего рассмотрения объекта: цена 8,8 млн ₽ не подходит с учётом затрат на ремонт.",
+          key_facts: [{ label: "Причина отказа", value: "цена 8,8 млн ₽ и затраты на ремонт" }],
+          quotes: [fixture.quotes[2]],
+          next_step: "Следующий шаг не согласован.",
+          error: "",
+        };
+      } else {
+        output = mockPipelineResponse(prompt);
+      }
+      const text = JSON.stringify(output);
+      return { text, tokens: Math.max(1, Math.round(text.length / 4)), actualModel: model, actualProvider: "Mock LLM Provider", structuredOutputApplied: Boolean(responseFormat) };
+    };
+    await runPipeline();
+    callModelWithTransientRetry = originalCall;
+    return {
+      execution: ctx.pipeline_execution,
+      fact: ctx.fact_check,
+      need: ctx.need_check,
+      outcome: ctx.outcome_check,
+      store: ctx.conversation_store,
+      summary: ctx.summary,
+      judges: ["truth_check", "critical_completeness_check", "agent_utility_check", "action_check", "presentation_check"].map((key) => ({ key, value: ctx[key] })),
+      gate: ctx.summary_quality_gate,
+      crm: ctx.crm,
+      semanticSnapshot: ctx.semantic_snapshot,
+      runId: ctx.__run_id,
+      transcriptHash: ctx.__transcript_hash,
+      pipelineHash: ctx.__pipeline_configuration_hash,
+      stageExecutionIds: Object.fromEntries(Object.entries(ctx.__stage_provenance || {}).map(([key, value]) => [key, value.stage_execution_id])),
+    };
+  }, july28Regression);
+
+  expect(result.store).toMatchObject({ store_meta: { status: "READY" } });
+  expect(result.execution).toMatchObject({ pipeline_status: "SUCCESS", steps_total: 16, steps_executed: 16, stopped_at_stage: null });
+  expect(result.execution.stages).toHaveLength(16);
+  expect(result.execution.stages.every((stage: any) => stage.status !== "NOT_RUN" && stage.status !== "FAILED")).toBe(true);
+  expect(result.fact.raw_response).toHaveProperty("items");
+  expect(result.fact.raw_response).not.toHaveProperty("fact_results");
+  expect(result.need).toMatchObject({ decision: "PASS", verified_requirements: [] });
+  expect(result.outcome).toMatchObject({
+    decision: "PASS",
+    verified_call_results: [expect.objectContaining({ value: "отказ" })],
+    verified_primary_next_step: expect.objectContaining({ status: "not_defined" }),
+  });
+  expect(result.store.store_meta.status).toBe("READY");
+  expect(result.summary).toMatchObject({
+    status: "GENERATED",
+    next_step: "Следующий шаг не согласован.",
+    quotes: expect.arrayContaining([july28Regression.quotes[2]]),
+  });
+  expect(result.summary.conversation_result).toContain("отказался");
+  expect(result.judges).toHaveLength(5);
+  expect(result.judges.every((item: any) => item.value && item.value.status !== "TECHNICAL_ERROR")).toBe(true);
+  expect(result.gate).toMatchObject({ decision: expect.stringMatching(/AUTO_SAVE|SAVE_WITH_WARNING/), can_save_to_crm: true });
+  expect(result.crm).toMatchObject({ status: "SAVED", summary_write: { saved: true } });
+  expect(result.runId).toBeTruthy();
+  expect(result.transcriptHash).toBeTruthy();
+  expect(result.pipelineHash).toBeTruthy();
+  expect(Object.keys(result.stageExecutionIds).length).toBeGreaterThanOrEqual(16);
+  expect(result.semanticSnapshot).toBeTruthy();
 });
 
 test("summary Judges reserve output for reasoning responses", async ({ page }) => {
@@ -3195,12 +3434,12 @@ test("Проверка фактов валидирует вход, Judge и са
   // id regardless of call count, so the retry can't help here and the final
   // outcome below is unchanged; only the call count grows from 1 to 2.
   expect(result.unknownCalls).toBe(2);
-  expect(result.unknownJudge.output).toMatchObject({ status: "technical_error", error_code: "INVALID_JUDGE_OUTPUT" });
-  expect(result.unknownJudge.output.schema_error).toContain('verified_facts[1].id: unknown input id "fact_missing"');
+  expect(result.unknownJudge.output).toMatchObject({ status: "technical_error", error_code: "JUDGE_RESULT_UNAVAILABLE" });
+  expect(result.unknownJudge.output.schema_error).toContain("CURRENT_JUDGE_CONTRACT_REQUIRED: items");
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, fact_check: { status: "technical_error", error_code: "SCHEMA_VALIDATION_FAILED" } });
 });
 
-test("Fact Judge v3 проверяет каждый факт, критическое покрытие и полезность цитат", async ({ page }) => {
+test("архивный Fact Judge v3 остаётся доступен только тестам миграции", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => eval(`(() => {
     const transcript=[
@@ -3281,9 +3520,9 @@ test("Fact Judge v3 проверяет каждый факт, критическ
   expect(result.objectMortgageAsClient).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "object_mortgage_as_client_finance" })]) });
   expect(result.damagedQuote).toMatchObject({ decision: "REVIEW_REQUIRED", rejected_quotes: expect.arrayContaining([expect.objectContaining({ id: "quote_strong", error_type: "not_verbatim" })]) });
   expect(result.conditionalStep).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "conditional_step_as_confirmed" })]) });
-  expect(result.prompt.version).toBe(10);
-  expect(result.prompt.text).toContain("60% точность фактов + 25% критическое покрытие + 15% качество цитат");
-  expect(result.prompt.text).toContain("object_mortgage_as_client_finance");
+  expect(result.prompt.version).toBe(11);
+  expect(result.prompt.text).toContain('"items"');
+  expect(result.prompt.text).toContain("Не возвращай fact_results");
 });
 
 test("Need Agent использует новый контракт, канонические справочники и verified facts", async ({ page }) => {
@@ -3677,7 +3916,7 @@ test("Outcome Judge не может исправлять recipient или status
   })()`));
 
   expect(result.recipient.items[0]).toMatchObject({ id: "agreement_1", verdict: "rejected", corrections: {} });
-  expect(result.pending).toContain("invalid correction");
+  expect(result.pending).toContain("unknown primary status");
   expect(result.version).toBe(8);
 });
 
@@ -4907,7 +5146,7 @@ test("verdict-only Outcome reconciliation не переопределяет Judg
     rejected_agreements: [],
     reconciliation: { input_items_count: 5, verified_count: 5, corrected_count: 0, rejected_count: 0 },
   });
-  expect(result.combinedChannelError).toContain("invalid correction");
+  expect(result.combinedChannelError).toContain("combined channel values are forbidden");
 });
 
 test("Conversation Store восстанавливает критические requirements, вопросы, steps и structured issues", async ({ page }) => {
