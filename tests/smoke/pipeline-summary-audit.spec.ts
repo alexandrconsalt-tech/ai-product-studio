@@ -3,6 +3,7 @@ import regressionCases from "../fixtures/transcription-summary-regression-32-36.
 import pipelineReportRegression from "../fixtures/pipeline-report-2026-07-24T062250.414.regression.json";
 import july28Regression from "../fixtures/pipeline-report-2026-07-28T140014.026.regression.json";
 import july29GoldenReports from "../fixtures/pipeline-reports-2026-07-29T120655-122944.regression.json";
+import july29NeedContractRegression from "../fixtures/pipeline-report-2026-07-29T153752.808.regression.json";
 
 const moduleUrl = "/pipeline-lab-v3.html?projectId=project_transcription_summary_module&productName=" +
   encodeURIComponent("Модуль транскрибации и AI-саммари звонков");
@@ -879,6 +880,130 @@ test("pipeline report 2026-07-28 выполняет все 16 production stages 
   expect(result.pipelineHash).toBeTruthy();
   expect(Object.keys(result.stageExecutionIds).length).toBeGreaterThanOrEqual(16);
   expect(result.semanticSnapshot).toBeTruthy();
+});
+
+test("pipeline report 2026-07-29T153752.808 проходит needs и все downstream stages", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(async (fixture) => {
+    localStorage.setItem("selectedLlmProvider", "mock");
+    pipeline = defaultPipeline();
+    document.getElementById("transcript").value = fixture.transcript;
+    const originalCall = callModelWithTransientRetry;
+    callModelWithTransientRetry = async (prompt, model, provider, temperature, maxTokens, responseFormat) => {
+      const common = (id, category, name, value, speaker, evidence) => ({
+        id, category, name, value, normalized_value: value, speaker, evidence, confidence: .96, verification_status: "pending",
+      });
+      let output;
+      if (prompt.startsWith("Ты — Fact Agent")) {
+        const facts = [
+          common("fact_1", "client_intent", "цель обращения", "консультация по апартамерам в ЖК «Технопарк»", "Клиент", "Я звоню по поводу апартаментов в ЖК «Технопарк». Можете меня проконсультировать?"),
+          common("fact_5", "client_question", "управляющая компания", "узнать по управляющей компании", "Клиент", "Хотел бы узнать по управляющей компании в доме."),
+          common("fact_6", "client_question", "ежемесячные расходы", "точная разбивка расходов", "Клиент", "Сколько составляют эксплуатационные расходы и сколько коммунальные платежи?"),
+          common("fact_7", "agent_commitment", "уточнение расходов", "уточнить точные расходы", "Агент", "Если вам нужны точные цифры, я уточню их у собственника и сообщу."),
+          common("fact_8", "client_question", "статус НДС", "входит ли НДС", "Клиент", "И хотелось бы узнать, входит ли туда НДС или он оплачивается отдельно."),
+          common("fact_9", "agent_commitment", "уточнение НДС", "уточнить НДС и связаться", "Агент", "Хорошо, уточню и свяжусь с вами."),
+          common("fact_10", "client_constraint", "готовность к просмотру", "пока присматривается; пока не готов ехать; просмотр возможен, если всё устроит", "Клиент", "Пока присматриваюсь, поэтому пока не готов ехать. Если всё устроит, тогда буду рассматривать просмотр."),
+          common("fact_11", "client_question", "парковка", "вопрос о парковке", "Клиент", "И ещё можете сориентировать по парковке?"),
+          common("fact_12", "agent_commitment", "срок обратной связи", "уточнить информацию и связаться сегодня либо завтра", "Агент", "Сегодня уточню всю информацию и либо сегодня, либо завтра свяжусь с вами."),
+          common("fact_13", "communication_channel", "канал связи", "WhatsApp", "Клиент", "Если удобно, можете написать мне в WhatsApp."),
+          common("fact_14", "communication_result", "договорённость о связи", "агент уточнит информацию и свяжется", "Агент", "Я всё уточню и обязательно свяжусь с вами."),
+        ];
+        output = {
+          facts,
+          quotes: [
+            { id: "quote_1", text: facts[2].evidence, speaker: "Клиент", supports_fact_ids: ["fact_6"], confidence: .98, verification_status: "pending" },
+            { id: "quote_2", text: facts[4].evidence, speaker: "Клиент", supports_fact_ids: ["fact_8"], confidence: .98, verification_status: "pending" },
+          ],
+          extraction_meta: { fact_count: facts.length, quote_count: 2, decision: "EXTRACTED" },
+        };
+      } else if (prompt.startsWith("Ты — LLM Fact Judge")) {
+        const ids = [...new Set([...prompt.matchAll(/"id"\s*:\s*"((?:fact|quote)_\d+)"/g)].map((match) => match[1]))];
+        output = {
+          items: ids.map((id) => id === "fact_1"
+            ? { id, verdict: "needs_correction", reason: "исправить опечатку", confidence: .98, corrections: { value: "консультация по апартаментам в ЖК «Технопарк»", normalized_value: "консультация по апартаментам в ЖК «Технопарк»" } }
+            : id === "fact_10"
+            ? { id, verdict: "needs_correction", reason: "сделать факт атомарным", confidence: .96, corrections: { value: "пока не готов к просмотру", normalized_value: "пока не готов к просмотру" } }
+            : id === "fact_14"
+            ? { id, verdict: "rejected", reason: "semantic duplicate fact_12", confidence: .98, corrections: {} }
+            : { id, verdict: "verified", reason: "подтверждено", confidence: .99, corrections: {} }),
+          overall_confidence: .98,
+          warnings: [],
+        };
+      } else if (prompt.startsWith("Ты — Need Agent")) {
+        const unknown = { value: "не определено", confidence: .5, evidence: "", source_fact_ids: [], verification_status: "pending" };
+        output = {
+          attributes: { interest: [], funding_source: unknown, purchase_term: unknown },
+          requirements: [
+            { id: "requirement_1", type: "other_requirement", value: fixture.expected_requirements[0], confidence: .96, evidence: "Сколько составляют эксплуатационные расходы и сколько коммунальные платежи?", source_fact_ids: ["fact_6"], verification_status: "pending" },
+            { id: "requirement_2", type: "legal_requirement", value: fixture.expected_requirements[1], confidence: .96, evidence: "И хотелось бы узнать, входит ли туда НДС или он оплачивается отдельно.", source_fact_ids: ["fact_8"], verification_status: "pending" },
+          ],
+          need_meta: { interest_count: 0, requirements_count: 2, decision: "EXTRACTED" },
+        };
+      } else if (prompt.startsWith("Ты — LLM Need Judge")) {
+        output = {
+          items: ["funding_source", "purchase_term", "requirement_1", "requirement_2"].map((id) => ({ id, verdict: "verified", reason: "подтверждено", confidence: .98, corrections: {} })),
+          overall_confidence: .98,
+          warnings: [],
+        };
+      } else if (prompt.startsWith("Ты — Outcome Agent")) {
+        output = {
+          call_results: [{ id: "result_1", value: "агент уточнит информацию", evidence: "Сегодня уточню всю информацию и либо сегодня, либо завтра свяжусь с вами.", confidence: .98, verification_status: "pending" }],
+          agreements: [{ id: "agreement_1", action: "уточнить расходы и НДС и связаться с клиентом", owner: "агент", recipient: "клиент", deadline: "сегодня либо завтра", channel: "WhatsApp", status: "promised", evidence: "Сегодня уточню всю информацию и либо сегодня, либо завтра свяжусь с вами.", confidence: .98, verification_status: "pending" }],
+          primary_next_step: { action: "уточнить расходы и НДС и связаться с клиентом", owner: "агент", deadline: "сегодня либо завтра", channel: "WhatsApp", status: "promised", agreement_ids: ["agreement_1"], confidence: .98, verification_status: "pending" },
+          outcome_meta: { result_count: 1, agreement_count: 1, decision: "EXTRACTED" },
+        };
+      } else if (prompt.startsWith("Ты — LLM Outcome Judge")) {
+        output = {
+          items: ["result_1", "agreement_1", "primary_next_step"].map((id) => ({ id, verdict: "verified", reason: "подтверждено", confidence: .98, corrections: {} })),
+          overall_confidence: .98,
+          warnings: [],
+        };
+      } else if (prompt.startsWith("Ты — Summary Agent для CRM")) {
+        output = {
+          status: "GENERATED",
+          conversation_result: "Клиент Александр уточняет точную разбивку эксплуатационных и коммунальных расходов и статус НДС по апартаментам. Пока не готов к просмотру.",
+          key_facts: [{ label: "Открытые вопросы", value: "расходы и НДС" }],
+          quotes: ["И хотелось бы узнать, входит ли туда НДС или он оплачивается отдельно."],
+          next_step: "Агент уточнит расходы и НДС и свяжется с клиентом в WhatsApp сегодня либо завтра.",
+          error: "",
+        };
+      } else {
+        output = mockPipelineResponse(prompt);
+      }
+      const text = JSON.stringify(output);
+      return { text, tokens: Math.max(1, Math.round(text.length / 4)), actualModel: model, actualProvider: "Mock LLM Provider", structuredOutputApplied: Boolean(responseFormat) };
+    };
+    await runPipeline();
+    callModelWithTransientRetry = originalCall;
+    return {
+      execution: ctx.pipeline_execution,
+      facts: ctx.fact_check,
+      needs: ctx.needs,
+      needCheck: ctx.need_check,
+      outcome: ctx.outcome_check,
+      store: ctx.conversation_store,
+      summary: ctx.summary,
+      gate: ctx.summary_quality_gate,
+      crm: ctx.crm,
+    };
+  }, july29NeedContractRegression);
+
+  expect(result.execution).toMatchObject({ pipeline_status: "SUCCESS", steps_total: 16, steps_executed: 16, stopped_at_stage: null });
+  expect(result.execution.stages.every((stage: any) => stage.status !== "NOT_RUN" && stage.status !== "FAILED")).toBe(true);
+  expect(result.facts.reconciliation).toMatchObject({ corrected_count: 2, rejected_count: 1 });
+  expect(result.facts.reconciliation.first_pass_accuracy_score).toBeLessThan(1);
+  expect(result.facts.verified_facts).toContainEqual(expect.objectContaining({ id: "fact_1", value: "консультация по апартаментам в ЖК «Технопарк»", verification_status: "corrected" }));
+  expect(result.needs.attributes.interest).toEqual([]);
+  expect(result.needs.requirements).toEqual([
+    expect.objectContaining({ id: "requirement_1", value: july29NeedContractRegression.expected_requirements[0] }),
+    expect.objectContaining({ id: "requirement_2", value: july29NeedContractRegression.expected_requirements[1] }),
+  ]);
+  expect(result.needCheck).toMatchObject({ decision: "PASS", verified_requirements: expect.any(Array) });
+  expect(result.outcome).toMatchObject({ decision: "PASS" });
+  expect(result.store.store_meta.status).toMatch(/READY/);
+  expect(result.summary.status).toBe("GENERATED");
+  expect(result.gate.decision).toMatch(/AUTO_SAVE|SAVE_WITH_WARNING|REVIEW_REQUIRED/);
+  expect(result.crm.status).toMatch(/SAVED|BLOCKED/);
 });
 
 test("summary Judges reserve output for reasoning responses", async ({ page }) => {
@@ -3642,6 +3767,168 @@ test("Need Agent использует новый контракт, канони�
   expect(result.blockedCalls).toBe(0);
   expect(result.upstreamBlocked.output).toMatchObject({ status: "technical_error", error_code: "UPSTREAM_FACT_CHECK_FAILED" });
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, needs: { status: "technical_error", error_code: "UPSTREAM_FACT_CHECK_FAILED" } });
+});
+
+test("needs_v2 синхронизирует prompt/schema/parser, восстанавливает legacy interest и фильтрует кейс Технопарка", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(async () => {
+    const item = (value, ids: string[] = [], evidence = "") => ({ value, confidence: .95, evidence, source_fact_ids: ids, verification_status: "pending" });
+    const requirement = (id: string | undefined, type: string, value: string, factId: string, evidence: string) => ({
+      ...(id ? { id } : {}), type, value, confidence: .95, evidence, source_fact_ids: [factId], verification_status: "pending",
+    });
+    const verified = (id: string, category: string, name: string, evidence: string, speaker = "Клиент") => ({
+      id, category, name, value: evidence, normalized_value: evidence, speaker, evidence, confidence: .95,
+      verification_status: "verified", verified: true,
+    });
+    const facts = [
+      verified("fact_1", "client_intent", "цель обращения", "Я звоню по поводу апартаментов в ЖК «Технопарк»."),
+      verified("fact_5", "client_question", "управляющая компания", "Хотел бы узнать по управляющей компании в доме."),
+      verified("fact_6", "client_question", "ежемесячные расходы", "Сколько составляют эксплуатационные расходы и коммунальные платежи?"),
+      verified("fact_7", "agent_commitment", "уточнение расходов", "Я уточню точные цифры у собственника и сообщу.", "Агент"),
+      verified("fact_8", "client_question", "статус НДС", "Хотелось бы узнать, входит ли туда НДС."),
+      verified("fact_9", "agent_commitment", "уточнение НДС", "Хорошо, уточню НДС и свяжусь с вами.", "Агент"),
+      verified("fact_10", "client_constraint", "готовность к просмотру", "Пока не готов ехать; если всё устроит, рассмотрю просмотр."),
+      verified("fact_11", "client_question", "парковка", "Можете сориентировать по парковке?"),
+    ];
+    const pendingFacts = facts.map((fact) => ({ ...fact, verification_status: "pending" }));
+    const ctx = {
+      __transcript: facts.map((fact) => `${fact.speaker}: ${fact.evidence}`).join("\n"),
+      facts: { facts: pendingFacts, quotes: [], extraction_meta: { fact_count: facts.length, quote_count: 0, decision: "EXTRACTED" } },
+      fact_check: { status: "ok", decision: "PASS", verified_facts: facts },
+    };
+    const badBusinessOutput = {
+      attributes: {
+        interest: [item("Новостройки", ["fact_1"], facts[0].evidence)],
+        funding_source: item("не определено"),
+        purchase_term: item("не определено"),
+      },
+      requirements: [
+        requirement("requirement_1", "residential_complex", "ЖК «Технопарк»", "fact_1", facts[0].evidence),
+        requirement("requirement_2", "infrastructure", "управляющая компания", "fact_5", facts[1].evidence),
+        requirement("requirement_3", "other_requirement", "точная разбивка эксплуатационных и коммунальных расходов", "fact_6", facts[2].evidence),
+        requirement("requirement_4", "legal_requirement", "важен статус НДС", "fact_8", facts[4].evidence),
+        requirement("requirement_5", "infrastructure", "парковка", "fact_11", facts[7].evidence),
+        requirement("requirement_6", "other_requirement", "пока не готов к просмотру", "fact_10", facts[6].evidence),
+      ],
+      need_meta: { interest_count: 1, requirements_count: 6, decision: "EXTRACTED" },
+    };
+    const normalized = validateNeedExtractionRoot(badBusinessOutput, ctx);
+
+    const legacy = {
+      attributes: { interest: ["Новостройки"], funding_source: item("не определено"), purchase_term: item("не определено") },
+      requirements: [], need_meta: { interest_count: 1, requirements_count: 0, decision: "EXTRACTED" },
+    };
+    const recovered = recoverLegacyNeedInterestStrings(legacy);
+    const recoveredValidation = validateNeedExtractionRoot(recovered.value, ctx, false);
+    let missingIdError = "";
+    try {
+      validateNeedExtractionRoot({
+        attributes: { interest: [], funding_source: item("не определено"), purchase_term: item("не определено") },
+        requirements: [requirement(undefined, "legal_requirement", "важен статус НДС", "fact_8", facts[4].evidence)],
+        need_meta: { interest_count: 0, requirements_count: 1, decision: "EXTRACTED" },
+      }, ctx, false);
+    } catch (error) { missingIdError = String((error as Error).message); }
+
+    const stage = {
+      type: "llm", name: "Определение потребностей", outKey: "needs", model: "gpt-5-mini", provider: "mock",
+      prompt: 'Legacy prompt with "interest": []\n{{ctx.fact_check.verified_facts}}\n{{transcript}}',
+    };
+    const originalCall = callModelWithTransientRetry;
+    let captured: any = null;
+    callModelWithTransientRetry = async (prompt: string, model: string, provider: string, temperature: number, maxTokens: number, responseFormat: any) => {
+      captured = { prompt, responseFormat };
+      const output = {
+        attributes: { interest: [], funding_source: item("не определено"), purchase_term: item("не определено") },
+        requirements: [requirement("requirement_1", "legal_requirement", "важен статус НДС", "fact_8", facts[4].evidence)],
+        need_meta: { interest_count: 0, requirements_count: 1, decision: "EXTRACTED" },
+      };
+      return { text: JSON.stringify(output), tokens: 10, actualModel: model, actualProvider: "Mock", structuredOutputApplied: true };
+    };
+    const report = await runStage(stage, ctx);
+    let repairCalls = 0;
+    let repairPromptSeen = false;
+    callModelWithTransientRetry = async (prompt: string, model: string, provider: string, temperature: number, maxTokens: number, responseFormat: any) => {
+      repairCalls++;
+      repairPromptSeen ||= prompt.includes("SCHEMA REPAIR (ОДНА ПОПЫТКА)");
+      const output = repairCalls === 1
+        ? {
+            attributes: {
+              interest: ["Новостройки"],
+              funding_source: { value: "не определено", source_fact_ids: [], verification_status: "pending", confidence: .5 },
+              purchase_term: { value: "не определено", source_fact_ids: [], verification_status: "pending", confidence: .5 },
+            },
+            requirements: [{ type: "legal_requirement", value: "важен статус НДС", source_fact_ids: ["fact_8"], verification_status: "pending", confidence: .95 }],
+            need_meta: { interest_count: 1, requirements_count: 1, decision: "EXTRACTED" },
+          }
+        : {
+            attributes: { interest: [], funding_source: item("не определено"), purchase_term: item("не определено") },
+            requirements: [requirement("requirement_1", "legal_requirement", "важен статус НДС", "fact_8", facts[4].evidence)],
+            need_meta: { interest_count: 0, requirements_count: 1, decision: "EXTRACTED" },
+          };
+      return { text: JSON.stringify(output), tokens: 10, actualModel: model, actualProvider: "Mock", structuredOutputApplied: false };
+    };
+    const repairedReport = await runStage(stage, ctx);
+    callModelWithTransientRetry = originalCall;
+    return {
+      ids: { response: NEED_RESPONSE_SCHEMA_ID, parser: NEED_PARSER_SCHEMA_ID },
+      version: NEED_CONTRACT_VERSION,
+      hash: NEED_SCHEMA_HASH,
+      hashCheck: contractSchemaHash(NEED_RESPONSE_SCHEMA) === contractSchemaHash(NEED_PARSER_SCHEMA),
+      configurationError: needContractConfigurationError(),
+      mismatchError: needContractConfigurationError({ parserHash: "different" }),
+      prompt: captured.prompt,
+      responseFormat: captured.responseFormat,
+      report,
+      repairCalls,
+      repairPromptSeen,
+      repairedReport,
+      normalized,
+      recovered,
+      recoveredValidation,
+      missingIdError,
+    };
+  });
+
+  expect(result.ids).toEqual({ response: "needs_v2", parser: "needs_v2" });
+  expect(result.version).toBe("needs_v2.1");
+  expect(result.hash).toMatch(/^fnv1a32-/);
+  expect(result.hashCheck).toBe(true);
+  expect(result.configurationError).toBeNull();
+  expect(result.mismatchError).toContain("schemaHash mismatch");
+  expect(result.prompt).toContain("attributes.interest — массив ОБЪЕКТОВ, не массив строк");
+  expect(result.prompt).toContain('"id": "requirement_1"');
+  expect(result.responseFormat).toMatchObject({ type: "json_schema", json_schema: { name: "needs_v2", strict: true } });
+  expect(result.report.contract_audit).toMatchObject({
+    structured_output_requested: true,
+    structured_output_applied: true,
+    response_schema_id: "needs_v2",
+    parser_schema_id: "needs_v2",
+    contract_version: "needs_v2.1",
+    schema_hash: result.hash,
+  });
+  expect(result.repairCalls).toBe(2);
+  expect(result.repairPromptSeen).toBe(true);
+  expect(result.repairedReport).toMatchObject({
+    retry_count: 1,
+    output: { requirements: [expect.objectContaining({ id: "requirement_1" })] },
+    contract_audit: {
+      repair_attempted: true,
+      repair_result: "SUCCESS",
+      recovery_status: "RECOVERED_WITH_WARNING",
+      warnings: expect.arrayContaining(["LEGACY_INTEREST_STRING_RECOVERED", "STRUCTURED_OUTPUT_UNSUPPORTED_PARSER_FALLBACK"]),
+    },
+  });
+  expect(result.normalized.attributes.interest).toEqual([]);
+  expect(result.normalized.requirements).toEqual([
+    expect.objectContaining({ type: "other_requirement", value: "точная разбивка эксплуатационных и коммунальных расходов" }),
+    expect.objectContaining({ type: "legal_requirement", value: "важен статус НДС" }),
+  ]);
+  expect(result.recovered.warnings).toEqual(["LEGACY_INTEREST_STRING_RECOVERED"]);
+  expect(result.recovered.audit).toMatchObject({ recovery_status: "RECOVERED_WITH_WARNING", first_pass_penalty_items: 1 });
+  expect(result.recoveredValidation.attributes.interest[0]).toMatchObject({
+    value: "Новостройки", source_fact_ids: [], verification_status: "pending", confidence: .5,
+  });
+  expect(result.missingIdError).toContain("requirements[0].id: expected defined");
 });
 
 test("Outcome Agent использует новый строгий контракт и semantic guards", async ({ page }) => {

@@ -668,6 +668,121 @@ const FACT_EXTRACTION_JSON_SCHEMA={
   }
 };
 
+const NEED_CONTRACT_VERSION='needs_v2.1';
+const NEED_RESPONSE_SCHEMA_ID='needs_v2';
+const NEED_PARSER_SCHEMA_ID='needs_v2';
+const NEED_INTEREST_VALUE_LIST=Object.freeze(['Новостройки','Ипотека','Строительство']);
+const NEED_FUNDING_VALUE_LIST=Object.freeze(['наличные / депозит','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено']);
+const NEED_TERM_VALUE_LIST=Object.freeze(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
+const NEED_REQUIREMENT_TYPE_LIST=Object.freeze(['search_location','property_type','market_type','residential_complex','rooms','minimum_area','maximum_area','minimum_land_area','maximum_land_area','repair','floor_preference','transport_accessibility','infrastructure','legal_requirement','price_limit','hard_constraint','rejected_option','other_requirement']);
+const NEED_INTEREST_VALUES=new Set(NEED_INTEREST_VALUE_LIST);
+const NEED_FUNDING_VALUES=new Set(NEED_FUNDING_VALUE_LIST);
+const NEED_TERM_VALUES=new Set(NEED_TERM_VALUE_LIST);
+// `area`/`floor`/`other` остаются parser-only legacy aliases для сохранённых
+// прогонов. Structured Output и новый prompt их не предлагают.
+const NEED_REQUIREMENT_TYPES=new Set([...NEED_REQUIREMENT_TYPE_LIST,'area','floor','other']);
+const NEED_REQUIREMENT_VALUE_JSON_SCHEMA={anyOf:[
+  {type:'string'},{type:'number'},{type:'boolean'},
+  {type:'array',items:{type:'string'}},{type:'array',items:{type:'number'}}
+]};
+const NEED_COMMON_PROPERTIES={
+  confidence:{type:'number',minimum:0,maximum:1},
+  evidence:{type:'string'},
+  source_fact_ids:{type:'array',items:{type:'string',minLength:1},uniqueItems:true},
+  verification_status:{type:'string',enum:['pending']}
+};
+const NEED_EXTRACTION_JSON_SCHEMA={
+  type:'object',additionalProperties:false,required:['attributes','requirements','need_meta'],properties:{
+    attributes:{type:'object',additionalProperties:false,required:['interest','funding_source','purchase_term'],properties:{
+      interest:{type:'array',items:{type:'object',additionalProperties:false,required:['value','confidence','evidence','source_fact_ids','verification_status'],properties:{
+        value:{type:'string',enum:NEED_INTEREST_VALUE_LIST},...NEED_COMMON_PROPERTIES
+      }}},
+      funding_source:{type:'object',additionalProperties:false,required:['value','confidence','evidence','source_fact_ids','verification_status'],properties:{
+        value:{type:'string',enum:NEED_FUNDING_VALUE_LIST},...NEED_COMMON_PROPERTIES
+      }},
+      purchase_term:{type:'object',additionalProperties:false,required:['value','confidence','evidence','source_fact_ids','verification_status'],properties:{
+        value:{type:'string',enum:NEED_TERM_VALUE_LIST},...NEED_COMMON_PROPERTIES
+      }}
+    }},
+    requirements:{type:'array',items:{type:'object',additionalProperties:false,required:['id','type','value','confidence','evidence','source_fact_ids','verification_status'],properties:{
+      id:{type:'string',pattern:'^requirement_[1-9][0-9]*$'},type:{type:'string',enum:NEED_REQUIREMENT_TYPE_LIST},value:NEED_REQUIREMENT_VALUE_JSON_SCHEMA,...NEED_COMMON_PROPERTIES
+    }}},
+    need_meta:{type:'object',additionalProperties:false,required:['interest_count','requirements_count','decision'],properties:{
+      interest_count:{type:'integer',minimum:0},requirements_count:{type:'integer',minimum:0},decision:{type:'string',enum:['EXTRACTED','NO_NEEDS']}
+    }}
+  }
+};
+// Structured Output, parser, runtime validator, prompt appendix and tests all
+// point to this object. A small deterministic fingerprint is enough to detect
+// an accidental local copy changing independently before an LLM call.
+function contractSchemaHash(value){
+  const text=JSON.stringify(value);let hash=2166136261;
+  for(let index=0;index<text.length;index++){hash^=text.charCodeAt(index);hash=Math.imul(hash,16777619);}
+  return 'fnv1a32-'+(hash>>>0).toString(16).padStart(8,'0');
+}
+const NEED_SCHEMA_HASH=contractSchemaHash(NEED_EXTRACTION_JSON_SCHEMA);
+const NEED_RESPONSE_SCHEMA=NEED_EXTRACTION_JSON_SCHEMA;
+const NEED_PARSER_SCHEMA=NEED_EXTRACTION_JSON_SCHEMA;
+
+function needExtractionContractAppendix(){
+  return `\n\n---
+АКТИВНЫЙ КОНТРАКТ NEED AGENT ${NEED_CONTRACT_VERSION} ИМЕЕТ ПРИОРИТЕТ:
+attributes.interest — массив ОБЪЕКТОВ, не массив строк. Каждый interest содержит value, confidence, evidence, source_fact_ids и verification_status.
+Каждый requirement обязательно содержит уникальный id строго вида requirement_1, requirement_2, ...; элементы без id запрещены.
+Верни только объект этой формы:
+{
+  "attributes": {
+    "interest": [
+      {
+        "value": "Новостройки",
+        "confidence": 0.95,
+        "evidence": "явное подтверждение интереса клиентом",
+        "source_fact_ids": ["fact_1"],
+        "verification_status": "pending"
+      }
+    ],
+    "funding_source": {
+      "value": "не определено",
+      "confidence": 0.5,
+      "evidence": "",
+      "source_fact_ids": [],
+      "verification_status": "pending"
+    },
+    "purchase_term": {
+      "value": "не определено",
+      "confidence": 0.5,
+      "evidence": "",
+      "source_fact_ids": [],
+      "verification_status": "pending"
+    }
+  },
+  "requirements": [
+    {
+      "id": "requirement_1",
+      "type": "legal_requirement",
+      "value": "важен статус НДС",
+      "confidence": 0.95,
+      "evidence": "клиент прямо обозначил критерий",
+      "source_fact_ids": ["fact_8"],
+      "verification_status": "pending"
+    }
+  ],
+  "need_meta": {
+    "interest_count": 1,
+    "requirements_count": 1,
+    "decision": "EXTRACTED"
+  }
+}
+Допустимые interest: ${NEED_INTEREST_VALUE_LIST.join(', ')}.
+Допустимые funding_source: ${NEED_FUNDING_VALUE_LIST.join(', ')}.
+Допустимые purchase_term: ${NEED_TERM_VALUE_LIST.join(', ')}.
+Допустимые requirement.type: ${NEED_REQUIREMENT_TYPE_LIST.join(', ')}.
+Звонок по апартаментам или конкретному ЖК сам по себе НЕ создаёт interest="Новостройки". Название, адрес, цена и параметры текущего объекта НЕ являются requirement.
+Вопрос клиента становится requirement только когда verified fact подтверждает значимый критерий, ограничение или условие решения. Состояние "пока не готов к просмотру" остаётся фактом и НЕ является requirement.
+Для funding_source="не определено" и purchase_term="не определено" source_fact_ids должен быть пустым; для любого определённого значения и каждого interest/requirement нужен хотя бы один verified source_fact_id.
+contractVersion=${NEED_CONTRACT_VERSION}; response_schema_id=${NEED_RESPONSE_SCHEMA_ID}; parser_schema_id=${NEED_PARSER_SCHEMA_ID}; schemaHash=${NEED_SCHEMA_HASH}.`;
+}
+
 function factCategoryPromptBlock(){
   return FACT_CATEGORY_VALUES.map(value=>'"'+value+'"').join(', ');
 }
@@ -849,7 +964,7 @@ ${factCategoryPromptBlock()}.
     },
     {
       id:s(), enabled:true, type:'llm', name:'Определение потребностей',
-      model:'gpt-5-mini', outKey:'needs', promptId:'need-agent-v2', promptVersion:10, promptUpdatedAt:'2026-07-29', maxTokens:6000,
+      model:'gpt-5-mini', outKey:'needs', promptId:'need-agent-v2', promptVersion:11, promptUpdatedAt:'2026-07-29', maxTokens:6000,
       prompt:
 `Ты — Need Agent пайплайна анализа звонков по недвижимости.
 Определи только подтверждённые интересы и требования клиента. Основной источник — verified facts после Fact Check. Исходные facts используй только для source_fact_ids, транскрипцию — как вспомогательный контекст.
@@ -865,7 +980,7 @@ ${factCategoryPromptBlock()}.
     "purchase_term": {"value":"не определено","confidence":0.95,"evidence":"","source_fact_ids":[],"verification_status":"pending"}
   },
   "requirements": [
-    {"id":"req_1","type":"search_location","value":["Центральный район","Петроградский район"],"confidence":0.95,"evidence":"рассматриваю Центральный и Петроградский районы","source_fact_ids":["fact_2"],"verification_status":"pending"}
+    {"id":"requirement_1","type":"search_location","value":["Центральный район","Петроградский район"],"confidence":0.95,"evidence":"рассматриваю Центральный и Петроградский районы","source_fact_ids":["fact_2"],"verification_status":"pending"}
   ],
   "need_meta": {"interest_count":1,"requirements_count":1,"decision":"EXTRACTED"}
 }
@@ -876,6 +991,8 @@ ${factCategoryPromptBlock()}.
 Допустимые requirement.type: "search_location", "property_type", "market_type", "residential_complex", "rooms", "minimum_area", "maximum_area", "minimum_land_area", "maximum_land_area", "repair", "floor_preference", "transport_accessibility", "infrastructure", "legal_requirement", "price_limit", "hard_constraint", "rejected_option", "other_requirement".
 
 Правила:
+- attributes.interest — массив объектов, а не строк. Каждый объект содержит value, confidence, evidence, source_fact_ids и verification_status.
+- Каждый requirement содержит обязательный уникальный id вида requirement_1, requirement_2, ...
 - null и дополнительные поля запрещены; confidence от 0 до 1; verification_status всегда "pending".
 - source_fact_ids могут ссылаться только на id из verified facts.
 - interest не дублируется. Все requirement.id уникальны.
@@ -2538,13 +2655,14 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
   }
   if(checkGroup==='fact_check'){
     prepared=prepared.replace(/•\s*при малейшем сомнении снижать оценку;?/gi,'');
-    prepared+='\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT JUDGE ИМЕЕТ ПРИОРИТЕТ:\nВерни только {"items":[{"id":"входной id","verdict":"verified|rejected|needs_correction","reason":"до 6 слов","confidence":0..1,"corrections":{}}],"overall_confidence":0..1,"warnings":[]}. Каждый fact/quote id классифицируй ровно один раз. Не возвращай verified_facts/rejected_facts, missing_critical_facts, исходные объекты, value, evidence, score, status или decision. Пропущенные критические факты кратко перечисляй только в warnings. corrections для verified/rejected пуст; для needs_correction разрешены value, normalized_value, speaker, category, source_turn_ids, confidence. category разрешено исправлять только на: '+FACT_CATEGORY_VALUES.join(', ')+'. Минимальная площадь остаётся client_constraint, возражение — client_objection; hard_constraint, main_objection и budget_max запрещены как category Fact Agent. id/evidence запрещены. Отличай неподтверждённый вывод от факта, подтверждённого контекстом. Конкретный закрытый вопрос агента о требовании и непосредственно следующий однозначный ответ клиента «да/конечно/верно» подтверждают контекст, даже если клиент не повторяет термин. Самостоятельный вопрос клиента является допустимым фактом только в category="client_question". Если факт отклонён, цитата, которая ссылается только на него, также не может быть verified.';
+    prepared+='\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT JUDGE ИМЕЕТ ПРИОРИТЕТ:\nВерни только {"items":[{"id":"входной id","verdict":"verified|rejected|needs_correction","reason":"до 6 слов","confidence":0..1,"corrections":{}}],"overall_confidence":0..1,"warnings":[]}. Каждый fact/quote id классифицируй ровно один раз. Не возвращай verified_facts/rejected_facts, missing_critical_facts, исходные объекты, value, evidence, score, status или decision. Пропущенные критические факты кратко перечисляй только в warnings. corrections для verified/rejected пуст; для needs_correction разрешены value, normalized_value, speaker, category, source_turn_ids, confidence. category разрешено исправлять только на: '+FACT_CATEGORY_VALUES.join(', ')+'. Минимальная площадь остаётся client_constraint, возражение — client_objection; hard_constraint, main_objection и budget_max запрещены как category Fact Agent. id/evidence запрещены. Отличай неподтверждённый вывод от факта, подтверждённого контекстом. Конкретный закрытый вопрос агента о требовании и непосредственно следующий однозначный ответ клиента «да/конечно/верно» подтверждают контекст, даже если клиент не повторяет термин. Самостоятельный вопрос клиента является допустимым фактом только в category="client_question". Если факт отклонён, цитата, которая ссылается только на него, также не может быть verified. Явная опечатка в value или normalized_value (например, «апартамерам» вместо «апартаментам») требует needs_correction и не может получить verified. Факт с несколькими самостоятельными смыслами требует needs_correction либо rejected; частично совпадающие договорённости считаются semantic duplicate, если не добавляют отдельные действие, срок, канал или итог.';
   }
   if(kind==='needs' && !checkGroup){
     prepared+='\n\n---\nПРИОРИТЕТ ИСТОЧНИКОВ NEED AGENT:\nИспользуй ctx.fact_check.verified_facts как основной источник. ctx.facts служит только для проверки source_fact_ids, транскрипция — для вспомогательной смысловой сверки. Не восстанавливай rejected facts. Для funding_source и purchase_term используй только канонические значения нового контракта. Требования клиента храни в requirements; данные карточки конкретного объекта туда не переносятся. Проверенный search_criteria «ИЖС» сохраняй как requirement type="property_type", не как interest="Строительство".';
+    prepared+=needExtractionContractAppendix();
   }
   if(checkGroup==='need_check'){
-    prepared+='\n\n---\nАКТИВНЫЙ КОНТРАКТ NEED JUDGE ИМЕЕТ ПРИОРИТЕТ:\nВерни только {"items":[{"id":"входной id","verdict":"verified|rejected|needs_correction","reason":"строка","confidence":0..1,"corrections":{}}],"overall_confidence":0..1,"warnings":[]}. ID: interest:<индекс с нуля>, funding_source, purchase_term, либо исходный requirement.id. Каждый элемент классифицируй ровно один раз. Не возвращай verified/rejected массивы, исходные value/evidence, score, status или decision. corrections для verified/rejected пуст. Для funding_source и purchase_term разрешено исправлять value на каноническое значение вместе с confidence/source_fact_ids/source_turn_ids; для остальных элементов — только confidence/source_fact_ids/source_turn_ids. normalized_value, category, id и evidence запрещены. Нельзя подтверждать value="не определено", если reason одновременно признаёт наличные, продажу своей квартиры или ипотеку.';
+    prepared+='\n\n---\nАКТИВНЫЙ КОНТРАКТ NEED JUDGE ИМЕЕТ ПРИОРИТЕТ:\nВерни только {"items":[{"id":"входной id","verdict":"verified|rejected|needs_correction","reason":"строка","confidence":0..1,"corrections":{}}],"overall_confidence":0..1,"warnings":[]}. ID: interest:<индекс с нуля>, funding_source, purchase_term, либо исходный requirement.id. Каждый элемент классифицируй ровно один раз. Не возвращай verified/rejected массивы, исходные value/evidence, score, status или decision. corrections для verified/rejected пуст. Для funding_source и purchase_term разрешено исправлять value на каноническое значение вместе с confidence/source_fact_ids/source_turn_ids; для остальных элементов — только confidence/source_fact_ids/source_turn_ids. normalized_value, category, id и evidence запрещены. Нельзя подтверждать value="не определено", если reason одновременно признаёт наличные, продажу своей квартиры или ипотеку. Interest/requirement без source_fact_ids после legacy recovery нельзя подтверждать: верни rejected либо needs_correction с валидными source_fact_ids. Звонок по конкретному ЖК или апартаментам не подтверждает interest="Новостройки"; карточка текущего объекта, одиночный вопрос и состояние готовности к просмотру не являются requirement.';
   }
   if(kind==='outcome'&&!checkGroup){
     prepared+='\n\n---\nОБЯЗАТЕЛЬНЫЙ КОНТРАКТ OUTCOME AGENT:\nСохраняй deadline и channel только при прямом подтверждении именно для этого действия. «Сейчас», факт телефонного звонка и доступность клиента для показа не создают deadline="после звонка", channel="телефон" или срок обратной связи. Условное предложение («на просмотре могу попросить») имеет status="conditional" и не входит в primary_next_step. Один показ — одно событие с участниками; действия агента и клиента не являются конфликтующими дублями. Составной primary_next_step обязан ссылаться на существующие agreements. Не путай срок обратной связи со временем показа или сроком покупки.';
@@ -9252,12 +9370,8 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
   return {verified_facts,rejected_facts,verified_quotes,rejected_quotes,missing_critical_facts,fact_check_quality,criteria:[...(codeResult.criteria||[]),...llmParsed.criteria],score:Math.round(overall_score*100),decision,status:decision==='FAIL'?'fail':['MANUAL_REVIEW','REVIEW_REQUIRED'].includes(decision)?'warn':'ok',critical_errors:criticalErrors.map(item=>({id:item.id,type:item.error_type,reason:item.rejection_reason||item.reason})),missed_fact_already_present:duplicateMissing.length>0,duplicate_missed_items:duplicateMissing,outcome_owned_missing_ignored:outcomeOwnedMissing,raw_response:llmParsed,issues:[]};
 }
 
-const NEED_INTEREST_VALUES=new Set(['Новостройки','Ипотека','Строительство']);
-const NEED_FUNDING_VALUES=new Set(['наличные / депозит','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено']);
-const NEED_TERM_VALUES=new Set(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
-const NEED_REQUIREMENT_TYPES=new Set(['search_location','property_type','market_type','residential_complex','rooms','minimum_area','maximum_area','minimum_land_area','maximum_land_area','repair','floor_preference','transport_accessibility','infrastructure','legal_requirement','price_limit','hard_constraint','rejected_option','other_requirement','area','floor','other']);
 const NEED_ITEM_KEYS=['value','confidence','evidence','source_fact_ids','verification_status'];
-const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE','RECOVER_FUNDING_SOURCE']);
+const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE','RECOVER_FUNDING_SOURCE','RECOVER_LEGACY_INTEREST_STRING']);
 
 class NeedSchemaError extends Error{
   constructor(message){super(message);this.name='NeedSchemaError';}
@@ -9306,6 +9420,49 @@ function verifiedNeedFacts(ctx){
   return listFrom(ctx&&ctx.fact_check&&ctx.fact_check.verified_facts).filter(item=>item&&typeof item==='object'&&typeof item.id==='string');
 }
 
+function recoverLegacyNeedInterestStrings(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)||!value.attributes||!Array.isArray(value.attributes.interest)) return {value,warnings:[],audit:null};
+  const stringIndexes=[];
+  value.attributes.interest.forEach((item,index)=>{if(typeof item==='string') stringIndexes.push(index);});
+  if(!stringIndexes.length) return {value,warnings:[],audit:null};
+  const recovered=JSON.parse(JSON.stringify(value));
+  recovered.attributes.interest=recovered.attributes.interest.map((item,index)=>typeof item==='string'
+    ? {value:item,confidence:.5,evidence:'',source_fact_ids:[],verification_status:'pending'}
+    : item);
+  if(recovered.need_meta&&typeof recovered.need_meta==='object'){
+    const transformations=Array.isArray(recovered.need_meta.transformations)?recovered.need_meta.transformations:[];
+    recovered.need_meta.transformations=[
+      ...transformations,
+      ...stringIndexes.map(index=>({type:'RECOVER_LEGACY_INTEREST_STRING',output_interest_id:'interest:'+index}))
+    ];
+    recovered.need_meta.interest_count=recovered.attributes.interest.length;
+  }
+  return {
+    value:recovered,
+    warnings:['LEGACY_INTEREST_STRING_RECOVERED'],
+    audit:{recovery_status:'RECOVERED_WITH_WARNING',recovered_interest_indexes:stringIndexes,first_pass_penalty_items:stringIndexes.length}
+  };
+}
+
+function needContractConfigurationError(overrides={}){
+  const responseSchemaId=overrides.responseSchemaId||NEED_RESPONSE_SCHEMA_ID;
+  const parserSchemaId=overrides.parserSchemaId||NEED_PARSER_SCHEMA_ID;
+  const responseVersion=overrides.responseVersion||NEED_CONTRACT_VERSION;
+  const parserVersion=overrides.parserVersion||NEED_CONTRACT_VERSION;
+  const promptVersion=overrides.promptVersion||NEED_CONTRACT_VERSION;
+  const responseHash=overrides.responseHash||contractSchemaHash(NEED_RESPONSE_SCHEMA);
+  const parserHash=overrides.parserHash||contractSchemaHash(NEED_PARSER_SCHEMA);
+  const promptHash=overrides.promptHash||NEED_SCHEMA_HASH;
+  if(responseSchemaId!==parserSchemaId) return 'NEED contract mismatch: response_schema_id='+responseSchemaId+', parser_schema_id='+parserSchemaId;
+  if(responseVersion!==parserVersion||responseVersion!==promptVersion) return 'NEED contractVersion mismatch: response='+responseVersion+', parser='+parserVersion+', prompt='+promptVersion;
+  if(responseHash!==parserHash||responseHash!==promptHash) return 'NEED schemaHash mismatch: response='+responseHash+', parser='+parserHash+', prompt='+promptHash;
+  return null;
+}
+
+function needSchemaRepairPrompt(prompt,value,error){
+  return prompt+'\n\n---\nSCHEMA REPAIR (ОДНА ПОПЫТКА):\nПредыдущий ответ нарушил контракт needs_v2: '+String(error||'unknown schema error')+'.\nИсправь весь JSON по АКТИВНОМУ КОНТРАКТУ. attributes.interest должен быть массивом объектов; каждый requirement обязан иметь уникальный id requirement_1, requirement_2, ... . Не создавай интерес или requirement из карточки текущего объекта, одиночного вопроса либо готовности к просмотру. Верни только исправленный JSON без markdown.\n\nПРЕДЫДУЩИЙ JSON:\n'+JSON.stringify(value);
+}
+
 function normalizeNeedExtractionSemantics(value,ctx){
   const out=JSON.parse(JSON.stringify(value));
   const semanticTransformations=toList(out.need_meta&&out.need_meta.transformations);
@@ -9336,6 +9493,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
   });
   const ambiguousFunding=clientFacts.find(hasMultipleFundingOptions);
   const futureSale=findClient(/(?:планир|буду|сначала|нужно|хочу).*прод[а-яё]*(?: свою)? квартир|продаж[а-яё]* своей квартир[а-яё]*.*(?:источник|покуп)|(?:свою|нашу)\s+квартир[а-яё]*\s+прода[её]м|прода[её]м\s+(?:свою|нашу)\s+квартир/);
+  const explicitNewBuild=findClient(/(?:интересу|ищу|рассматрива|хочу|нужн).*(?:новострой|первичн(?:ый|ое|ом)\s+рын)|(?:новострой|первичн(?:ый|ое|ом)\s+рын).*(?:интересу|ищу|рассматрива|хочу|нужн)/);
   const construction=findClient(/(?:строительств|построить дом|строить дом|услуг[а-яё]* строительств)/);
   const plotOnly=findClient(/(?:ищу|нужен|рассматриваю).*участок/);
   const addInterest=(label,fact)=>{
@@ -9343,6 +9501,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
     out.attributes.interest.push({value:label,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
   };
   out.attributes.interest=out.attributes.interest.filter(item=>{
+    if(item.value==='Новостройки'&&!explicitNewBuild) return false;
     if(item.value==='Строительство'&&(!construction||plotOnly&&construction===plotOnly)) return false;
     if(item.value==='Ипотека'&&!approvedMortgage&&!mortgageInProcess&&!mortgageInterest) return false;
     return true;
@@ -9372,22 +9531,33 @@ function normalizeNeedExtractionSemantics(value,ctx){
     if(viewingOnly||sellerConstraint) out.attributes.purchase_term={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'};
   }
   const byId=new Map(facts.map(fact=>[fact.id,fact]));
+  const agentCommitmentText=normalizedSemanticText(facts.filter(fact=>fact.category==='agent_commitment').map(factText).join(' '));
   out.requirements=out.requirements.filter(req=>{
     const sourceFacts=req.source_fact_ids.map(id=>byId.get(id)).filter(Boolean);
     const source=normalizedSemanticText([req.evidence,...sourceFacts.map(factText)].join(' '));
+    const currentObjectCard=sourceFacts.some(fact=>['object_context','object_information','client_intent'].includes(fact.category))
+      &&/(?:жк|жилой комплекс|апартамент|адрес|улиц|проспект|этаж|площад|стоимост|цен[аы] объект)/.test(source);
+    if(currentObjectCard) return false;
+    if(/(?:пока не готов|не готов ехать|готовност[ьи] к просмотр|если все устроит.*просмотр|рассматрива.*просмотр)/.test(source)) return false;
     if(req.type==='price_limit'&&sourceFacts.some(fact=>fact.category==='client_question')) return false;
     if(req.type==='price_limit'&&/(?:наличие|нет|не было|не наш|ничего).*(?:вариант|объект|предложен)|(?:вариант|объект|предложен).*(?:нет|не было|не наш|ничего)/.test(source)) return false;
+    const questionFacts=sourceFacts.filter(fact=>fact.category==='client_question');
+    if(questionFacts.length){
+      const confirmedExpenseCriterion=/(?:эксплуатацион|коммунальн|ежемесячн.*расход|ндс)/.test(source)
+        &&/(?:уточн|точн).*(?:расход|цифр|ндс|информац)|(?:расход|цифр|ндс).*(?:уточн|сообщ)/.test(agentCommitmentText);
+      if(!confirmedExpenseCriterion) return false;
+    }
     const clientConfirmed=sourceFacts.some(fact=>fact.speaker==='Клиент')&&/(хочу|ищу|нужн|важн|рассматрива|не хочу|требован|предпочита|бюджет|лимит|рассчитыва|готов)/.test(source);
     if(req.type==='search_location') return clientConfirmed&&/(район|город|локац|метро|ищу|рассматрива)/.test(source)&&!(/(?:улиц|ул |дом|корпус|адрес).{0,40}\d/.test(source)&&!/(ищу|рассматрива|район)/.test(source));
     if(req.type==='price_limit') return sourceFacts.some(explicitClientMoneyContext);
-    return clientConfirmed;
+    return clientConfirmed||questionFacts.length>0;
   });
   const addRequirement=(type,fact)=>{
     if(out.requirements.some(item=>item.type===type&&item.source_fact_ids.includes(fact.id))) return;
     const used=new Set(out.requirements.map(item=>item.id));
-    let index=1;while(used.has('req_auto_'+index)) index++;
+    let index=1;while(used.has('requirement_'+index)) index++;
     const normalizedValue=fact.normalized_value??fact.value;
-    out.requirements.push({id:'req_auto_'+index,type,value:normalizedValue,normalized_value:normalizedValue,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
+    out.requirements.push({id:'requirement_'+index,type,value:normalizedValue,normalized_value:normalizedValue,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
   };
   clientFacts.forEach(fact=>{
     const text=factText(fact),identity=normalizedSemanticText([fact.category,fact.name].join(' '));
@@ -9466,7 +9636,10 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
     const path='requirements['+index+']';
     const requirementKeys=['id','type','value',...(Object.prototype.hasOwnProperty.call(item,'normalized_value')?['normalized_value']:[]),'confidence','evidence','source_fact_ids','verification_status'];
     needExactKeys(item,path,requirementKeys);
-    needExpect(typeof item.id==='string'&&item.id.trim().length>0,path+'.id','non-empty string',item.id);
+    // Structured Output требует новые canonical requirement_N. Parser также
+    // принимает непустые legacy req_* ID из уже сохранённых запусков, чтобы
+    // безопасно довести их до Judge; отсутствие ID по-прежнему hard-fail.
+    needExpect(typeof item.id==='string'&&item.id.trim().length>0,path+'.id','non-empty requirement id',item.id);
     if(requirementIds.has(item.id)) throw new NeedSchemaError(path+'.id: duplicate id "'+item.id+'"');
     requirementIds.add(item.id);
     if(!NEED_REQUIREMENT_TYPES.has(item.type)) throw new NeedSchemaError(path+'.type: expected canonical enum, received '+needReceived(item.type));
@@ -9496,6 +9669,8 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
       const path='need_meta.transformations['+index+']';
       const keys=item&&item.type==='RECOVER_FUNDING_SOURCE'
         ? ['type','from','to','source_fact_ids']
+        : item&&item.type==='RECOVER_LEGACY_INTEREST_STRING'
+        ? ['type','output_interest_id']
         : ['type','output_requirement_id','source_requirement_ids'];
       needExactKeys(item,path,keys);
       needExpect(NEED_TRANSFORMATION_TYPES.has(item.type),path+'.type','canonical transformation type',item.type);
@@ -9503,6 +9678,10 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
         needExpect(typeof item.from==='string',path+'.from','string',item.from);
         needExpect(NEED_FUNDING_VALUES.has(item.to),path+'.to','canonical funding value',item.to);
         needExpect(Array.isArray(item.source_fact_ids)&&item.source_fact_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_fact_ids','non-empty string[]',item.source_fact_ids);
+        return;
+      }
+      if(item.type==='RECOVER_LEGACY_INTEREST_STRING'){
+        needExpect(typeof item.output_interest_id==='string'&&/^interest:\d+$/.test(item.output_interest_id),path+'.output_interest_id','interest:<index>',item.output_interest_id);
         return;
       }
       needExpect(typeof item.output_requirement_id==='string'&&item.output_requirement_id.trim().length>0,path+'.output_requirement_id','non-empty string',item.output_requirement_id);
@@ -10773,10 +10952,14 @@ async function runStage(stage, ctx){
     if(isFactsExtraction&&stage.provider==='ai-tunnel'){
       prompt=prompt.replace(/\s+/g,' ').trim();
     }
-    const contractConfigurationError=isFactsExtraction?factContractConfigurationError():null;
+    const contractConfigurationError=isFactsExtraction
+      ? factContractConfigurationError()
+      : isNeedsExtraction
+      ? needContractConfigurationError()
+      : null;
     if(contractConfigurationError){
       const output={status:'technical_error',decision:'ERROR',score:null,error_code:'CONTRACT_CONFIGURATION_ERROR',schema_error:contractConfigurationError,parse_error:contractConfigurationError,retry_count:0,raw_response:null,critical_errors:[contractConfigurationError],issues:[contractConfigurationError]};
-      const rep={output,raw:null,parseErr:contractConfigurationError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,provider:null,requested_provider:stage.provider||null,actual_model:null,requested_model:stage.model,model_fallback:false,prompt_audit:{transcript_present:promptAudit.transcriptPresent,transcript_injected:promptAudit.transcriptInjected,transcript_chars:String(transcriptText(ctx)||'').length,resolved_prompt_contains_transcript:Boolean(promptAudit.resolvedPromptContainsTranscript),prompt_chars:prompt.length},network_retry_count:0,network_retry_reason:null,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:null,resolved_prompt:prompt,retry_attempt:ctx.__summary_retry_attempt||0,model:null,timestamp:new Date().toISOString(),status:'bad',metrics:[['LLM','не вызывался'],['Decision','ERROR'],['Ошибка контракта',contractConfigurationError]]};
+      const rep={output,raw:null,parseErr:contractConfigurationError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,provider:null,requested_provider:stage.provider||null,actual_model:null,requested_model:stage.model,model_fallback:false,prompt_audit:{transcript_present:promptAudit.transcriptPresent,transcript_injected:promptAudit.transcriptInjected,transcript_chars:String(transcriptText(ctx)||'').length,resolved_prompt_contains_transcript:Boolean(promptAudit.resolvedPromptContainsTranscript),prompt_chars:prompt.length},network_retry_count:0,network_retry_reason:null,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:null,resolved_prompt:prompt,retry_attempt:ctx.__summary_retry_attempt||0,model:null,timestamp:new Date().toISOString(),contract_audit:{status:'CONFIGURATION_ERROR',structured_output_requested:false,structured_output_applied:false,response_schema_id:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:'facts_v2',parser_schema_id:isNeedsExtraction?NEED_PARSER_SCHEMA_ID:'facts_v2',contract_version:isNeedsExtraction?NEED_CONTRACT_VERSION:null,schema_hash:isNeedsExtraction?NEED_SCHEMA_HASH:null,warnings:[contractConfigurationError]},status:'bad',metrics:[['LLM','не вызывался'],['Decision','ERROR'],['Ошибка контракта',contractConfigurationError]]};
       rep.meta=buildStageMeta(stage,rep);
       return rep;
     }
@@ -10799,6 +10982,8 @@ async function runStage(stage, ctx){
       ? {type:'json_schema',json_schema:{name:'summary_new',strict:true,schema:SUMMARY_NEW_JSON_SCHEMA}}
       : isFactsExtraction
       ? {type:'json_schema',json_schema:{name:'facts_v2',strict:true,schema:FACT_EXTRACTION_JSON_SCHEMA}}
+      : isNeedsExtraction
+      ? {type:'json_schema',json_schema:{name:NEED_RESPONSE_SCHEMA_ID,strict:true,schema:NEED_RESPONSE_SCHEMA}}
       : null;
     // AI Tunnel оценивает максимальную стоимость до запуска запроса. На
     // длинной транскрипции резерв 6000 превышал лимит ключа всего на 0,24 ₽
@@ -10818,6 +11003,9 @@ async function runStage(stage, ctx){
         const recovered=recoverLegacyFactRootArray(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);
         const policy=applyFactExtractionPolicies(parsed,ctx);parsed=policy.value;extractionAudit=policy.audit||null;
       }
+      if(isNeedsExtraction){
+        const recovered=recoverLegacyNeedInterestStrings(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);if(recovered.audit) extractionAudit=recovered.audit;
+      }
       if(stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))) parsed=validateExtractionRoot(moduleStageKind(stage),parsed,ctx);
     }catch(e){ parseErr=e.message; parseErrKind=['FactSchemaError','NeedSchemaError','OutcomeSchemaError'].includes(e.name)?'schema':'json'; }
     let extractionRetryCount=0;
@@ -10836,9 +11024,10 @@ async function runStage(stage, ctx){
         parsed=validateFactSchemaRepair(invalidCategoryResponse,parseJSON(raw));parseErr=null;parseErrKind=null;
       }catch(e){parsed=null;parseErr=e.message;parseErrKind=e.name==='FactSchemaError'?'schema':'json';}
     }
-    if(parseErr&&extractionRetryCount===0&&isExtractionStage&&(!(isFactsExtraction||isNeedsExtraction||isOutcomeExtraction)||parseErrKind!=='schema')){
+    if(parseErr&&extractionRetryCount===0&&isExtractionStage&&(!(isFactsExtraction||isOutcomeExtraction)||parseErrKind!=='schema')){
       extractionRetryCount=1;
-      const retryResult=await callModelWithTransientRetry(prompt,stage.model,stage.provider,stage.temperature,Math.max(Number(stage.maxTokens)||0,14000),responseFormat,stageAllowsVendorFallback(stage));
+      const repairPrompt=isNeedsExtraction?needSchemaRepairPrompt(prompt,parsed,parseErr):prompt;
+      const retryResult=await callModelWithTransientRetry(repairPrompt,stage.model,stage.provider,stage.temperature,Math.max(Number(stage.maxTokens)||0,14000),responseFormat,stageAllowsVendorFallback(stage));
       raw=retryResult.text; tokens+=retryResult.tokens||0; actualModel=retryResult.actualModel; actualProvider=retryResult.actualProvider; fallbackNote=retryResult.fallbackNote; finishReason=retryResult.finishReason;structuredOutputApplied=retryResult.structuredOutputApplied;
       networkRetryCount+=retryResult.networkRetryCount||0; networkRetryReason=networkRetryReason||retryResult.networkRetryReason;
       try{
@@ -10847,6 +11036,9 @@ async function runStage(stage, ctx){
         if(isFactsExtraction){
           const recovered=recoverLegacyFactRootArray(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);
           const policy=applyFactExtractionPolicies(parsed,ctx);parsed=policy.value;extractionAudit=policy.audit||null;
+        }
+        if(isNeedsExtraction){
+          const recovered=recoverLegacyNeedInterestStrings(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);if(recovered.audit) extractionAudit=recovered.audit;
         }
         parsed=validateExtractionRoot(extractionKind,parsed,ctx);
         parseErrKind=null;
@@ -10895,12 +11087,20 @@ async function runStage(stage, ctx){
       stage_version:stage.stageVersion||'v1', prompt_id:stage.promptId||null, prompt_version:'v'+(stage.promptVersion||1), prompt_updated_at:stage.promptUpdatedAt||null, prompt_hash:promptHash, resolved_prompt:prompt, retry_attempt:ctx.__summary_retry_attempt||0,
       model:actualModel, timestamp:new Date().toISOString(),
       finish_reason:finishReason||null,
+      retry_count:extractionRetryCount,
       contract_audit:{
         status:contractWarnings.length?'RECOVERED_WITH_WARNING':'VALID',
         structured_output_requested:Boolean(responseFormat),
         structured_output_applied:structuredOutputApplied==null?Boolean(responseFormat&&['AI Tunnel','OpenAI Direct'].includes(actualProvider)):Boolean(structuredOutputApplied),
         response_schema_id:responseFormat&&responseFormat.json_schema?responseFormat.json_schema.name:null,
         parser_schema_id:isFactsExtraction?'facts_v2':isNeedsExtraction?'needs_v2':isOutcomeExtraction?'outcome_v2':null,
+        contract_version:isNeedsExtraction?NEED_CONTRACT_VERSION:null,
+        schema_hash:isNeedsExtraction?NEED_SCHEMA_HASH:null,
+        recovery_status:extractionAudit&&extractionAudit.recovery_status||'NOT_NEEDED',
+        parse_status:parseErr?'FAILED':'SUCCESS',
+        schema_status:parseErrKind==='schema'?'INVALID':parseErr?'NOT_VALIDATED':'VALID',
+        repair_attempted:extractionRetryCount>0,
+        repair_result:extractionRetryCount>0?(parseErr?'FAILED':'SUCCESS'):'NOT_ATTEMPTED',
         warnings:[...new Set([...contractWarnings,...(responseFormat&&structuredOutputApplied===false?['STRUCTURED_OUTPUT_UNSUPPORTED_PARSER_FALLBACK']:[])])]
       },
       extraction_audit:extractionAudit,
