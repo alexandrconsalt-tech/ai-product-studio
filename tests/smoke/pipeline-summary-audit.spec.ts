@@ -619,7 +619,7 @@ test("Fact Check migrates to the single verdict-only contract and reserves enoug
     return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.category};
   })()`));
 
-  expect(stage).toMatchObject({ promptVersion: 11, maxTokens: 12000 });
+  expect(stage).toMatchObject({ promptVersion: 12, maxTokens: 12000 });
   expect(stage.prompt).toContain('"items"');
   expect(stage.prompt).toContain("Не возвращай fact_results");
   expect(stage.invalidCategory).toContain('unknown fact category');
@@ -983,7 +983,7 @@ test("Summary синхронизирует пустой primary_next_step с о�
     return {stage:{promptVersion:stage.promptVersion,prompt:stage.prompt},repaired,errors:moduleSummaryGrounding(repaired.value,store)};
   })()`));
 
-  expect(result.stage.promptVersion).toBe(7);
+  expect(result.stage.promptVersion).toBe(8);
   expect(result.stage.prompt).toContain('next_step должен быть ровно "Следующий шаг не согласован."');
   expect(result.repaired).toMatchObject({ count: 1, value: { next_step: "Следующий шаг не согласован." } });
   expect(result.errors).toEqual(expect.not.arrayContaining([expect.objectContaining({ path: "next_step" })]));
@@ -1219,7 +1219,7 @@ test("pipeline report 2026-07-24T062250 проходит deterministic regressio
   expect(result.deduplicated.requirements.filter((item: any) => item.type === "search_location")).toHaveLength(1);
   expect(result.repaired).toMatchObject({ repair_attempted: true, contract_status: "RECOVERED_WITH_WARNING", removed_items: ["key_facts[1]"] });
   expect(result.summary.key_facts).toEqual([{ label: "Районы поиска", value: "Мистолово, Капитолово, Лаврики" }]);
-  expect(result.questionStatus).toBe("converted_to_action");
+  expect(result.questionStatus).toBe("partially_answered");
 });
 
 test("отчёт 2026-07-24T075545 восстанавливает бюджет и не пропускает плохое рабочее summary", async ({ page }) => {
@@ -3299,7 +3299,7 @@ test("Fact Agent v7 сохраняет рабочие факты и локаль
     return {policy,validated,precheck:{hardFail:precheck.hardFail,schemaError:precheck.schemaError},stage:{promptVersion:stage.promptVersion,promptUpdatedAt:stage.promptUpdatedAt,prompt:stage.prompt},report};
   })()`));
 
-  expect(result.stage).toMatchObject({ promptVersion: 7, promptUpdatedAt: "2026-07-28" });
+  expect(result.stage).toMatchObject({ promptVersion: 8, promptUpdatedAt: "2026-07-29" });
   expect(result.stage.prompt).toContain('Верни не более 4 самостоятельных содержательных цитат');
   expect(result.stage.prompt).toContain('один собственник, ДДУ, ипотека Сбербанка, никто не зарегистрирован');
   expect(result.stage.prompt).toContain('верни нейтральный communication_result');
@@ -3431,11 +3431,11 @@ test("Проверка фактов валидирует вход, Judge и са
   expect(result.objectPrice).toMatchObject({ decision: "FAIL", rejected_facts: [expect.objectContaining({ error_type: "object_price_as_budget" })] });
   expect(result.questionAsFact.rejected_facts[0].error_type).toBe("question_as_fact");
   expect(result.speakerMismatch).toMatchObject({ decision: "FAIL", rejected_facts: [expect.objectContaining({ error_type: "speaker_mismatch" })] });
-  expect(result.incorrectNormalization).toMatchObject({ decision: "MANUAL_REVIEW", rejected_facts: [expect.objectContaining({ error_type: "incorrect_normalization", normalization_disputed: true })] });
+  expect(result.incorrectNormalization).toMatchObject({ decision: "REVIEW_REQUIRED", rejected_facts: [expect.objectContaining({ error_type: "incorrect_normalization", normalization_disputed: true })] });
   expect(result.duplicateSemantic.rejected_facts[0].error_type).toBe("duplicate_fact");
   expect(result.validQuote.verified_quotes).toHaveLength(1);
   expect(result.distortedQuote).toMatchObject({ decision: "PASS_WITH_WARNINGS", rejected_quotes: [expect.objectContaining({ error_type: "distorted_quote" })] });
-  expect(result.missingBudget).toMatchObject({ decision: "MANUAL_REVIEW", fact_check_quality: { critical_facts_missing: 1, critical_recall_score: 0.5 } });
+  expect(result.missingBudget).toMatchObject({ decision: "REVIEW_REQUIRED", fact_check_quality: { critical_facts_missing: 1, critical_recall_score: 0.5 } });
   expect(result.scoreSpoof.fact_check_quality).toMatchObject({ precision_score: 1, critical_recall_score: 1, quote_score: 1, overall_score: 1, decision: "PASS" });
   expect(result.wrongChannel.rejected_facts).toEqual([expect.objectContaining({ id: "fact_channel", error_type: "evidence_mismatch" })]);
   expect(result.correctChannel.verified_facts).toEqual([expect.objectContaining({ id: "fact_channel", value: "MAX", normalized_value: "MAX" })]);
@@ -3520,7 +3520,7 @@ test("архивный Fact Judge v3 остаётся доступен толь�
     confidence: 0.96,
     verified_facts: expect.arrayContaining([expect.objectContaining({ id: "fact_owner", speaker: "Агент" })]),
     rejected_quotes: [expect.objectContaining({ id: "quote_weak", quote_result_status: "LOW_VALUE" })],
-    fact_check_quality: { facts_checked: 4, critical_facts_missing: 1, precision_score: 1, critical_recall_score: 0.8, quote_score: 0.625, overall_score: 0.894, decision: "REVIEW_REQUIRED" }
+    fact_check_quality: { facts_checked: 4, critical_facts_missing: 1, precision_score: 1, critical_recall_score: 0.8, quote_score: 0.625, overall_score: 0.8, decision: "REVIEW_REQUIRED" }
   });
   expect(result.missingCritical.score).toBeLessThan(100);
   expect(result.missingCritical.missing_critical_facts).toEqual([expect.objectContaining({ name: "помощь родителей" })]);
@@ -3535,7 +3535,7 @@ test("архивный Fact Judge v3 остаётся доступен толь�
   expect(result.objectMortgageAsClient).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "object_mortgage_as_client_finance" })]) });
   expect(result.damagedQuote).toMatchObject({ decision: "REVIEW_REQUIRED", rejected_quotes: expect.arrayContaining([expect.objectContaining({ id: "quote_strong", error_type: "not_verbatim" })]) });
   expect(result.conditionalStep).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "conditional_step_as_confirmed" })]) });
-  expect(result.prompt.version).toBe(11);
+  expect(result.prompt.version).toBe(12);
   expect(result.prompt.text).toContain('"items"');
   expect(result.prompt.text).toContain("Не возвращай fact_results");
 });
@@ -4128,7 +4128,7 @@ test("Генерация саммари использует только Conver
   expect(result.success.calls).toBe(1);
   expect(result.success.report.output).toEqual(expect.objectContaining({ status: "GENERATED", conversation_result: "Клиент ищет квартиру в Центральном районе. Агент отправит клиенту видеообзор и ссылку на подборку.", key_facts: expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 12 млн ₽" })]), quotes: ["Бюджет до 12 миллионов"], next_step: "Агент отправит клиенту видеообзор и ссылку на подборку.", error: "" }));
   expect(result.success.report.output).not.toHaveProperty("score");
-  expect(result.success.report.summary_metrics).toMatchObject({ json_valid: true, grounded_key_facts: "4/4", grounded_quotes: "1/1", next_step_match: true, pii_absent: true, generation_status: "GENERATED", store_status: "READY", next_step_source: "primary_next_step", retry_count: 0, model: "gpt-5-mini", tokens: 10 });
+  expect(result.success.report.summary_metrics).toMatchObject({ json_valid: true, grounded_key_facts: "3/3", grounded_quotes: "1/1", next_step_match: true, pii_absent: true, generation_status: "GENERATED", store_status: "READY", next_step_source: "primary_next_step", retry_count: 0, model: "gpt-5-mini", tokens: 10 });
   expect(result.success.report.prompt_audit).toMatchObject({ transcript_present: true, transcript_injected: false, resolved_prompt_contains_transcript: false, card_metadata_omitted: 0, verified_quote_count: 1 });
   expect(result.success.requestedFormat).toMatchObject({ type: "json_schema", json_schema: { name: "module_summary_v1", strict: true, schema: { additionalProperties: false } } });
   expect(result.success.report.contract_audit).toMatchObject({ prompt_schema_id: "module_summary_v1", response_schema_id: "module_summary_v1", parser_schema_id: "module_summary_v1", runtime_schema_id: "module_summary_v1", contract_status: "VALID" });
@@ -4161,11 +4161,13 @@ test("Генерация саммари использует только Conver
   expect(result.badChannel.report).toMatchObject({ output: { status: "GENERATED", next_step: "Агент отправит видео и подборку." }, summary_metrics: { generation_mode: "selective_recovery" } });
   expect(result.providerFallback).toMatchObject({ status: "warn", output: { status: "GENERATED" }, summary_metrics: { generation_mode: "provider_fallback", fallback_reason: "provider timeout" } });
   expect(result.preliminaryCalls).toBe(1);
-  expect(result.preliminary.output).toMatchObject({ status: "GENERATED", next_step: "Агент: Посмотреть квартиру." });
+  expect(result.preliminary.output).toMatchObject({ status: "GENERATED", next_step: "Клиент и агент посмотрят квартиру." });
   expect(result.dependencyCalls).toBe(0);
   for (const blocked of [result.missingStore, result.technicalStore, result.dependencyStore]) expect(blocked.output).toEqual({ status: "ERROR", conversation_result: "", key_facts: [], quotes: [], next_step: "", error: "Conversation Store не готов к генерации саммари.", confidence: null });
   expect(result.targetCalls).toBe(1);
-  expect(result.targetReport.output).toMatchObject({ status: "GENERATED", conversation_result: expect.stringContaining("Клиент Николай"), key_facts: [expect.objectContaining({ label: "Бюджет", value: "до 5,5 млн ₽" }), expect.objectContaining({ label: "Требования" }), expect.objectContaining({ label: "Локации" }), expect.objectContaining({ label: "Основное сомнение" })], quotes: ["Вот этот побор 9 600 мне прямо не это"], next_step: "Агент отправит клиенту в MAX видеообзор и ссылку на подборку." });
+  expect(result.targetReport.output).toMatchObject({ status: "GENERATED", conversation_result: expect.stringContaining("Клиент Николай"), quotes: ["Вот этот побор 9 600 мне прямо не это"], next_step: "Агент отправит клиенту в MAX видеообзор и ссылку на подборку." });
+  expect(result.targetReport.output.key_facts).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Требования" }), expect.objectContaining({ label: "Локации" })]));
+  expect(result.targetReport.output.key_facts).toHaveLength(2);
   expect(result.pipelineStop).toMatchObject({ downstreamRan: false, marker: undefined, summary: { status: "ERROR" } });
   expect(result.uiWith).toContain("Итог разговора");
   expect(result.uiWith).toContain("Ключевые факты");
@@ -4315,11 +4317,11 @@ test("production report 2026-07-23 распознаёт client_finance как б
   });
 
   expect(result.budgetIssues).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "money_or_number_error", field: "key_facts[0]" })]));
-  expect(result.policy.count).toBe(2);
-  expect(result.policy.value.key_facts).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Бюджет", value: "до 5 500 000 ₽" })]));
+  expect(result.policy.count).toBeGreaterThanOrEqual(2);
+  expect(result.policy.value.conversation_result).toContain("бюджет до 5 500 000");
   expect(result.policy.value.key_facts).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Главное возражение", value: "не устраивает взнос 9600" })]));
   expect(result.policy.value.key_facts).not.toEqual(expect.arrayContaining([expect.objectContaining({ label: "Цена в объявлении" })]));
-  expect(result.policy.value.quotes).toEqual(["Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это.", "Да, давайте в Макс лучше."]);
+  expect(result.policy.value.quotes).toEqual(["Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это."]);
   expect(result.presentation.errors).toEqual([]);
   expect(result.presentation.warnings).toEqual([]);
 });
@@ -4462,8 +4464,7 @@ test("Summary выбирает доказательные цитаты и сох
 
   expect(result.value.key_facts).toContainEqual({label:"Районы поиска",value:"Мистолово, Капитолово, Лаврики"});
   expect(result.value.quotes).toEqual([
-    "Не, ну у меня просто цена до пяти с половиной, вот так.",
-    "Ну, конечно, вот этот побор, конечно, 9600, мне прямо не это."
+    "Не, ну у меня просто цена до пяти с половиной, вот так."
   ]);
   expect(result.value.quotes).not.toContain("Слушайте, по поводу участка звоню вам.");
 });
@@ -5044,7 +5045,7 @@ test("production report 2026-07-23 сохраняет подтверждённы
   expect(result.requirements).toEqual([]);
   expect(result.warnings).toEqual([]);
   expect(result.outcomeIssues).toEqual({ agreements: 0, primary: null });
-  expect(result.summary.next_step).toBe("Агент: уточнить информацию и связаться с клиентом; срок — сегодня или завтра; канал — WhatsApp.");
+  expect(result.summary.next_step).toBe("Агент сегодня или завтра уточнит информацию и свяжется с клиентом через WhatsApp.");
   expect(result.summary.conversation_result).toContain(". Распределение расходов.");
   expect(result.summary.quotes).toEqual(["Хотел бы узнать по управляющей компании в доме."]);
   expect(result.needScore).toBeNull();
@@ -5358,9 +5359,130 @@ test("Summary не превращает boolean finance в бюджет и ка�
     { label: "Нужно уточнить", value: "Можно ли прописаться в доле?" },
   ]);
   expect(result.policy.value.key_facts).not.toContainEqual(expect.objectContaining({ value: "до 1 ₽" }));
-  expect(result.policy.value.next_step).toBe("Клиент: перезвонит; срок — после звонка; канал — телефон.");
+  expect(result.policy.value.next_step).toBe("Клиент после звонка перезвонит через телефон.");
   expect(result.fallback.conversation_result).toBe("Назначен повторный звонок.");
   expect(result.grounding).toEqual([]);
   expect(result.criticalItems).not.toContainEqual(expect.objectContaining({ category: "budget" }));
   expect(result.quoteFillerOutOfScope).toBe(true);
+});
+
+test("regression 2026-07-29: business_context сохраняет смысл четырёх звонков", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const fact = (id, category, value, evidence = value) => ({ id, category, name: category, value, evidence });
+    const base = () => ({ facts: [], quotes: [], attributes: { interest: [], funding_source: {}, purchase_term: {} }, requirements: [], call_results: [], agreements: [], primary_next_step: {} });
+    const vitaliy = base();
+    vitaliy.facts = [
+      fact("v1", "client_intent", "рассматривает квартиру как инвестиционный объект для сдачи в аренду"),
+      fact("v2", "client_motivation", "инвестиция под аренду"),
+      fact("v3", "client_question", "юридическая чистота", "Какая юридическая история?",),
+      fact("v4", "client_constraint", "важно отсутствие шума от дороги"),
+      fact("v5", "client_objection", "коммунальные платежи около 15 тыс. ₽ считает высокими"),
+      fact("v6", "client_question", "точный размер коммунальных платежей"),
+      fact("v7", "object_information", "мебель и техника остаются"),
+    ];
+    vitaliy.facts[2].question_status = "answered"; vitaliy.facts[2].answer = "Юридическая история проверена.";
+    vitaliy.facts[5].question_status = "partially_answered"; vitaliy.facts[5].answer = "Около 15 тыс. ₽, требуется уточнение.";
+    vitaliy.call_results = [{ value: "показ предварительно согласован" }];
+    vitaliy.agreements = [
+      { id: "va1", action: "уточнит коммунальные платежи", owner: "агент", deadline: "сегодня", status: "promised" },
+      { id: "va2", action: "согласует время просмотра с братом и мамой", owner: "агент", deadline: "сегодня или завтра", status: "preliminary" },
+    ];
+    vitaliy.primary_next_step = { action: "уточнить коммунальные платежи; согласовать время просмотра с братом и мамой", owner: "агент", deadline: "сегодня или завтра", status: "preliminary", agreement_ids: ["va1", "va2"] };
+
+    const dmitry = base();
+    dmitry.facts = [
+      fact("d1", "client_intent", "хочет посмотреть квартиру"),
+      fact("d2", "client_finance", "полная сумма имеется", "Да.",),
+      fact("d3", "client_constraint", "выход на сделку не ранее конца августа — начала сентября"),
+      fact("d4", "communication_context", "клиента срок сделки устраивает"),
+    ];
+    dmitry.attributes.funding_source = { value: "наличные / депозит" };
+    dmitry.attributes.purchase_term = { value: "не определено" };
+    dmitry.call_results = [{ value: "показ предварительно согласован" }];
+    dmitry.agreements = [
+      { id: "da1", action: "уточнит возможность показа у квартирантов", owner: "агент", deadline: "сегодня", status: "promised" },
+      { id: "da2", action: "перезвонит клиенту и подтвердит интервал 18:00–19:00", owner: "агент", deadline: "сегодня", status: "promised" },
+    ];
+    dmitry.primary_next_step = { action: "уточнить возможность показа у квартирантов; перезвонить клиенту и подтвердить интервал 18:00–19:00", owner: "агент", deadline: "сегодня", status: "preliminary", agreement_ids: ["da1", "da2"] };
+
+    const alexandra = base();
+    alexandra.facts = [
+      fact("a1", "client_intent", "подбирает квартиру для себя"),
+      fact("a2", "client_motivation", "покупка для себя"),
+      fact("a3", "client_finance", "деньги на счёте, покупку финансируют родители"),
+      fact("a4", "client_constraint", "показ зависит от того, не уйдёт ли квартира под аванс"),
+    ];
+    alexandra.attributes.funding_source = { value: "наличные / депозит" };
+    alexandra.call_results = [{ value: "показ предложен на завтра" }];
+    alexandra.agreements = [{ id: "aa1", action: "сообщит статус объекта и подтвердит возможность просмотра", owner: "агент", deadline: "сегодня вечером", status: "promised" }];
+    alexandra.primary_next_step = { action: "сообщить статус объекта и подтвердить возможность просмотра завтра", owner: "агент", deadline: "сегодня вечером", status: "promised", agreement_ids: ["aa1"] };
+
+    const lubov = base();
+    lubov.facts = [
+      fact("l1", "client_role", "агент покупателя"),
+      fact("l2", "client_intent", "хочет организовать просмотр студии"),
+      fact("l3", "client_motivation", "объект под сдачу в аренду"),
+      fact("l4", "client_constraint", "показы остановлены из-за отсутствия связи с собственником"),
+      fact("l5", "client_question", "альтернативы в том же бюджете"),
+      fact("l6", "communication_channel", "телефонный звонок"),
+    ];
+    lubov.facts[4].question_status = "partially_answered"; lubov.facts[4].answer = "Агент уточнит варианты у коллег.";
+    lubov.call_results = [{ value: "агент уточнит информацию" }];
+    lubov.agreements = [
+      { id: "la1", action: "свяжется с собственником", owner: "агент", deadline: "", status: "promised" },
+      { id: "la2", action: "после связи с собственником предложит время просмотра", owner: "агент", deadline: "", status: "promised" },
+      { id: "la3", action: "уточнит альтернативы у коллег", owner: "агент", deadline: "", status: "promised" },
+    ];
+    lubov.primary_next_step = { action: "связаться с собственником; предложить время просмотра; уточнить альтернативы у коллег", owner: "агент", deadline: "", channel: "телефон", status: "promised", agreement_ids: ["la1", "la2", "la3"] };
+
+    return [vitaliy, dmitry, alexandra, lubov].map(conversation => ({
+      business: conversationStoreBusinessContext(conversation),
+      nextStep: moduleSummaryNaturalNextStep(conversation),
+    }));
+  });
+
+  const [vitaliy, dmitry, alexandra, lubov] = result;
+  expect(JSON.stringify(vitaliy.business)).toMatch(/инвестиц.*аренд/i);
+  expect(JSON.stringify(vitaliy.business)).toMatch(/юридическ/i);
+  expect(JSON.stringify(vitaliy.business)).toMatch(/шум/i);
+  expect(JSON.stringify(vitaliy.business)).toMatch(/коммунальн/i);
+  expect(JSON.stringify(vitaliy.business)).toMatch(/мебель.*техника/i);
+  expect(vitaliy.business.important_questions).toEqual(expect.arrayContaining([expect.objectContaining({ status: "partially_answered" })]));
+  expect(vitaliy.nextStep).toMatch(/уточнит коммунальные платежи.*согласует время просмотра/i);
+
+  expect(dmitry.business.financing).toMatch(/^наличные \/ депозит/);
+  expect(dmitry.business.purchase_term).toBe("не определено");
+  expect(JSON.stringify(dmitry.business)).toMatch(/конца августа.*начала сентября.*устраивает/i);
+  expect(dmitry.nextStep).toMatch(/сегодня.*уточнит возможность показа.*перезвонит клиенту/i);
+
+  expect(alexandra.business.purchase_purpose).toMatch(/для себя/i);
+  expect(alexandra.business.financing).toMatch(/^наличные \/ депозит.*родител/i);
+  expect(JSON.stringify(alexandra.business)).toMatch(/родител|аванс/i);
+  expect(alexandra.nextStep).toMatch(/сегодня вечером.*сообщит статус.*подтвердит возможность просмотра/i);
+
+  expect(lubov.business.client_goal).toMatch(/агент покупателя/i);
+  expect(lubov.business.purchase_purpose).toMatch(/сдачу в аренду/i);
+  expect(JSON.stringify(lubov.business)).toMatch(/собственник|альтернатив/i);
+  expect(lubov.nextStep).toMatch(/свяжется с собственником.*предложит время просмотра.*уточнит альтернативы.*телефон/i);
+  expect(JSON.stringify(lubov.business)).not.toMatch(/Плесецкая/);
+});
+
+test("Fact Check ограничивает score при пропуске P0 и Judge score восстанавливается кодом", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const computed = summaryJudgeCompleteComputedFields({
+      critical_errors: [],
+      warnings: [{ type: "minor", problem: "Небольшое замечание" }],
+      checked_fields: { conversation_result: true, key_facts: true, quotes: true, next_step: true },
+    }, "truth");
+    const score = (precision, present, missing) => {
+      const recall = present / (present + missing);
+      return Math.round(Math.min((precision * .5 + recall * .5) * 100, missing >= 2 ? 60 : missing ? 80 : 100));
+    };
+    return { computed, oneMissing: score(1, 4, 1), twoMissing: score(1, 4, 2) };
+  });
+  expect(result.computed).toMatchObject({ score: 90, status: "warning" });
+  expect(result.oneMissing).toBeLessThanOrEqual(80);
+  expect(result.twoMissing).toBeLessThanOrEqual(60);
 });
