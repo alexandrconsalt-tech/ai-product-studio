@@ -1,0 +1,1021 @@
+[
+  {
+    "source_report": "pipeline_report - 2026-07-29T122944.450.json",
+    "transcript": "Оператор:\n— Здравствуйте, оператор Юлия, слушаю вас.\nКлиент:\n— Здравствуйте, Юлия. я звоню по поводу объявления на цене продажи квартиры. Хотелось бы сегодня.. уточните, пожалуйста, адрес, ли какойто объект специалистам. Бла.\nКлиент:\n— Просвещение, 72, трёшка.\nНеизвестный спикер:\n— Минуту. Всего доброго, до свидания.\nОператор:\n— Подскажите, Просвещение, 72 за 11 60, трёхкомнатная, второй этаж, 73 кв. м. По этому объекту обращаетесь?\nКлиент:\n— Да.\nОператор:\n— Объектом занимается Полина.\nОператор:\n— Уточните, вас как можно представить?\nОператор:\n— Алина, ваш номер заканчивается на 62—69?\nКлиент:\n— Да.\nОператор:\n— Вы как риелтор к нам обращаетесь или как частное лицо?\nКлиент:\n— Нет, как частное лицо.\nОператор:\n— Хорошо, ещё уточните, пожалуйста, консультация по ипотеке вам потребуется от нашего специалиста?\nКлиент:\n— Что, ещё раз?\nОператор:\n— Консультация по ипотеке потребуется вам?\nКлиент:\n— Нет, нет.\nОператор:\n— Хорошо, соединяю вас. Оставайтесь на линии.\nНеизвестный спикер:\n— Алло.\nНеизвестный спикер:\n— Алло.\nКлиент:\n— Добрый день. Хотелось бы посмотреть сегодня квартиру на Просвещения, 72, трёшка.\nАгент:\n— Да, смотрите, там сегодня будет просмотр в 15:30, и вы можете к четырём подъехать, в общем-то, туда. Единственное, там смотрите, там была перепланировка достаточно глобальная, то есть там..\nКлиент:\n— Угу.\nАгент:\n— А-а, были присоединены две комнаты, со стороны тупникового коридора. Это было сделано предыдущими собственниками.\nАгент:\n— А-а и-и-и там ещё была отенена кухня и лоджия. То есть, если это не смущает, то как бы без проблем.\nКлиент:\n— Нет, без проблем.\nКлиент:\n— Давайте в четыре.\nАгент:\n— Ага.\nАгент:\n— Четыре, да?\nКлиент:\n— Угу, хорошо.\nАгент:\n— А как вас зовут, простите?\nКлиент:\n— Алина.\nАгент:\n— Алина, Алина, а подскажите, пожалуйста, у вас там наличка, ипотека, вот в каком варианте оплата?\nКлиент:\n— Мы свою квартиру продаём.\nАгент:\n— Ага, ну то есть вы ещё её не продали, верно?\nКлиент:\n— Ну, у нас уже есть покупатель.\nАгент:\n— А, есть уже покупатель? Хорошо, тогда смотрите, тогда сегодня в тыре тогда давайте.\nКлиент:\n— Угу, да, супер. Да, спасибо.\nАгент:\n— Так, вам позвонить э-э, как в 4:00 по этому номеру?\nКлиент:\n— Давайте, да, давайте лучше, да, вы мне позвоните.\nАгент:\n— У меня сейчас отобразится ваша заявочка, и, э-э, собственно говоря, я вас тогда наберу. Вот.\nКлиент:\n— А Хорошо, к четырём тогда подъедем. Всё, хорошо, спасибо. Всё, спасибо, до свидания.",
+    "facts": {
+      "facts": [
+        {
+          "id": "fact_1",
+          "category": "client_intent",
+          "name": "цель обращения",
+          "value": "посмотреть квартиру сегодня",
+          "normalized_value": "посмотреть квартиру сегодня",
+          "speaker": "Клиент",
+          "evidence": "Хотелось бы посмотреть сегодня квартиру на Просвещения, 72, трёшка.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_6"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_2",
+          "category": "search_location",
+          "name": "адрес объекта",
+          "value": "Просвещение, 72",
+          "normalized_value": "Просвещение, 72",
+          "speaker": "Клиент",
+          "evidence": "Просвещение, 72, трёшка.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_4",
+            "turn_6"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_3",
+          "category": "search_criteria",
+          "name": "число комнат",
+          "value": 3,
+          "normalized_value": 3,
+          "speaker": "Клиент",
+          "evidence": "Просвещение, 72, трёшка.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_6"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_4",
+          "category": "client_role",
+          "name": "статус",
+          "value": "частное лицо",
+          "normalized_value": "частное лицо",
+          "speaker": "Клиент",
+          "evidence": "Нет, как частное лицо.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_9"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_5",
+          "category": "client_finance",
+          "name": "продажа собственной квартиры",
+          "value": "продаём свою квартиру",
+          "normalized_value": "продаём свою квартиру",
+          "speaker": "Клиент",
+          "evidence": "Мы свою квартиру продаём.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_20"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_6",
+          "category": "client_finance",
+          "name": "наличие покупателя",
+          "value": "есть покупатель",
+          "normalized_value": "есть покупатель",
+          "speaker": "Клиент",
+          "evidence": "Ну, у нас уже есть покупатель.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_21"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_8",
+          "category": "client_preference",
+          "name": "отношение к перепланировке",
+          "value": "не смущает",
+          "normalized_value": "не смущает",
+          "speaker": "Клиент",
+          "evidence": "Нет, без проблем.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_16"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_9",
+          "category": "agent_commitment",
+          "name": "обязательство агента позвонить",
+          "value": "позвонить клиенту в 16:00",
+          "normalized_value": "позвонить клиенту в 16:00",
+          "speaker": "Агент",
+          "evidence": "я вас тогда наберу.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_24"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_10",
+          "category": "communication_result",
+          "name": "договорённость о просмотре",
+          "value": "просмотр сегодня в 16:00",
+          "normalized_value": "согласован просмотр сегодня в 16:00",
+          "speaker": "Клиент",
+          "evidence": "Давайте в четыре.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_17",
+            "turn_25"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        }
+      ],
+      "quotes": [
+        {
+          "id": "quote_1",
+          "text": "Хотелось бы посмотреть сегодня квартиру на Просвещения, 72, трёшка.",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_1",
+            "fact_2",
+            "fact_3"
+          ],
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "quote_3",
+          "text": "Мы свою квартиру продаём.",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_5"
+          ],
+          "confidence": 0.9,
+          "verification_status": "pending"
+        },
+        {
+          "id": "quote_4",
+          "text": "Ну, у нас уже есть покупатель.",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_6"
+          ],
+          "confidence": 0.95,
+          "verification_status": "pending"
+        }
+      ],
+      "extraction_meta": {
+        "fact_count": 9,
+        "quote_count": 3,
+        "decision": "EXTRACTED"
+      }
+    },
+    "needs": {
+      "attributes": {
+        "interest": [],
+        "funding_source": {
+          "value": "не определено",
+          "confidence": 1,
+          "evidence": "",
+          "source_fact_ids": [],
+          "verification_status": "pending"
+        },
+        "purchase_term": {
+          "value": "не определено",
+          "confidence": 0.95,
+          "evidence": "",
+          "source_fact_ids": [],
+          "verification_status": "pending"
+        }
+      },
+      "requirements": [
+        {
+          "id": "req_auto_1",
+          "type": "search_location",
+          "value": "Просвещение, 72",
+          "normalized_value": "Просвещение, 72",
+          "confidence": 0.95,
+          "evidence": "Просвещение, 72, трёшка.",
+          "source_fact_ids": [
+            "fact_2"
+          ],
+          "verification_status": "pending"
+        }
+      ],
+      "need_meta": {
+        "interest_count": 0,
+        "requirements_count": 1,
+        "decision": "EXTRACTED",
+        "transformations": []
+      }
+    },
+    "outcome": {
+      "call_results": [
+        {
+          "id": "result_1",
+          "value": "назначен показ",
+          "evidence": "Давайте в четыре.",
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "result_2",
+          "value": "назначен повторный звонок",
+          "evidence": "Так, вам позвонить э-э, как в 4:00 по этому номеру? / Давайте, да, давайте лучше, да, вы мне позвоните. / я вас тогда наберу.",
+          "confidence": 0.9,
+          "verification_status": "pending"
+        }
+      ],
+      "agreements": [
+        {
+          "id": "agreement_1",
+          "action": "провести просмотр квартиры на Просвещение, 72",
+          "owner": "агент",
+          "recipient": "клиент",
+          "deadline": "",
+          "channel": "",
+          "status": "confirmed",
+          "evidence": "вы можете к четырём подъехать / Давайте в четыре.",
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "agreement_2",
+          "action": "приехать на просмотр квартиры на Просвещение, 72",
+          "owner": "клиент",
+          "recipient": "агент",
+          "deadline": "",
+          "channel": "",
+          "status": "confirmed",
+          "evidence": "К четырём тогда подъедем. / Давайте в четыре.",
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "agreement_3",
+          "action": "позвонить клиенту по этому номеру",
+          "owner": "агент",
+          "recipient": "клиент",
+          "deadline": "сегодня в 16:00",
+          "channel": "по этому номеру",
+          "status": "confirmed",
+          "evidence": "Так, вам позвонить э-э, как в 4:00 по этому номеру? / Давайте, да, давайте лучше, да, вы мне позвоните. / я вас тогда наберу.",
+          "confidence": 0.9,
+          "verification_status": "pending"
+        }
+      ],
+      "primary_next_step": {
+        "action": "показ на объекте и звонок клиенту",
+        "owner": "оба",
+        "deadline": "сегодня в 16:00",
+        "channel": "",
+        "status": "confirmed",
+        "agreement_ids": [
+          "agreement_1",
+          "agreement_2",
+          "agreement_3"
+        ],
+        "confidence": 0.93,
+        "verification_status": "pending"
+      },
+      "outcome_meta": {
+        "result_count": 2,
+        "agreement_count": 3,
+        "decision": "EXTRACTED"
+      }
+    }
+  },
+  {
+    "source_report": "pipeline_report - 2026-07-29T121642.667.json",
+    "transcript": "Неизвестный спикер:\n— Брат Мария, здравствуйте!\n— Здравствуйте.\n— А меня интересуют апартаменты на Щертановской, с кем мне поговорить?\n— Стоимость подскажите, какая указана?\n— Там есть 5 700, есть больше.\n— Вот.\n\nНеизвестный спикер:\n— А наш какой объект?\n— Все, по-моему.\n— Так, Чертановская.\n— А номер дома?\n— Хмм, сейчас, секунду.\n\nНеизвестный спикер:\n— Далекое? Северная Черта Шерертанова, 6. Корпус 605, да, за 5 800 студия\n— Да-да.\n— Второй этаж 17 кв.\n\nОператор:\n— Давайте соединю с агентом.\n— Вас как представить? Как вас зовут?\n\nКлиент:\n— Ольга.\n— Для себя, для клиента подбор у вас.\n— Для себя.\n\nОператор:\n— Ну, какая разница?\n— Ну, агенту передам информацию, для него есть разница.\n— Шестьдесят пять, шестьдесят восемь заканчивается. Номер ваш актуальный, если связь прервётся.\n— Оставайтесь на линии, соединяю вас.\n\nКлиент:\n— Угу.\n\nАгент:\n— Ольга, здравствуйте.\n\nКлиент:\n— Здравствуйте.\n\nАгент:\n— Меня Самир зовут.\n— Да, приятно очень.\n\nКлиент:\n— Подскажите мне, пожалуйста, вот они у вас очень давно продаются, они очень давно болтаются на Цане, на Avto.\n— Аа, там есть какой-то подвох, просто вот как бы я вот посмотрела, сходила, но чтобы не тратить ни моё, ни ваше время, у меня подружка иэлтор с огромным стажем, и она ужасно дотошная, поэтому всё равно это всё выглядит. Если оно есть, вы мне скажите, пожалуйста, сразу, чтобы мы не тратили время.\n— Вот я к- по какому вопросу?\n\nАгент:\n— Нет, ну как.\n— Ну, она есть, конечно, но это не квартира, это апартаменты.\n\nКлиент:\n— Да я знаю, да.\n— А написано, что отдельный кадастровый номер есть.\n— Ещё что там есть, какие нюансы?\n\nАгент:\n— Да, по нюансам, в принципе, вот апартаменты.\n— Из апартаментов, э-э, там невозможна регистрация.\n— Тому что это такое...\n— И при сдаче должно быть ИП.\n\nКлиент:\n— Э, я знаю, да?\n— А сами собственники, они как бы там как-то есть договорённости какие-то по поводу проживания в этих апартаментах и использования их по этому назначению? Нет проблем никаких с этим?\n\nАгент:\n— Ну, с этим проблем нет, да? То есть они уже подготовлены для того, для аренды, там, для проживания.\n— Единственное, что вот, э-э, вот этот вот нюанс, что это апартаменты, всё.\n— Ну, это, э-э, не знаю, насчёт долго-недолго, просто я сам занимаюсь этим объектом недели две-три, наверное.\n— Просто обычно такие... на окане они полгода висят.\n— Ну, очень-очень узконаправленный, очень узконаправленный просто объект, поэтому висит. Вот.\n\nКлиент:\n— Вот, это я просто так присматриваю, поэтому как бы вот, как есть.\n\nКлиент:\n— Поняла вас, а собственники там какое количество?\n\nАгент:\n— Один собственник.\n— Там обременений нет никаких, в общем.\n\nКлиент:\n— А в результате чего они в собственности оказались? Какой там документ?\n\nАгент:\n— Сейчас скажу, секунду. Секундочку, я сейчас скажу.\n\nАгент:\n— Так, смотрите, там ДКП двадцать пятого года.\n\nКлиент:\n— А предыдущие известны? Ну, есть у вас этот ЕГРН с предыдущими собственниками?\n\nАгент:\n— Предыдущих, нет, насчёт предыдущих информации у меня пока нет. Если надо будет, всё предоставим.\n\nКлиент:\n— Ну, лучше, да, потому что там бывает историй купленных и всякое-разное. Вот, и там судебные дела какие-нибудь параллельно. Вот. А можете прислать?\n\nАгент:\n— ЕГРН я прислать вам не могу. Это личная информация, которую я не могу предоставлять вам.\n— Если только мы можем показать вам, то есть на просмотр вы приедете, допустим, я собственника могу попросить. Она принесёт, я вам покажу. А её личные данные я не могу скидывать.\n\nКлиент:\n— Я поняла вас. А когда можете показать?\n\nАгент:\n— Насчёт показа договорюсь, могу вам перезвонить.\n\nКлиент:\n— Хорошо. Ну, я просто вот могу либо сегодня, либо уже в понедельник.\n\nАгент:\n— Аа, тут такой расклад, да. Вот. Хорошо, ладно, договорились тогда.\n\nКлиент:\n— Я тоже тогда риэлтору своему дам, предварительно, чтобы её зря не дёргать, с вами поговорю, а дальше уже, соответственно, с вопросами.\n— Всё, тогда договорились, спасибо.\n\nАгент:\n— Ага. Всего хорошего.\n\nКлиент:\n— До свидания.\n— Угу.",
+    "facts": {
+      "facts": [
+        {
+          "id": "fact_1",
+          "category": "client_identity",
+          "name": "имя клиента",
+          "value": "Ольга",
+          "normalized_value": "Ольга",
+          "speaker": "Клиент",
+          "evidence": "Ольга.",
+          "confidence": 0.98,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_2",
+          "category": "client_role",
+          "name": "роль обращения",
+          "value": "Для себя",
+          "normalized_value": "покупатель",
+          "speaker": "Клиент",
+          "evidence": "Для себя.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_3",
+          "category": "search_location",
+          "name": "область поиска",
+          "value": "Щертановская",
+          "normalized_value": "Щертановская",
+          "speaker": "Клиент",
+          "evidence": "А меня интересуют апартаменты на Щертановской, с кем мне поговорить?",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_4",
+          "category": "client_intent",
+          "name": "цель обращения",
+          "value": "подбор апартаментов",
+          "normalized_value": "подбор апартаментов",
+          "speaker": "Клиент",
+          "evidence": "А меня интересуют апартаменты на Щертановской, с кем мне поговорить?",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_5",
+          "category": "client_question",
+          "name": "вопрос о числе собственников",
+          "value": "сколько собственников",
+          "normalized_value": null,
+          "speaker": "Клиент",
+          "evidence": "Поняла вас, а собственники там какое количество?",
+          "confidence": 0.92,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": "answered",
+          "answer": "Один собственник.",
+          "answer_speaker": "Агент",
+          "answer_evidence": "Один собственник."
+        },
+        {
+          "id": "fact_6",
+          "category": "object_information",
+          "name": "число собственников",
+          "value": 1,
+          "normalized_value": 1,
+          "speaker": "Агент",
+          "evidence": "Один собственник.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_7",
+          "category": "client_question",
+          "name": "вопрос о предыдущих собственниках / ЕГРН",
+          "value": "известны ли предыдущие собственники; есть ли ЕГРН",
+          "normalized_value": null,
+          "speaker": "Клиент",
+          "evidence": "А предыдущие известны? Ну, есть у вас этот ЕГРН с предыдущими собственниками?",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": "partially_answered",
+          "answer": "Информации о предыдущих собственниках нет; при необходимости предоставят",
+          "answer_speaker": "Агент",
+          "answer_evidence": "Предыдущих, нет, насчёт предыдущих информации у меня пока нет. Если надо будет, всё предоставим."
+        },
+        {
+          "id": "fact_8",
+          "category": "object_information",
+          "name": "возможность регистрации",
+          "value": "регистрация невозможна",
+          "normalized_value": "регистрация невозможна (апартаменты)",
+          "speaker": "Агент",
+          "evidence": "Из апартаментов, э-э, там невозможна регистрация.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_9",
+          "category": "object_information",
+          "name": "требование при сдаче",
+          "value": "при сдаче требуется ИП",
+          "normalized_value": "требуется ИП для сдачи",
+          "speaker": "Агент",
+          "evidence": "И при сдаче должно быть ИП.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_10",
+          "category": "object_information",
+          "name": "обременения",
+          "value": "обременений нет",
+          "normalized_value": "нет обременений",
+          "speaker": "Агент",
+          "evidence": "Там обременений нет никаких, в общем.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_11",
+          "category": "object_information",
+          "name": "документ подтверждающий право",
+          "value": "ДКП двадцать пятого года",
+          "normalized_value": null,
+          "speaker": "Агент",
+          "evidence": "Так, смотрите, там ДКП двадцать пятого года.",
+          "confidence": 0.85,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_12",
+          "category": "agent_commitment",
+          "name": "обещание перезвонить для показа",
+          "value": "перезвонить для согласования показа",
+          "normalized_value": "перезвонить для согласования показа",
+          "speaker": "Агент",
+          "evidence": "Насчёт показа договорюсь, могу вам перезвонить.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_13",
+          "category": "client_constraint",
+          "name": "доступность клиента для показа",
+          "value": "сегодня или в понедельник",
+          "normalized_value": "сегодня или в понедельник",
+          "speaker": "Клиент",
+          "evidence": "Ну, я просто вот могу либо сегодня, либо уже в понедельник.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        }
+      ],
+      "quotes": [
+        {
+          "id": "quote_1",
+          "text": "А меня интересуют апартаменты на Щертановской, с кем мне поговорить?",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_3",
+            "fact_4"
+          ],
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "quote_3",
+          "text": "Поняла вас, а собственники там какое количество?",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_5"
+          ],
+          "confidence": 0.92,
+          "verification_status": "pending"
+        },
+        {
+          "id": "quote_4",
+          "text": "Ну, я просто вот могу либо сегодня, либо уже в понедельник.",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_13"
+          ],
+          "confidence": 0.9,
+          "verification_status": "pending"
+        }
+      ],
+      "extraction_meta": {
+        "fact_count": 13,
+        "quote_count": 3,
+        "decision": "EXTRACTED"
+      }
+    },
+    "needs": {
+      "attributes": {
+        "interest": [],
+        "funding_source": {
+          "value": "не определено",
+          "confidence": 0.95,
+          "evidence": "",
+          "source_fact_ids": [],
+          "verification_status": "pending"
+        },
+        "purchase_term": {
+          "value": "не определено",
+          "confidence": 0.95,
+          "evidence": "",
+          "source_fact_ids": [],
+          "verification_status": "pending"
+        }
+      },
+      "requirements": [],
+      "need_meta": {
+        "interest_count": 0,
+        "requirements_count": 0,
+        "decision": "NO_NEEDS",
+        "transformations": []
+      }
+    },
+    "outcome": {
+      "call_results": [
+        {
+          "id": "result_1",
+          "value": "назначен повторный звонок",
+          "evidence": "Агент: «Насчёт показа договорюсь, могу вам перезвонить.» Клиент: «Ну, я просто вот могу либо сегодня, либо уже в понедельник.» Агент: «Хорошо, ладно, договорились тогда.»",
+          "confidence": 0.9,
+          "verification_status": "pending"
+        }
+      ],
+      "agreements": [
+        {
+          "id": "agreement_1",
+          "action": "перезвонить для согласования показа",
+          "owner": "агент",
+          "recipient": "клиент",
+          "deadline": "",
+          "channel": "",
+          "status": "promised",
+          "evidence": "Агент: «Насчёт показа договорюсь, могу вам перезвонить.» Клиент: «Ну, я просто вот могу либо сегодня, либо уже в понедельник.» Агент: «Хорошо, ладно, договорились тогда.»",
+          "confidence": 0.9,
+          "verification_status": "pending"
+        },
+        {
+          "id": "agreement_2",
+          "action": "попросить собственника принести ЕГРН и показать его на просмотре",
+          "owner": "агент",
+          "recipient": "клиент",
+          "deadline": "",
+          "channel": "",
+          "status": "promised",
+          "evidence": "Агент: «Если только мы можем показать вам, то есть на просмотр вы приедете, допустим, я собственника могу попросить. Она принесёт, я вам покажу.»",
+          "confidence": 0.85,
+          "verification_status": "pending"
+        }
+      ],
+      "primary_next_step": {
+        "action": "перезвонить для согласования показа; попросить собственника принести ЕГРН и показать на просмотре",
+        "owner": "агент",
+        "deadline": "",
+        "channel": "",
+        "status": "promised",
+        "agreement_ids": [
+          "agreement_1",
+          "agreement_2"
+        ],
+        "confidence": 0.88,
+        "verification_status": "pending"
+      },
+      "outcome_meta": {
+        "result_count": 1,
+        "agreement_count": 2,
+        "decision": "EXTRACTED"
+      }
+    }
+  },
+  {
+    "source_report": "pipeline_report - 2026-07-29T120655.124.json",
+    "transcript": "Оператор:\n— Здравствуйте, оператор Екатерина, слушаю вас.\n— Что? Стоимость 10 млн. Минутотку.\n— Так, 49, корпус 2, студия на восьмом этаже, 31,5, которые, да, по площади?\n— Да, вижу объявление. Галина по объекту работает, с ней соединю.\n— Как могу вас по имени представить?\n— Для себя подбираете или клиенту?\n— И для агента уточню пару моментов. По ипотеке потребуется консультация?\n— Окна куда выходят в квартире?\n— Номер для связи 5585, да, заканчивается контактный у вас?\n— Минутку, пожалуйста.\n\nКлиент:\n— Квартира на Непокорённых, 49, корпус 2. Посмотрите. Стоимость, подскажите, пожалуйста.\n— Угу, угу.\n— Ольга.\n— Себе.\n— Нет, не потребуется.\n— Ну, это вот Галина ответит.\n— Да-да.\n\nНеизвестный спикер:\n— Алло?\n\nОператор:\n— Да, Галина?\n\nАгент:\n— Да, Ольга, здравствуйте. Квартира Непокорённая, 49, корпус 2.\n— Да, есть такая квартира.\n— А-а, значит, у нас прямая продажа, покупали от застройщика. Вот на фото всё, что видите, всё остаётся по бытовой технике, по мебели. то есть квартира хорошо укомплектована, можно её..\n\nКлиент:\n— Хорошо, можно уточнить сразу, там диван диванчик, диван, потом стол. Перечислите, что там есть?\n\nАгент:\n— А-а, диван.\n— Ой, буквально минуточку. Мминуту, буквально минуту. Ага.\n\nНеизвестный спикер:\n— Алло.\n\nНеизвестный спикер:\n— Алло?\n\nНеизвестный спикер:\n— Да вы что, издеваетесь? Как вас заблокировать?\n\nАгент:\n— А, простите, да. Ага.\n— Ещё раз, ага, кухня.\n\nНеизвестный спикер:\n— А вы покупатель или агент? Скажите, пожалуйста.\n\nКлиент:\n— Я не агент, я снимаю квартиру в этом доме.\n\nАгент:\n— А, и хотите купить, да? Значит, там кухня красивая. А далее, ну вот она с этой барной стоечкой: холодильник, телевизор, тумбочка под телевизор, диван. Далее.\n— А-а, шкаф-купе. Э-э, хороший.\n— Там, э-э кладовая есть? Должна быть?\n\nКлиент:\n— Есть комната.\n\nАгент:\n— Есть. Да. Да, она большая кладовая.\n\nКлиент:\n— Так, а-а санузел они совместили?\n\nАгент:\n— Санузел, да, совмещённый.\n\nКлиент:\n— Ага, окна куда выходят?\n\nАгент:\n— Окна выходят. Так, сейчас я вот вам скажу. Ну, на-на внешнюю сторону. Ну, красивая видовая характеристика. Сейчас я вам поточнее скажу. Вот у мен. На дорогучится. Сейчас, сейчас, сейчас-йча-сейас, сейчас я вам скажу.\n— Эа окна выходят вот, а-а, есть даже у нас кусочек. Короче говоря, это закатная сторона. Вот как раз солнце, где садится, а-а, вот эта сторона.\n\nКлиент:\n— А, ну то есть, это не на внешнюю, это получается во двор. Или всё-таки на-на-надо-на дорогу? На внешнюю сторону? Не во одно?\n\nАгент:\n— Нет, не на внешнюю. Ну вот между домов, вот здесь как раз парковочные места все. Нет, не на внешнюю дорогу, нет.\n\nКлиент:\n— Вот закат мне очень нравится, а так я его не будувидеть.\n\nКлиент:\n— Хмм, так, аа всё-таки выходит на ээ, вы утверждаете, чтое на закатную сторону, да?\n\nАгент:\n— Однозначно, у меня вот видео передо мной, как раз солнышко садится.\n\nКлиент:\n— Закат?\n\nКлиент:\n— Не,е не всходит, садится оно, да?\n\nАгент:\n— Ладно, отлично.\n— Садится.\n\nНеизвестный спикер:\n— Мы говорим про закат, восход — это всходит.\n\nАгент:\n— Да-да-.\n\nНеизвестный спикер:\n— А садиться это закат.\n\nКлиент:\n— А-а,, какая парадная?\n\nНеизвестный спикер:\n— Я пойму,какой там вид? Ну, так мы уже не говорим сильно много информации.\n\nКлиент:\n— Ну, хорошо, в начале или в середине дома?\n\nАгент:\n— В серединке.\n\nКлиент:\n— В серединке.\n\nНеизвестный спикер:\n— Прекрасно, прекрасно.\n\nКлиент:\n— Так, и-и-и я её за девять бы купила. Наличкой.\n\nАгент:\n— Ну, скажите продавцу. То есть вы должны просто передать продавцу информацию. Правильно?\n\nАгент:\n— Ну, я поговорю, конечно, но такой большой торг, я даже не уверена. Ну, я свою продавала на 900 скинула.\n\nКлиент:\n— Ну, я понимаю, а-а, какой-то шаг Ольга, да? Ну, какой-то там шаг, не знаю, сразу вы берёте, вы вы только выставили объявление, вы сразу звоните и предлагаете торг на миллион. Мне кажется, это многовато. Ну Просто предложите. Ну, скажем, ну вот за 9 200 бы я купила.сё. Поняла. Вот.\n\nАгент:\n— А вы наличные, да?\n\nКлиент:\n— Да, у меня наличными, я только продала квартиру. Также вот скинулаг.\n\nАгент:\n— Угу.\n— Всё, я отключаю.\n\nКлиент:\n— По поняла, как бы другой разговор.\n\nАгент:\n— Ага.\n\nКлиент:\n— Если что, звоните.\n\nАгент:\n— Угу.\n\nКлиент:\n— Ладно, хорошо.",
+    "facts": {
+      "facts": [
+        {
+          "id": "fact_1",
+          "category": "search_location",
+          "name": "интересуемый объект",
+          "value": "Непокорённых, 49, корп. 2",
+          "normalized_value": "Непокорённых, 49, корпус 2",
+          "speaker": "Клиент",
+          "evidence": "Квартира на Непокорённых, 49, корпус 2. Посмотрите.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_11"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_2",
+          "category": "client_role",
+          "name": "роль клиента",
+          "value": "не агент, снимает квартиру в этом доме",
+          "normalized_value": "частное лицо",
+          "speaker": "Клиент",
+          "evidence": "Я не агент, я снимаю квартиру в этом доме.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_17"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_3",
+          "category": "client_intent",
+          "name": "цель обращения",
+          "value": "купить квартиру",
+          "normalized_value": "купить квартиру",
+          "speaker": "Клиент",
+          "evidence": "я её за девять бы купила.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_31"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_5",
+          "category": "client_finance",
+          "name": "предложенная цена/бюджет",
+          "value": 9000000,
+          "normalized_value": 9000000,
+          "speaker": "Клиент",
+          "evidence": "я её за девять бы купила.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_31"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_6",
+          "category": "object_information",
+          "name": "тип продажи",
+          "value": "прямая продажа, покупали от застройщика",
+          "normalized_value": null,
+          "speaker": "Агент",
+          "evidence": "А-а, значит, у нас прямая продажа, покупали от застройщика.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_22"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_8",
+          "category": "object_information",
+          "name": "санузел",
+          "value": "совмещённый",
+          "normalized_value": null,
+          "speaker": "Агент",
+          "evidence": "Санузел, да, совмещённый.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_26"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_9",
+          "category": "object_information",
+          "name": "кладовая",
+          "value": "есть большая кладовая",
+          "normalized_value": null,
+          "speaker": "Агент",
+          "evidence": "Да, она большая кладовая.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_25"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_10",
+          "category": "object_information",
+          "name": "ориентация окон",
+          "value": "выходят на закатную сторону (между домов, не на внешнюю дорогу)",
+          "normalized_value": null,
+          "speaker": "Агент",
+          "evidence": "Короче говоря, это закатная сторона.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_28"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_12",
+          "category": "agent_commitment",
+          "name": "оператор соединит с Галиной",
+          "value": "соединить с Галиной, она по объекту",
+          "normalized_value": null,
+          "speaker": "Оператор",
+          "evidence": "Галина по объекту работает, с ней соединю.",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_2"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_13",
+          "category": "agent_commitment",
+          "name": "агент обещает переговорить с продавцом",
+          "value": "агент говорит, что поговорит с продавцом",
+          "normalized_value": null,
+          "speaker": "Агент",
+          "evidence": "Ну, я поговорю, конечно, но такой большой торг, я даже не уверена.",
+          "confidence": 0.85,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_40"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        },
+        {
+          "id": "fact_14",
+          "category": "client_question",
+          "name": "вопрос о цене",
+          "value": "Стоимость, подскажите, пожалуйста.",
+          "normalized_value": null,
+          "speaker": "Клиент",
+          "evidence": "Стоимость, подскажите, пожалуйста.",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_11",
+            "turn_2"
+          ],
+          "question_status": "answered",
+          "answer": "10 млн",
+          "answer_speaker": "Оператор",
+          "answer_evidence": "Что? Стоимость 10 млн. Минутотку."
+        },
+        {
+          "id": "fact_15",
+          "category": "client_question",
+          "name": "вопрос об ориентации окон",
+          "value": "Окна куда выходят в квартире?",
+          "normalized_value": null,
+          "speaker": "Клиент",
+          "evidence": "Окна куда выходят в квартире?",
+          "confidence": 0.95,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_14",
+            "turn_28"
+          ],
+          "question_status": "answered",
+          "answer": "Окна выходят на закатную сторону (между домов, не на внешнюю дорогу).",
+          "answer_speaker": "Агент",
+          "answer_evidence": "Короче говоря, это закатная сторона."
+        },
+        {
+          "id": "fact_17",
+          "category": "client_question",
+          "name": "перечислите, что там есть",
+          "value": "Перечислите, что там есть?",
+          "normalized_value": null,
+          "speaker": "Клиент",
+          "evidence": "Хорошо, можно уточнить сразу, там диван диванчик, диван, потом стол. Перечислите, что там есть?",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_20",
+            "turn_24"
+          ],
+          "question_status": "answered",
+          "answer": "Кухня с барной стоечкой; холодильник; телевизор; тумбочка под телевизор; диван; шкаф-купе.",
+          "answer_speaker": "Агент",
+          "answer_evidence": "Ну вот она с этой барной стоечкой: холодильник, телевизор, тумбочка под телевизор, диван. А-а, шкаф-купе."
+        },
+        {
+          "id": "fact_18",
+          "category": "client_preference",
+          "name": "предпочтение вида",
+          "value": "предпочитает вид на закат",
+          "normalized_value": null,
+          "speaker": "Клиент",
+          "evidence": "Вот закат мне очень нравится",
+          "confidence": 0.9,
+          "verification_status": "pending",
+          "source_turn_ids": [
+            "turn_29"
+          ],
+          "question_status": null,
+          "answer": "",
+          "answer_speaker": null,
+          "answer_evidence": ""
+        }
+      ],
+      "quotes": [
+        {
+          "id": "quote_1",
+          "text": "Квартира на Непокорённых, 49, корпус 2. Посмотрите.",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_1"
+          ],
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "quote_2",
+          "text": "Я не агент, я снимаю квартиру в этом доме.",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_2"
+          ],
+          "confidence": 0.95,
+          "verification_status": "pending"
+        },
+        {
+          "id": "quote_4",
+          "text": "Вот закат мне очень нравится",
+          "speaker": "Клиент",
+          "supports_fact_ids": [
+            "fact_18"
+          ],
+          "confidence": 0.9,
+          "verification_status": "pending"
+        }
+      ],
+      "extraction_meta": {
+        "fact_count": 14,
+        "quote_count": 3,
+        "decision": "EXTRACTED"
+      }
+    },
+    "needs": {
+      "attributes": {
+        "interest": [],
+        "funding_source": {
+          "value": "не определено",
+          "confidence": 0.95,
+          "evidence": "",
+          "source_fact_ids": [],
+          "verification_status": "pending"
+        },
+        "purchase_term": {
+          "value": "не определено",
+          "confidence": 0.95,
+          "evidence": "",
+          "source_fact_ids": [],
+          "verification_status": "pending"
+        }
+      },
+      "requirements": [
+        {
+          "id": "req_2",
+          "type": "other_requirement",
+          "value": "вид на закат / ориентация окон на закатную сторону",
+          "confidence": 0.9,
+          "evidence": "Вот закат мне очень нравится",
+          "source_fact_ids": [
+            "fact_18",
+            "fact_15",
+            "fact_10"
+          ],
+          "verification_status": "pending"
+        }
+      ],
+      "need_meta": {
+        "interest_count": 0,
+        "requirements_count": 1,
+        "decision": "EXTRACTED",
+        "transformations": []
+      }
+    },
+    "outcome": {
+      "call_results": [],
+      "agreements": [],
+      "primary_next_step": {
+        "action": "",
+        "owner": "",
+        "deadline": "",
+        "channel": "",
+        "status": "not_defined",
+        "agreement_ids": [],
+        "confidence": 0.925,
+        "verification_status": "pending"
+      },
+      "outcome_meta": {
+        "result_count": 0,
+        "agreement_count": 0,
+        "decision": "NO_OUTCOME"
+      }
+    }
+  }
+]

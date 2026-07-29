@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import regressionCases from "../fixtures/transcription-summary-regression-32-36.json";
 import pipelineReportRegression from "../fixtures/pipeline-report-2026-07-24T062250.414.regression.json";
 import july28Regression from "../fixtures/pipeline-report-2026-07-28T140014.026.regression.json";
+import july29GoldenReports from "../fixtures/pipeline-reports-2026-07-29T120655-122944.regression.json";
 
 const moduleUrl = "/pipeline-lab-v3.html?projectId=project_transcription_summary_module&productName=" +
   encodeURIComponent("Модуль транскрибации и AI-саммари звонков");
@@ -619,7 +620,7 @@ test("Fact Check migrates to the single verdict-only contract and reserves enoug
     return {promptVersion:migrated.promptVersion,maxTokens:migrated.maxTokens,prompt:migrated.prompt,invalidCategory,runtime:runStage.toString(),schemaCategory:FACT_VERDICT_ONLY_JSON_SCHEMA.properties.items.items.properties.corrections.properties.category};
   })()`));
 
-  expect(stage).toMatchObject({ promptVersion: 12, maxTokens: 12000 });
+  expect(stage).toMatchObject({ promptVersion: 13, maxTokens: 12000 });
   expect(stage.prompt).toContain('"items"');
   expect(stage.prompt).toContain("Не возвращай fact_results");
   expect(stage.invalidCategory).toContain('unknown fact category');
@@ -983,7 +984,7 @@ test("Summary синхронизирует пустой primary_next_step с о�
     return {stage:{promptVersion:stage.promptVersion,prompt:stage.prompt},repaired,errors:moduleSummaryGrounding(repaired.value,store)};
   })()`));
 
-  expect(result.stage.promptVersion).toBe(8);
+  expect(result.stage.promptVersion).toBe(9);
   expect(result.stage.prompt).toContain('next_step должен быть ровно "Следующий шаг не согласован."');
   expect(result.repaired).toMatchObject({ count: 1, value: { next_step: "Следующий шаг не согласован." } });
   expect(result.errors).toEqual(expect.not.arrayContaining([expect.objectContaining({ path: "next_step" })]));
@@ -3224,7 +3225,7 @@ test("Fact Agent использует новый root schema, точные ош�
   expect(result.contractCalls).toBe(0);
   expect(result.contractMismatch.output).toMatchObject({ status: "technical_error", error_code: "CONTRACT_CONFIGURATION_ERROR", retry_count: 0 });
   expect(result.schemaEnum).toEqual([
-    "client_identity", "client_role", "client_intent", "object_context", "object_information", "search_location", "search_criteria", "client_finance", "client_question", "client_objection", "client_constraint", "client_preference", "client_motivation", "legal_context", "communication_channel", "agent_commitment", "communication_result", "communication_context", "other_important",
+    "client_identity", "client_role", "client_intent", "object_context", "object_information", "search_location", "search_criteria", "client_finance", "client_question", "client_objection", "client_constraint", "client_preference", "client_motivation", "client_offer", "legal_context", "communication_channel", "agent_commitment", "communication_result", "communication_context", "other_important",
   ]);
   expect(result.uiCategories).toContain("client_identity");
   expect(result.uiCategories).toContain("other_important");
@@ -3299,7 +3300,7 @@ test("Fact Agent v7 сохраняет рабочие факты и локаль
     return {policy,validated,precheck:{hardFail:precheck.hardFail,schemaError:precheck.schemaError},stage:{promptVersion:stage.promptVersion,promptUpdatedAt:stage.promptUpdatedAt,prompt:stage.prompt},report};
   })()`));
 
-  expect(result.stage).toMatchObject({ promptVersion: 8, promptUpdatedAt: "2026-07-29" });
+  expect(result.stage).toMatchObject({ promptVersion: 9, promptUpdatedAt: "2026-07-29" });
   expect(result.stage.prompt).toContain('Верни не более 4 самостоятельных содержательных цитат');
   expect(result.stage.prompt).toContain('один собственник, ДДУ, ипотека Сбербанка, никто не зарегистрирован');
   expect(result.stage.prompt).toContain('верни нейтральный communication_result');
@@ -3535,7 +3536,7 @@ test("архивный Fact Judge v3 остаётся доступен толь�
   expect(result.objectMortgageAsClient).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "object_mortgage_as_client_finance" })]) });
   expect(result.damagedQuote).toMatchObject({ decision: "REVIEW_REQUIRED", rejected_quotes: expect.arrayContaining([expect.objectContaining({ id: "quote_strong", error_type: "not_verbatim" })]) });
   expect(result.conditionalStep).toMatchObject({ decision: "FAIL", rejected_facts: expect.arrayContaining([expect.objectContaining({ error_type: "conditional_step_as_confirmed" })]) });
-  expect(result.prompt.version).toBe(12);
+  expect(result.prompt.version).toBe(13);
   expect(result.prompt.text).toContain('"items"');
   expect(result.prompt.text).toContain("Не возвращай fact_results");
 });
@@ -4997,9 +4998,9 @@ test("Need Judge не может заменить канонический inter
 
   expect(result.invalidError).toContain("corrections.value: invalid correction");
   expect(result.merged).toMatchObject({ decision: "REVIEW_REQUIRED", verified_attributes: { interest: [] }, rejected_attributes: [expect.objectContaining({ value: "Новостройки", verification_status: "rejected" })] });
-  expect(result.schemaProperties.sort()).toEqual(["confidence", "source_fact_ids", "source_turn_ids"]);
+  expect(result.schemaProperties.sort()).toEqual(["confidence", "source_fact_ids", "source_turn_ids", "value"]);
   expect(result.prompt).toMatchObject({ promptVersion: 8 });
-  expect(result.prompt.prompt).toContain('value, normalized_value, category, id и evidence исправлять запрещено');
+  expect(result.prompt.prompt).toContain('Для funding_source и purchase_term разрешено исправлять value');
 });
 
 test("production report 2026-07-23 сохраняет подтверждённый follow-up без ложных warning", async ({ page }) => {
@@ -5485,4 +5486,115 @@ test("Fact Check ограничивает score при пропуске P0 и Ju
   expect(result.computed).toMatchObject({ score: 90, status: "warning" });
   expect(result.oneMissing).toBeLessThanOrEqual(80);
   expect(result.twoMissing).toBeLessThanOrEqual(60);
+});
+
+test("golden reports 2026-07-29: просмотр, юридическая проверка и оффер сохраняют бизнес-смысл", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate((reports) => reports.map((report) => {
+    const runtime = { transcript: report.transcript, __transcript: report.transcript };
+    const policy = applyFactExtractionPolicies(report.facts, runtime);
+    const verifiedFacts = policy.value.facts.map((item) => ({
+      ...item,
+      verified: true,
+      verification_status: "verified",
+      source: "fact_check",
+    }));
+    const verifiedQuotes = policy.value.quotes.map((item) => ({
+      ...item,
+      verified: true,
+      verification_status: "verified",
+      source: "fact_check",
+    }));
+    const needs = normalizeNeedExtractionSemantics(report.needs, {
+      ...runtime,
+      fact_check: { verified_facts: verifiedFacts },
+    });
+    const outcome = validateOutcomeExtractionRoot(report.outcome, {
+      ...runtime,
+      fact_check: { verified_facts: verifiedFacts },
+      need_check: {
+        verified_attributes: needs.attributes,
+        verified_requirements: needs.requirements,
+      },
+    });
+    const verified = (item) => ({ ...item, verified: true, verification_status: "verified" });
+    const conversation = {
+      facts: verifiedFacts,
+      quotes: verifiedQuotes,
+      attributes: {
+        interest: needs.attributes.interest.map(verified),
+        funding_source: verified(needs.attributes.funding_source),
+        purchase_term: verified(needs.attributes.purchase_term),
+      },
+      requirements: needs.requirements.map(verified),
+      call_results: outcome.call_results.map(verified),
+      agreements: outcome.agreements.map(verified),
+      primary_next_step: verified(outcome.primary_next_step),
+    };
+    const business = conversationStoreBusinessContext(conversation);
+    const safeStore = moduleSummaryStoreView({
+      conversation,
+      business_context: business,
+      quality: { decision: "READY" },
+      store_meta: { status: "READY" },
+    });
+    return {
+      sourceReport: report.source_report,
+      policyAudit: policy.audit,
+      facts: verifiedFacts.map((item) => ({
+        category: item.category,
+        name: item.name,
+        value: item.value,
+        normalized_value: item.normalized_value,
+      })),
+      funding: needs.attributes.funding_source.value,
+      requirements: needs.requirements,
+      outcome,
+      business,
+      summaryContext: moduleSummaryPreparedContext(safeStore),
+      nextStep: moduleSummaryNaturalNextStep(conversation),
+      criticalItems: buildCriticalSummaryItems({
+        conversation_store: { conversation, business_context: business },
+      }),
+    };
+  }), july29GoldenReports);
+
+  const [viewing, legal, offer] = result;
+
+  expect(viewing.sourceReport).toContain("T122944.450");
+  expect(viewing.facts).not.toContainEqual(expect.objectContaining({ category: "search_location" }));
+  expect(viewing.funding).toBe("продажа своей квартиры");
+  expect(viewing.requirements).not.toContainEqual(expect.objectContaining({ type: "search_location" }));
+  expect(viewing.business.critical_requirements.join(" ")).not.toMatch(/не смущает/i);
+  expect(viewing.outcome.agreements.filter((item) => /показ|просмотр/i.test(item.action))).toHaveLength(1);
+  expect(viewing.outcome.primary_next_step.owner).toBe("оба");
+  expect(viewing.outcome.primary_next_step.channel).toBe("");
+  expect(viewing.nextStep).toMatch(/Агент позвонит.*Клиент и агент проведут просмотр/i);
+  expect(viewing.nextStep).not.toMatch(/затем позвон/i);
+
+  expect(legal.sourceReport).toContain("T121642.667");
+  expect(legal.business.client_goal).toMatch(/апартамент/i);
+  expect(legal.business.purchase_purpose).toMatch(/для себя/i);
+  expect(JSON.stringify(legal.business.important_questions)).toMatch(/предыдущ|ЕГРН/i);
+  expect(legal.outcome.agreements).toContainEqual(expect.objectContaining({ status: "conditional" }));
+  expect(legal.outcome.primary_next_step.action).toMatch(/перезвонить.*показ/i);
+  expect(legal.outcome.primary_next_step.action).not.toMatch(/ЕГРН/i);
+  expect(legal.outcome.primary_next_step.deadline).toBe("");
+  expect(legal.outcome.primary_next_step.channel).toBe("");
+
+  expect(offer.sourceReport).toContain("T120655.124");
+  expect(offer.facts).toContainEqual(expect.objectContaining({
+    category: "client_offer",
+    normalized_value: 9200000,
+  }));
+  expect(offer.funding).toBe("наличные / депозит");
+  expect(JSON.stringify(offer.facts)).toMatch(/собственная квартира уже продана/i);
+  expect(offer.business.client_offer).toBe("9200000");
+  expect(offer.outcome.primary_next_step.action).toMatch(/9,2 млн ₽/i);
+  expect(offer.nextStep).toMatch(/9,2 млн ₽/i);
+  expect(JSON.stringify(offer.summaryContext)).not.toMatch(/барн|холодильник|диван|шкаф-купе|Непокорённых/i);
+  expect(offer.summaryContext.best_quote_candidates).toContainEqual(expect.stringMatching(/9 200/i));
+  expect(offer.criticalItems).toContainEqual(expect.objectContaining({ id: "critical-client-offer" }));
+  expect(offer.criticalItems).toContainEqual(expect.objectContaining({ id: "critical-funding" }));
+  expect(offer.criticalItems).toContainEqual(expect.objectContaining({ id: "critical-next-step" }));
 });
