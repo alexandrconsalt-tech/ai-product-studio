@@ -13,6 +13,10 @@ describe("13-stage direct production runtime regression", () => {
     const audit = section("function stageContextAudit", "function attachReviewerScores");
     const outcomeDependency = section("function outcomeDependencyError", "const OUTCOME_CHECK_QUALITY_KEYS");
     const needFacts = section("function verifiedNeedFacts", "function recoverLegacyNeedInterestStrings");
+    const needNormalizer = section(
+      "function normalizeNeedExtractionSemantics",
+      "function validateNeedExtractionRoot",
+    );
     const runStage = section("async function runStage", "function buildPipelineExecutionSummary");
 
     expect(audit).toContain("needs:['transcript','facts']");
@@ -21,6 +25,8 @@ describe("13-stage direct production runtime regression", () => {
     expect(outcomeDependency).not.toMatch(/fact_check|need_check|verified_/);
     expect(needFacts).toContain("moduleOutputList(ctx&&ctx.facts,['facts'])");
     expect(needFacts).not.toContain("fact_check");
+    expect(needNormalizer).toContain("verification_status:'extracted'");
+    expect(needNormalizer).not.toContain("verification_status:'pending'");
     expect(runStage).not.toContain("UPSTREAM_FACT_CHECK_FAILED");
   });
 

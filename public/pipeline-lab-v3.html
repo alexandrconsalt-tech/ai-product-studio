@@ -9751,7 +9751,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
   const plotOnly=findClient(/(?:ищу|нужен|рассматриваю).*участок/);
   const addInterest=(label,fact)=>{
     if(out.attributes.interest.some(item=>item.value===label)) return;
-    out.attributes.interest.push({value:label,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
+    out.attributes.interest.push({value:label,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'extracted'});
   };
   out.attributes.interest=out.attributes.interest.filter(item=>{
     if(item.value==='Новостройки'&&!explicitNewBuild) return false;
@@ -9763,15 +9763,15 @@ function normalizeNeedExtractionSemantics(value,ctx){
   else if(mortgageInProcess) addInterest('Ипотека',mortgageInProcess);
   else if(mortgageInterest) addInterest('Ипотека',mortgageInterest);
   if(futureSale){
-    out.attributes.funding_source={value:'продажа своей квартиры',confidence:futureSale.confidence,evidence:String(futureSale.evidence||''),source_fact_ids:[futureSale.id],verification_status:'pending'};
+    out.attributes.funding_source={value:'продажа своей квартиры',confidence:futureSale.confidence,evidence:String(futureSale.evidence||''),source_fact_ids:[futureSale.id],verification_status:'extracted'};
   }else if(approvedMortgage){
-    out.attributes.funding_source={value:'ипотека одобрена',confidence:approvedMortgage.confidence,evidence:String(approvedMortgage.evidence||''),source_fact_ids:[approvedMortgage.id],verification_status:'pending'};
+    out.attributes.funding_source={value:'ипотека одобрена',confidence:approvedMortgage.confidence,evidence:String(approvedMortgage.evidence||''),source_fact_ids:[approvedMortgage.id],verification_status:'extracted'};
   }else if(mortgageInProcess){
-    out.attributes.funding_source={value:'ипотека в процессе',confidence:mortgageInProcess.confidence,evidence:String(mortgageInProcess.evidence||''),source_fact_ids:[mortgageInProcess.id],verification_status:'pending'};
+    out.attributes.funding_source={value:'ипотека в процессе',confidence:mortgageInProcess.confidence,evidence:String(mortgageInProcess.evidence||''),source_fact_ids:[mortgageInProcess.id],verification_status:'extracted'};
   }else if(explicitCash){
-    out.attributes.funding_source={value:'наличные / депозит',confidence:explicitCash.confidence,evidence:String(explicitCash.evidence||''),source_fact_ids:[explicitCash.id],verification_status:'pending'};
+    out.attributes.funding_source={value:'наличные / депозит',confidence:explicitCash.confidence,evidence:String(explicitCash.evidence||''),source_fact_ids:[explicitCash.id],verification_status:'extracted'};
   }else if(refusalMortgage||ambiguousFunding){
-    out.attributes.funding_source={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'};
+    out.attributes.funding_source={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'extracted'};
   }
   if(String(out.attributes.funding_source.value)!==originalFunding){
     semanticTransformations.push({type:'RECOVER_FUNDING_SOURCE',from:originalFunding,to:String(out.attributes.funding_source.value),source_fact_ids:toList(out.attributes.funding_source.source_fact_ids)});
@@ -9781,7 +9781,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
     const sourceText=normalizedSemanticText([term.evidence,...term.source_fact_ids.map(id=>factText(facts.find(fact=>fact.id===id)||{}))].join(' '));
     const viewingOnly=/(просмотр|встреч|созвон|перезвон|показ)/.test(sourceText)&&!/(срок покуп|срок сделк|купить|въехать|оформить сделк)/.test(sourceText);
     const sellerConstraint=/(?:продавец|собственник|выход на сделк|готов(?:ы|ность) к сделк|разрешени[а-яё]* по военн[а-яё]* ипотек).*(?:конц[а-яё]* август|начал[а-яё]* сентябр|не ранее|сможет|возможен)|(?:конц[а-яё]* август|начал[а-яё]* сентябр|не ранее).*(?:продавец|собственник|выход на сделк|готов(?:ы|ность) к сделк)/.test(sourceText);
-    if(viewingOnly||sellerConstraint) out.attributes.purchase_term={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'pending'};
+    if(viewingOnly||sellerConstraint) out.attributes.purchase_term={value:'не определено',confidence:1,evidence:'',source_fact_ids:[],verification_status:'extracted'};
   }
   const byId=new Map(facts.map(fact=>[fact.id,fact]));
   const agentCommitmentText=normalizedSemanticText(facts.filter(fact=>fact.category==='agent_commitment').map(factText).join(' '));
@@ -9810,7 +9810,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
     const used=new Set(out.requirements.map(item=>item.id));
     let index=1;while(used.has('requirement_'+index)) index++;
     const normalizedValue=fact.normalized_value??fact.value;
-    out.requirements.push({id:'requirement_'+index,type,value:normalizedValue,normalized_value:normalizedValue,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'pending'});
+    out.requirements.push({id:'requirement_'+index,type,value:normalizedValue,normalized_value:normalizedValue,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'extracted'});
   };
   clientFacts.forEach(fact=>{
     const text=factText(fact),identity=normalizedSemanticText([fact.category,fact.name].join(' '));
