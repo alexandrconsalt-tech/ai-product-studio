@@ -8906,7 +8906,7 @@ function applyFactExtractionPolicies(value,ctx){
   const wantedLocationTurn=clientTranscriptTurns.find(turn=>/саварьев/.test(normalizedSemanticText(turn.cleanText))&&/(?:где\s+я\s+хочу\s+купить|хочу\s+купить)/.test(normalizedSemanticText(turn.cleanText)));
   if(wantedLocationTurn&&!facts.some(item=>/саварьев/.test(normalizedSemanticText([item.value,item.evidence].join(' ')))&&item.speaker==='Клиент')) addRecoveredFact('client_requirement','Саварьево','Клиент',wantedLocationTurn);
   const rentalTurn=transcriptTurns.find(turn=>/(?:аренда была|раньше сдавал[а-яё]*|сдавал[а-яё]* в аренду)/.test(normalizedSemanticText(turn.cleanText)));
-  if(rentalTurn&&!facts.some(item=>/(?:аренда была|раньше сдавал[а-яё]*|сдавал[а-яё]* в аренду)/.test(normalizedSemanticText([item.value,item.evidence].join(' '))))) addRecoveredFact('agent_information','раньше сдавалась','Третье лицо',rentalTurn);
+  if(rentalTurn&&!facts.some(item=>/(?:аренда была|раньше сдавал[а-яё]*|сдавал[а-яё]* в аренду)/.test(normalizedSemanticText(item.value)))) addRecoveredFact('agent_information','раньше сдавалась','Третье лицо',rentalTurn);
   const seenQuotes=new Set();
   const quotes=toList(value.quotes).filter(item=>{
     if(factContainsPii(item)||toList(item&&item.supports_fact_ids).some(id=>removedIds.has(id))) return false;

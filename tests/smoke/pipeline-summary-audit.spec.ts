@@ -223,6 +223,14 @@ test("Fact→Need восстанавливает пропущенные крит
         evidence: "Идеально 46. У меня у самой 45.",
         source_turn_ids: ["turn_3"],
         confidence: 0.9,
+      }, {
+        id: "fact_2",
+        type: "agent_information",
+        value: "квартира пустая, прописанных нет, без обременений",
+        speaker: "Третье лицо",
+        evidence: "Там сейчас никто не проживает. Аренда была. Квартира пустая, прописанных никого нет, без обременений.",
+        source_turn_ids: ["turn_4"],
+        confidence: 0.9,
       }],
       quotes: [],
     }, { __transcript: transcript });
