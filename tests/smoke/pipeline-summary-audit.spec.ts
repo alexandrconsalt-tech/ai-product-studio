@@ -52,10 +52,18 @@ test("Conversation Store собирается из сырых Extractor и пр�
       __run_id: "run-store",
       __transcript_hash: "transcript-hash",
       __pipeline_configuration_hash: "pipeline-hash",
-      __transcript: "Клиент: Покупаю за наличные.",
+      __transcript: "Клиент: По поводу денег, у меня деньги на счету.",
       facts: {
-        facts: [{ id: "fact-1", value: "Покупка за наличные", verification_status: "extracted" }],
-        quotes: [{ id: "quote-1", text: "Покупаю за наличные.", verification_status: "extracted" }],
+        facts: [{
+          id: "fact-1",
+          type: "client_finance",
+          value: "наличные / депозит",
+          speaker: "Клиент",
+          evidence: "По поводу денег, у меня деньги на счету.",
+          source_turn_ids: ["turn-1"],
+          confidence: 0.99,
+        }],
+        quotes: [],
       },
       needs: {
         status: "technical_error",
@@ -78,8 +86,13 @@ test("Conversation Store собирается из сырых Extractor и пр�
     return buildConversationStoreV1(ctx);
   });
   expect(result.conversation.facts).toEqual([
-    expect.objectContaining({ id: "fact-1", verification_status: "extracted" }),
+    expect.objectContaining({ id: "fact-1", type: "client_finance" }),
   ]);
+  expect(result.conversation.attributes).toEqual({
+    interest: [],
+    funding_source: "наличные / депозит",
+    purchase_term: "не определено",
+  });
   expect(result.conversation.partial).toBe(true);
   expect(result.conversation.source_errors).toEqual(["needs"]);
   expect(result.store_meta.status).toBe("READY_WITH_WARNINGS");
@@ -176,9 +189,9 @@ test("CRM сохраняет валидный Summary даже без резул
       conversation_store: {
         conversation: {
           attributes: {
-            interest: [{ value: "Новостройки" }],
-            funding_source: { value: "не определено" },
-            purchase_term: { value: "не определено" },
+            interest: ["Новостройки"],
+            funding_source: "наличные / депозит",
+            purchase_term: "не определено",
           },
         },
       },
@@ -193,6 +206,11 @@ test("CRM сохраняет валидный Summary даже без резул
     payload: {
       summary: {
         conversation_result: "Клиент Александр запросил расчёт расходов.",
+      },
+      customer_needs: {
+        interest: ["Новостройки"],
+        funding_source: "наличные / депозит",
+        purchase_term: "не определено",
       },
       quality: { score: null, status: "NOT_EVALUATED" },
     },

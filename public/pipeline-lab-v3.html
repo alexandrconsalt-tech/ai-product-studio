@@ -642,38 +642,35 @@ Conversation Store (проверенные факты/потребности/р�
   ];
 }
 
-//  ДЕФОЛТНЫЙ ПАЙПЛАЙН — СЕМНАДЦАТЬ ЭТАПОВ (stages 1-9 rework, 2026-07-08)
-//  Nexara → Валидация → Факты → Проверка фактов → Потребности → Проверка
-//  потребностей → Результат звонка → Проверка результата → Conversation
-//  Store → Саммари → 5 специализированных проверщиков → Summary Quality
-//  Gate → CRM. Этапы 3-9 переведены на схему {value,confidence,evidence,
-//  verification_status}; Conversation Store — единственный источник данных
-//  для Summary и для 5 судей (не сырые facts/needs/outcome). См. CLAUDE.md.
+//  АКТИВНЫЙ 13-ЭТАПНЫЙ ПАЙПЛАЙН
+//  Валидация → Facts → Needs → Outcome → Conversation Store → Summary →
+//  5 независимых Summary Judge → Quality Gate → CRM. Store принимает прямые
+//  валидные результаты трёх Extractor и поддерживает частичный контекст.
 // ═══════════════════════════════════════════════════════════════════════════
-const FACT_CATEGORY_VALUES=Object.freeze([
-  'client_identity','client_role','client_intent','object_context','object_information',
-  'search_location','search_criteria','client_finance','client_question','client_objection','client_constraint',
-  'client_preference','client_motivation','client_offer','legal_context','communication_channel','agent_commitment',
-  'communication_result','communication_context','other_important'
+const FACT_TYPE_VALUES=Object.freeze([
+  'client_goal','client_need','client_finance','client_question','client_objection','client_constraint',
+  'client_preference','client_motivation','object_fact','legal_context','agreement_signal','other_important'
 ]);
-const FACT_CATEGORIES=new Set(FACT_CATEGORY_VALUES);
+// Имена оставлены как внутренние aliases для parser diagnostics сохранённых
+// отчётов. Активный response contract использует только поле `type`.
+const FACT_CATEGORY_VALUES=FACT_TYPE_VALUES;
+const FACT_CATEGORIES=new Set(FACT_TYPE_VALUES);
 const FACT_VALUE_JSON_SCHEMA={anyOf:[
-  {type:'string'},{type:'number'},{type:'boolean'},{type:'null'},
+  {type:'string'},{type:'number'},{type:'boolean'},
   {type:'array',items:{type:'string'}},{type:'array',items:{type:'number'}}
 ]};
 const FACT_EXTRACTION_JSON_SCHEMA={
-  type:'object',additionalProperties:false,required:['facts','quotes','extraction_meta'],properties:{
-    facts:{type:'array',items:{type:'object',additionalProperties:false,required:['id','category','name','value','normalized_value','speaker','evidence','confidence','verification_status','source_turn_ids','question_status','answer','answer_speaker','answer_evidence'],properties:{
-      id:{type:'string',minLength:1},category:{type:'string',enum:FACT_CATEGORY_VALUES},name:{type:'string',minLength:1},value:FACT_VALUE_JSON_SCHEMA,normalized_value:FACT_VALUE_JSON_SCHEMA,
-      speaker:{type:'string',enum:['Клиент','Агент','Оператор','Третье лицо']},evidence:{type:'string',minLength:1},confidence:{type:'number',minimum:0,maximum:1},verification_status:{type:'string',enum:['extracted']},
-      source_turn_ids:{type:'array',items:{type:'string'}},question_status:{type:['string','null'],enum:['answered','partially_answered','unanswered',null]},answer:{type:'string'},answer_speaker:{type:['string','null'],enum:['Агент','Оператор',null]},answer_evidence:{type:'string'}
+  type:'object',additionalProperties:false,required:['facts','quotes'],properties:{
+    facts:{type:'array',items:{type:'object',additionalProperties:false,required:['id','type','value','speaker','evidence','source_turn_ids','confidence'],properties:{
+      id:{type:'string',minLength:1},type:{type:'string',enum:FACT_TYPE_VALUES},value:FACT_VALUE_JSON_SCHEMA,
+      speaker:{type:'string',enum:['Клиент','Агент','Оператор','Третье лицо']},evidence:{type:'string',minLength:1},
+      source_turn_ids:{type:'array',items:{type:'string',minLength:1}},confidence:{type:'number',minimum:0,maximum:1}
     }}},
-    quotes:{type:'array',items:{type:'object',additionalProperties:false,required:['id','text','speaker','supports_fact_ids','confidence','verification_status'],properties:{
-      id:{type:'string',minLength:1},text:{type:'string',minLength:1},speaker:{type:'string',enum:['Клиент']},supports_fact_ids:{type:'array',items:{type:'string'}},confidence:{type:'number',minimum:0,maximum:1},verification_status:{type:'string',enum:['extracted']}
-    }}},
-    extraction_meta:{type:'object',additionalProperties:false,required:['fact_count','quote_count','decision'],properties:{
-      fact_count:{type:'integer',minimum:0},quote_count:{type:'integer',minimum:0},decision:{type:'string',enum:['EXTRACTED','NO_FACTS']}
-    }}
+    quotes:{type:'array',items:{type:'object',additionalProperties:false,required:['id','text','speaker','supports_fact_ids','source_turn_ids','confidence'],properties:{
+      id:{type:'string',minLength:1},text:{type:'string',minLength:1},speaker:{type:'string',enum:['Клиент']},
+      supports_fact_ids:{type:'array',items:{type:'string'}},source_turn_ids:{type:'array',items:{type:'string',minLength:1}},
+      confidence:{type:'number',minimum:0,maximum:1}
+    }}}
   }
 };
 
@@ -2190,6 +2187,11 @@ function decisionToScore(decision){
 function stageScoreFromOutput(stage, rep){
   const out=rep.output||{};
   if(isSummaryNewStage(stage)) return null;
+  if(stage&&stage.codeFn==='summaryQualityGate'){
+    return typeof out.summary_quality_score==='number'&&Number.isFinite(out.summary_quality_score)
+      ? out.summary_quality_score
+      : null;
+  }
   // Заблокированный каскадом этап не выполнялся — у него нет оценки,
   // «Оценка: 100%» в шапке карточки вводила в заблуждение.
   if(String(out.status||'').toUpperCase()==='NOT_RUN'||String(out.decision||'').toUpperCase()==='NOT_RUN') return null;
@@ -2311,19 +2313,23 @@ function buildStageMeta(stage, rep){
 function stageContextAudit(stage,ctx){
   const key=String(stage&&stage.outKey||'');
   const groups={
-    facts:['transcript'],fact_check:['transcript','facts'],needs:['transcript','verified_facts'],need_check:['transcript','verified_facts','needs'],
-    outcome:['transcript','verified_facts','verified_needs'],outcome_check:['transcript','verified_facts','verified_needs','outcome'],
-    conversation_store:['verified_facts','verified_needs','outcome'],summary:['conversation'],truth_check:['conversation','summary'],
-    critical_completeness_check:['conversation','summary'],agent_utility_check:['conversation','summary'],action_check:['conversation','summary'],presentation_check:['summary']
+    facts:['transcript'],needs:['transcript','facts'],outcome:['transcript','facts'],
+    conversation_store:['facts','needs','outcome'],summary:['conversation','transcript'],
+    truth_check:['conversation','summary','transcript'],critical_completeness_check:['conversation','summary','transcript'],
+    agent_utility_check:['conversation','summary','transcript'],action_check:['conversation','summary','transcript'],
+    presentation_check:['conversation','summary']
   };
   const required=groups[key]||[];
   const resolved={
     transcript:Boolean(String(transcriptText(ctx)||'').trim()),facts:Boolean(ctx&&ctx.facts),needs:Boolean(ctx&&ctx.needs),
-    verified_facts:Boolean(ctx&&ctx.fact_check&&Array.isArray(ctx.fact_check.verified_facts)),
-    verified_needs:Boolean(ctx&&ctx.need_check&&(Array.isArray(ctx.need_check.verified_requirements)||ctx.need_check.verified_attributes)),
     outcome:Boolean(ctx&&ctx.outcome),conversation:Boolean(ctx&&(ctx.conversation_store||ctx.conversation)),summary:Boolean(ctx&&ctx.summary)
   };
-  return {required_context_keys:required,resolved_context_keys:Object.fromEntries(required.map(item=>[item,Boolean(resolved[item])]))};
+  const optional=key==='outcome'?['needs']:[];
+  return {
+    required_context_keys:required,
+    optional_context_keys:optional,
+    resolved_context_keys:Object.fromEntries([...required,...optional].map(item=>[item,Boolean(resolved[item])]))
+  };
 }
 
 function attachReviewerScores(stageReports){
@@ -2717,14 +2723,28 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
     prepared=prepared.replace(/(?:до|не более|максимум|≤)\s*\d{3,4}\s*символ(?:ов|а)?/gi,'не более '+SUMMARY_MAX_LENGTH+' символов');
   }
   if(kind==='facts' && !checkGroup){
-    prepared+=factExtractionContractAppendix();
+    prepared=`Ты — Fact Agent пайплайна анализа звонков по недвижимости.
+Извлеки только явно подтверждённые атомарные рабочие факты и значимые дословные цитаты клиента.
+Верни строго JSON без markdown:
+{"facts":[{"id":"fact_1","type":"client_goal","value":"...","speaker":"Клиент","evidence":"точный фрагмент реплики","source_turn_ids":["turn_1"],"confidence":0.98}],"quotes":[]}
+
+Допустимые type: ${FACT_TYPE_VALUES.join(', ')}.
+Поля старой архитектуры category, name, normalized_value, verification_status, question_status, answer, answer_speaker, answer_evidence и extraction_meta запрещены.
+Не извлекай имя клиента, телефон, код объекта, этаж, служебные действия оператора и технические сведения карточки без самостоятельной рабочей ценности.
+Сохраняй цель, финансирование, требования, ограничения, вопросы, возражения, юридически значимые сведения и сигналы договорённости.
+Фраза о деньгах на счёте означает client_finance со значением "наличные / депозит"; помощь родителей сама по себе не является отдельным справочным источником средств.
+evidence и quote.text должны быть фрагментами транскрипции. Допускай несущественные различия STT при локальной проверке, если смысл и реплика однозначно совпадают.
+Каждая цитата содержит id, text, speaker="Клиент", supports_fact_ids, source_turn_ids и confidence.
+
+Транскрипция:
+{{transcript}}`;
   }
   if(checkGroup==='fact_check'){
     prepared=prepared.replace(/•\s*при малейшем сомнении снижать оценку;?/gi,'');
     prepared+='\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT JUDGE ИМЕЕТ ПРИОРИТЕТ:\nВерни только {"items":[{"id":"входной id","verdict":"verified|rejected|needs_correction","reason":"до 6 слов","confidence":0..1,"corrections":{}}],"overall_confidence":0..1,"warnings":[]}. Каждый fact/quote id классифицируй ровно один раз. Не возвращай verified_facts/rejected_facts, missing_critical_facts, исходные объекты, value, evidence, score, status или decision. Пропущенные критические факты кратко перечисляй только в warnings. corrections для verified/rejected пуст; для needs_correction разрешены value, normalized_value, speaker, category, source_turn_ids, confidence. category разрешено исправлять только на: '+FACT_CATEGORY_VALUES.join(', ')+'. Минимальная площадь остаётся client_constraint, возражение — client_objection; hard_constraint, main_objection и budget_max запрещены как category Fact Agent. id/evidence запрещены. Отличай неподтверждённый вывод от факта, подтверждённого контекстом. Конкретный закрытый вопрос агента о требовании и непосредственно следующий однозначный ответ клиента «да/конечно/верно» подтверждают контекст, даже если клиент не повторяет термин. Самостоятельный вопрос клиента является допустимым фактом только в category="client_question". Если факт отклонён, цитата, которая ссылается только на него, также не может быть verified. Явная опечатка в value или normalized_value (например, «апартамерам» вместо «апартаментам») требует needs_correction и не может получить verified. Факт с несколькими самостоятельными смыслами требует needs_correction либо rejected; частично совпадающие договорённости считаются semantic duplicate, если не добавляют отдельные действие, срок, канал или итог.';
   }
   if(kind==='needs' && !checkGroup){
-    prepared+='\n\n---\nПРИОРИТЕТ ИСТОЧНИКОВ NEED AGENT:\nИспользуй исходные ctx.facts.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check и verified_facts. Для funding_source и purchase_term используй только канонические значения нового контракта. Требования клиента храни в requirements; данные карточки конкретного объекта туда не переноси.';
+    prepared+='\n\n---\nПРИОРИТЕТ ИСТОЧНИКОВ NEED AGENT:\nИспользуй исходные ctx.facts.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check и verified_facts. Для funding_source и purchase_term используй только канонические значения нового контракта. Фразы «деньги на счёте», «деньги лежат на счёте» и эквивалентные им означают funding_source.value="наличные / депозит". Фраза о покупке родителями сама по себе не создаёт отдельное значение funding_source. Требования клиента храни в requirements; данные карточки конкретного объекта туда не переноси.';
     prepared+=needExtractionContractAppendix();
   }
   if(checkGroup==='need_check'){
@@ -2764,7 +2784,7 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
   }
   const probe=text.slice(0, Math.min(240, text.length)).trim();
   const transcriptPresent=!!probe && prepared.includes(probe);
-  if(transcriptPresent) return {prompt:prepared, transcriptInjected:['facts','outcome'].includes(stage.outKey), transcriptPresent:true,resolvedPromptContainsTranscript:true};
+  if(transcriptPresent) return {prompt:prepared, transcriptInjected:['facts','needs','outcome'].includes(stage.outKey), transcriptPresent:true,resolvedPromptContainsTranscript:true};
   return {
     prompt:prepared+'\n\n---\nПОЛНАЯ ТРАНСКРИПЦИЯ ДЛЯ ЭТОГО ЭТАПА:\n'+text,
     transcriptInjected:true,
@@ -2774,7 +2794,7 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
 }
 
 function factExtractionContractAppendix(){
-  return '\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT AGENT:\nДопустимые category: '+factCategoryPromptBlock()+'.\nИзвлекай только атомарные факты, вопросы, возражения, ограничения и значимые цитаты. Самостоятельный вопрос клиента сохраняй только как category="client_question" и не представляй его как подтверждённый ответ. Если в диалоге есть ответ, извлекай ответ отдельным атомарным фактом. Конкретный закрытый вопрос агента о требовании (например, «если это ИЖС, да?») и непосредственно следующий однозначный утвердительный ответ клиента образуют факт category="search_criteria"; evidence остаётся точной репликой клиента. Цитата должна ссылаться на совместимый извлечённый факт. Проверяй содержательные ответы клиента и не делай более узкий вывод, чем подтверждает транскрипция. Не отклоняй понятный факт только из-за локального повреждения STT, если смысл подтверждается соседними репликами, повтором или уточнением.';
+  return '\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT AGENT:\nВерни только {"facts":[{"id":"fact_1","type":"client_goal","value":"...","speaker":"Клиент","evidence":"точный фрагмент","source_turn_ids":["turn_1"],"confidence":0.98}],"quotes":[]}.\nДопустимые type: '+FACT_TYPE_VALUES.map(value=>'"'+value+'"').join(', ')+'. Поля category, name, normalized_value, verification_status, question_status, answer, answer_speaker, answer_evidence и extraction_meta запрещены. Не извлекай имя, телефон, код объекта, этаж и технические данные карточки без самостоятельной рабочей ценности. Деньги на счёте — client_finance со значением "наличные / депозит". Evidence может содержать несущественные STT-различия; не удаляй понятный факт, подтверждённый полной репликой.';
 }
 
 function moduleGenericCheck(kind, raw){
@@ -4640,19 +4660,20 @@ function businessContextSemanticDedupe(values){
 function conversationStoreBusinessContext(conversation){
   const facts=toList(conversation.facts),requirements=toList(conversation.requirements),results=toList(conversation.call_results),agreements=toList(conversation.agreements);
   const factTextValue=item=>String(item&&(item.normalized_value??item.value)||'').trim();
-  const pickFact=(categories,rx=null)=>facts.find(item=>categories.includes(item&&item.category)&&(!rx||rx.test(normalizedSemanticText([item.name,item.value,item.evidence].join(' ')))));
-  const clientGoal=pickFact(['client_intent','client_motivation'])||pickFact(['communication_context'],/(?:цель|обращ|покуп|просмотр|аренд|инвест)/);
+  const factType=item=>String(item&&item.type||item&&item.category||'');
+  const pickFact=(categories,rx=null)=>facts.find(item=>categories.includes(factType(item))&&(!rx||rx.test(normalizedSemanticText([item.name,item.value,item.evidence].join(' ')))));
+  const clientGoal=pickFact(['client_goal','client_intent','client_motivation'])||pickFact(['communication_context'],/(?:цель|обращ|покуп|просмотр|аренд|инвест)/);
   const clientIdentity=pickFact(['client_identity']);
   const meaningfulRole=pickFact(['client_role'],/(?:агент покупател|представител|доверенн)/);
-  const purpose=pickFact(['client_motivation','client_intent','client_preference','client_role'],/(?:для себя|родствен|родител|аренд|сдач|инвест)/);
+  const purpose=pickFact(['client_motivation','client_goal','client_intent','client_preference','client_role'],/(?:для себя|родствен|родител|аренд|сдач|инвест)/);
   const offer=pickFact(['client_offer']);
   const significantObjectFacts=facts.filter(item=>item&&item.category==='object_information'&&/(?:мебел.*техник|техник.*мебел)/.test(normalizedSemanticText([item.name,item.value,item.evidence].join(' '))));
   const criticalRequirements=[
     ...requirements.filter(item=>!['search_location'].includes(item&&item.type)),
-    ...facts.filter(item=>['search_criteria','client_preference'].includes(item&&item.category)),
+    ...facts.filter(item=>['client_need','client_constraint','client_preference','search_criteria'].includes(factType(item))),
     ...significantObjectFacts
   ].map(factTextValue).filter(Boolean);
-  const importantQuestions=facts.filter(item=>item&&item.category==='client_question').map(item=>({
+  const importantQuestions=facts.filter(item=>factType(item)==='client_question').map(item=>({
     question:factTextValue(item)||String(item.evidence||''),
     status:['answered','partially_answered','unanswered'].includes(item.question_status)?item.question_status:'unanswered',
     answer:String(item.answer||''),
@@ -4671,11 +4692,11 @@ function conversationStoreBusinessContext(conversation){
     purchase_purpose:purpose&&/(?:для себя|родствен|родител|аренд|сдач|инвест)/.test(normalizedSemanticText([purpose.value,purpose.evidence].join(' ')))?String(purpose.value||purpose.evidence||'').trim():factTextValue(purpose),
     client_offer:factTextValue(offer),
     critical_requirements:businessContextSemanticDedupe(criticalRequirements).slice(0,3),
-    financing:businessContextSemanticDedupe([String(conversation.attributes&&conversation.attributes.funding_source&&conversation.attributes.funding_source.value||''),...facts.filter(item=>item&&item.category==='client_finance'&&/(?:родител|деньг.*на счет|деньг.*на счёт|полн.*сумм|наличн|депозит|прода|продан|покупател)/.test(normalizedSemanticText([item.name,item.value,item.evidence].join(' ')))).map(factTextValue)]).join('; '),
-    purchase_term:String(conversation.attributes&&conversation.attributes.purchase_term&&conversation.attributes.purchase_term.value||''),
+    financing:businessContextSemanticDedupe([String(conversation.attributes&&conversation.attributes.funding_source||''),...facts.filter(item=>factType(item)==='client_finance'&&/(?:родител|деньг.*на счет|деньг.*на счёт|полн.*сумм|наличн|депозит|прода|продан|покупател)/.test(normalizedSemanticText([item.name,item.value,item.evidence].join(' ')))).map(factTextValue)]).join('; '),
+    purchase_term:String(conversation.attributes&&conversation.attributes.purchase_term||''),
     important_questions:importantQuestions,
-    objections:businessContextSemanticDedupe(facts.filter(item=>item&&item.category==='client_objection').map(factTextValue)),
-    constraints:businessContextSemanticDedupe(facts.filter(item=>item&&['client_constraint','legal_context'].includes(item.category)).map(factTextValue)),
+    objections:businessContextSemanticDedupe(facts.filter(item=>factType(item)==='client_objection').map(factTextValue)),
+    constraints:businessContextSemanticDedupe(facts.filter(item=>['client_constraint','legal_context'].includes(factType(item))).map(factTextValue)),
     client_reaction:facts.filter(item=>item&&['communication_result','communication_context'].includes(item.category)&&/(?:устраива|соглас|смуща|высок|готов|не готов)/.test(normalizedSemanticText([item.name,item.value,item.evidence].join(' ')))).map(factTextValue).filter(Boolean),
     call_result:results.map(item=>factTextValue(item)).filter(Boolean).join('; '),
     next_steps:nextSteps
@@ -5034,9 +5055,10 @@ function buildConversationStoreV1(ctx){
   const factsSource=ctx&&ctx.facts&&typeof ctx.facts==='object'?ctx.facts:null;
   const needsSource=ctx&&ctx.needs&&typeof ctx.needs==='object'?ctx.needs:null;
   const outcomeSource=ctx&&ctx.outcome&&typeof ctx.outcome==='object'?ctx.outcome:null;
-  if(!factsSource||factsSource.status==='technical_error') source_errors.push('facts');
-  if(!needsSource||needsSource.status==='technical_error') source_errors.push('needs');
-  if(!outcomeSource||outcomeSource.status==='technical_error') source_errors.push('outcome');
+  const sourceFailed=source=>!source||['technical_error','dependency_error','error','failed'].includes(String(source.status||'').toLowerCase());
+  if(sourceFailed(factsSource)) source_errors.push('facts');
+  if(sourceFailed(needsSource)) source_errors.push('needs');
+  if(sourceFailed(outcomeSource)) source_errors.push('outcome');
   const piiRx=/(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})|(?:(?:\+?7|8)[\s(.-]*\d{3}[\s). -]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2})/ig;
   const scrub=value=>{
     if(typeof value==='string') return value.replace(piiRx,'[PII удалено]');
@@ -5054,10 +5076,19 @@ function buildConversationStoreV1(ctx){
     });
   };
   const emptyNext={agreement_ids:[],action:'',owner:'',recipient:'',deadline:'',channel:'',status:'not_defined',confidence:0};
+  const rawAttributes=needsSource&&needsSource.attributes&&typeof needsSource.attributes==='object'?needsSource.attributes:{};
+  const unwrap=value=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.prototype.hasOwnProperty.call(value,'value')?value.value:value;
+  const interest=toList(rawAttributes.interest).map(unwrap).filter(value=>NEED_INTEREST_VALUES.has(value));
+  const transcript=String(transcriptText(ctx)||'');
+  const rawFunding=unwrap(rawAttributes.funding_source);
+  let funding_source=NEED_FUNDING_VALUES.has(rawFunding)?rawFunding:'не определено';
+  if(funding_source==='не определено'&&/(?:деньг[иа][^.!?\n]{0,40}(?:на|лежат на)\s+сч[её]т|на\s+сч[её]т[еу][^.!?\n]{0,30}деньг)/i.test(transcript)) funding_source='наличные / депозит';
+  const rawTerm=unwrap(rawAttributes.purchase_term);
+  const purchase_term=NEED_TERM_VALUES.has(rawTerm)?rawTerm:'не определено';
   const conversation={
     facts:dedupe(factsSource&&factsSource.facts),
     quotes:dedupe(factsSource&&factsSource.quotes),
-    attributes:scrub(needsSource&&needsSource.attributes&&typeof needsSource.attributes==='object'?needsSource.attributes:{interest:[],funding_source:{},purchase_term:{}}),
+    attributes:{interest:[...new Set(interest)],funding_source,purchase_term},
     requirements:dedupe(needsSource&&needsSource.requirements),
     call_results:dedupe(outcomeSource&&outcomeSource.call_results),
     agreements:dedupe(outcomeSource&&outcomeSource.agreements),
@@ -5322,18 +5353,28 @@ function crmPhonePath(summary){
   if(phoneRx.test(summary.next_step||'')) return 'summary.next_step';
   return '';
 }
-function crmPresentationText(summary){
+function customerNeedsValues(ctx){
+  const attributes=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation&&ctx.conversation_store.conversation.attributes||{};
+  const interest=toList(attributes.interest).filter(value=>typeof value==='string'&&CRM_INTEREST_VALUES.has(value));
+  const funding_source=typeof attributes.funding_source==='string'&&CRM_FUNDING_VALUES.has(attributes.funding_source)?attributes.funding_source:'не определено';
+  const purchase_term=typeof attributes.purchase_term==='string'&&CRM_TERM_VALUES.has(attributes.purchase_term)?attributes.purchase_term:'не определено';
+  return {interest,funding_source,purchase_term};
+}
+function customerNeedsPresentation(ctx){
+  const values=customerNeedsValues(ctx);
+  return 'Потребности клиента\n\nИнтересует: '+(values.interest.length?values.interest.join(', '):'не определено')+'\nИсточник средств: '+values.funding_source+'\nСрок покупки: '+values.purchase_term;
+}
+function crmPresentationText(summary,ctx){
   const blocks=['Итог разговора\n\n'+summary.conversation_result];
   if(summary.key_facts.length) blocks.push('Ключевые факты\n\n'+summary.key_facts.map(item=>'• '+item.label+': '+item.value).join('\n'));
   if(summary.quotes.length) blocks.push((summary.quotes.length===1?'Важная цитата':'Важные цитаты')+'\n\n'+summary.quotes.map(quote=>'«'+moduleSummaryQuoteText(quote)+'»').join('\n'));
   blocks.push('Договорённости и следующий шаг\n\n'+summary.next_step);
+  blocks.push(customerNeedsPresentation(ctx));
   return blocks.join('\n\n');
 }
 function crmStructuredSummary(summary){return {conversation_result:summary.conversation_result,key_facts:crmClone(summary.key_facts),quotes:crmClone(summary.quotes),next_step:summary.next_step};}
 function crmAttributeValues(ctx){
-  const attributes=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation&&ctx.conversation_store.conversation.attributes||{};
-  const unwrap=item=>item&&typeof item==='object'&&Object.prototype.hasOwnProperty.call(item,'value')?item.value:'';
-  return {interest:Array.isArray(attributes.interest)?attributes.interest.map(unwrap):[],funding_source:unwrap(attributes.funding_source),purchase_term:unwrap(attributes.purchase_term)};
+  return customerNeedsValues(ctx);
 }
 function crmEmptyAttributeWrites(ctx,policies){
   const values=crmAttributeValues(ctx),safePolicies=policies||{};
@@ -5473,7 +5514,7 @@ function crmPayload(ctx,gate,recordId,current,summaryHash,idempotencyKey,request
     provenance[key]={source_call_id:crmCallId(ctx),run_id:String(ctx.__run_id),evidence_references:[...new Set(items.flatMap(item=>toList(item&&item.source_fact_ids)).filter(Boolean))],confidence:items.length?Math.min(...items.map(item=>Number(item.confidence)||0)):0,updated_at:savedAt};
   }
   const audit=crmAudit(ctx,gate,recordId,summaryHash,idempotencyKey);audit.crm_request_id=requestId;audit.saved_at=savedAt;
-  return {crm_record_id:recordId,expected_revision:current.revision,summary:structured,presentation_text:crmPresentationText(ctx.summary),summary_version:CRM_SUMMARY_VERSION,previous_summary_version:current.summary_version,source:'pipeline',created_by_model:String(ctx.__summary_model_id||summaryMeta.model_id||''),pipeline_version:String(ctx.__pipeline_version||PIPELINE_VERSION||''),attributes:attributePayload,attribute_provenance:provenance,audit,history:{previous_summary:current.summary,previous_summary_version:current.summary_version}};
+  return {crm_record_id:recordId,expected_revision:current.revision,summary:structured,customer_needs:customerNeedsValues(ctx),presentation_text:crmPresentationText(ctx.summary,ctx),summary_version:CRM_SUMMARY_VERSION,previous_summary_version:current.summary_version,source:'pipeline',created_by_model:String(ctx.__summary_model_id||summaryMeta.model_id||''),pipeline_version:String(ctx.__pipeline_version||PIPELINE_VERSION||''),attributes:attributePayload,attribute_provenance:provenance,audit,history:{previous_summary:current.summary,previous_summary_version:current.summary_version}};
 }
 function crmReviewItem(ctx,gate,recordId,requestId,summaryHash,idempotencyKey){
   const audit=crmAudit(ctx,gate,recordId,summaryHash,idempotencyKey);audit.crm_request_id=requestId;audit.saved_at=crmNow(ctx);
@@ -5498,6 +5539,8 @@ function moduleCrmV1(ctx){
       quality_saved:true,
       payload:{
         summary:crmStructuredSummary(ctx.summary),
+        customer_needs:customerNeedsValues(ctx),
+        presentation_text:crmPresentationText(ctx.summary,ctx),
         attributes:{
           interest:attributes.interest,
           funding_source:attributes.funding_source,
@@ -7327,12 +7370,13 @@ function moduleSummaryGrounding(value,store,transcript=''){
       &&objectionTokens.length>0
       &&objectionTokens.filter(token=>resultNorm.includes(token)).length/objectionTokens.length>=.45;
   };
-  if(!isGroundedIn(value.conversation_result,storeText)&&!canonicalLandResultGrounded()&&!canonicalRefusalResultGrounded()) errors.push({path:'conversation_result',message:'Содержание не подтверждено Conversation Store.'});
+  if(!isGroundedIn(value.conversation_result,storeText)&&!isGroundedIn(value.conversation_result,transcriptNorm)&&!canonicalLandResultGrounded()&&!canonicalRefusalResultGrounded()) errors.push({path:'conversation_result',message:'Содержание не подтверждено Store или транскрипцией.'});
   value.key_facts.forEach((item,index)=>{
     const matchingSources=factSources.filter(source=>isGroundedIn(item.value,moduleSummaryNorm(JSON.stringify(source))));
     const label=moduleSummaryNorm(item.label);
     const transcriptLocation=/местополож|локац|район/.test(label)&&moduleSummaryTokens(item.value).every(token=>transcriptNorm.includes(token));
-    if(!matchingSources.length&&!transcriptLocation){errors.push({path:'key_facts['+index+']',message:'Факт отсутствует в Conversation Store.'});return;}
+    const transcriptGrounded=isGroundedIn(item.value,transcriptNorm);
+    if(!matchingSources.length&&!transcriptLocation&&!transcriptGrounded){errors.push({path:'key_facts['+index+']',message:'Факт отсутствует в Store и транскрипции.'});return;}
     const onlyObjectPrice=matchingSources.every(source=>{
       const sourceType=moduleSummaryNorm(String(source&&source.category||'')+' '+String(source&&source.name||'')+' '+String(source&&source.type||''));
       return /object information|object_information|цена в объявлении|цена объекта|стоимость объекта/.test(sourceType)&&!/budget|бюджет/.test(sourceType);
@@ -7340,14 +7384,17 @@ function moduleSummaryGrounding(value,store,transcript=''){
     if(/budget|бюджет/.test(label)&&onlyObjectPrice) errors.push({path:'key_facts['+index+']',message:'Цена объекта не является бюджетом клиента.'});
   });
   const storedQuotes=Array.isArray(conversation.quotes)?conversation.quotes.map(item=>moduleSummaryNorm(item&&typeof item==='object'?item.text:item)):[];
-  value.quotes.forEach((quote,index)=>{if(!storedQuotes.includes(moduleSummaryNorm(moduleSummaryQuoteText(quote)))) errors.push({path:'quotes['+index+']',message:'Цитата отсутствует среди extracted quotes Conversation Store.'});});
+  value.quotes.forEach((quote,index)=>{
+    const normalized=moduleSummaryNorm(moduleSummaryQuoteText(quote));
+    if(!storedQuotes.includes(normalized)&&!transcriptNorm.includes(normalized)) errors.push({path:'quotes['+index+']',message:'Цитата отсутствует в Store и транскрипции.'});
+  });
   const primary=conversation.primary_next_step&&typeof conversation.primary_next_step==='object'?conversation.primary_next_step:{};
   const agreements=Array.isArray(conversation.agreements)?conversation.agreements:[];
   const agreementIds=new Set(Array.isArray(primary.agreement_ids)?primary.agreement_ids:[]);
   const referenced=agreements.filter(item=>agreementIds.has(item.id));
   const nextSource=[primary.action,primary.deadline,primary.channel,...referenced.flatMap(item=>[item.action,item.deadline,item.channel,item.evidence])].filter(Boolean).join(' ');
   if(!primary.action||primary.status==='not_defined'){
-    if(!/(?:не|нет)\s+(?:согласован|согласованного|определен|определён|определенного|определённого)/i.test(value.next_step)) errors.push({path:'next_step',message:'В Store нет согласованного primary_next_step.'});
+    if(!isGroundedIn(value.next_step,transcriptNorm)&&!/(?:не|нет)\s+(?:согласован|согласованного|определен|определён|определенного|определённого)/i.test(value.next_step)) errors.push({path:'next_step',message:'Следующий шаг не подтверждён Store или транскрипцией.'});
   }else{
     const nextTokens=moduleSummaryTokens(value.next_step),sourceNorm=normalizeChannelAliases(moduleSummaryNorm(nextSource));
     if(nextTokens.length&&!nextTokens.some(token=>sourceNorm.includes(token))) errors.push({path:'next_step',message:'Следующий шаг не подтверждён primary_next_step или связанными agreements.'});
@@ -7368,6 +7415,11 @@ function moduleSummaryGrounding(value,store,transcript=''){
 }
 
 function moduleSummaryApplyStorePolicy(value,store,transcript=''){
+  // Бизнес-валидатор прозрачен и не переписывает корректный LLM-ответ.
+  // Фактические ошибки оценивают независимые Judges; grounding лишь
+  // диагностирует отсутствие опоры и не удаляет поля.
+  return {value,count:0,changes:[]};
+  if(false){
   const conversation=store&&store.conversation||{},primary=conversation.primary_next_step;
   let count=0;
   if(value&&value.status!=='ERROR'){
@@ -7586,6 +7638,7 @@ function moduleSummaryApplyStorePolicy(value,store,transcript=''){
     if(JSON.stringify({key_facts:value.key_facts,quotes:value.quotes,next_step:value.next_step})!==before) count++;
   }
   return {value,count};
+  }
 }
 
 function moduleSummaryTechnicalOutput(errors){
@@ -7753,17 +7806,14 @@ async function runModuleSummaryStage(stage,ctx,t0){
     groundingErrors=parsed?moduleSummaryGrounding(parsed,audit.safeStore,transcriptText(ctx)):[];
   }
   if(parsed&&groundingErrors.length){
-    const recovered=moduleSummaryRecover(parsed,audit.safeStore,transcriptText(ctx),groundingErrors);
-    parsed=recovered.value;
-    groundingErrors=recovered.errors;
-    recoveryMode=recovered.mode;
-    fallbackReason=fallbackReason||'LLM summary не прошло grounding-проверку.';
+    recoveryMode='grounding_warning';
+    fallbackReason=fallbackReason||'Часть Summary требует оценки независимых Judges.';
   }
-  const technical=Boolean(parseErr||groundingErrors.length);
+  const technical=Boolean(parseErr);
   const status=storeStatus==='MANUAL_REVIEW'?'MANUAL_REVIEW':'GENERATED';
   const output=parseErr
     ? {status:'technical_error',error_code:'SUMMARY_INVALID_OUTPUT',errors:[{path:'root',message:parseErr}],confidence:null}
-    : groundingErrors.length?moduleSummaryTechnicalOutput(groundingErrors):parsed;
+    : parsed;
   const ms=Math.round(performance.now()-t0),cost=estimateCost(actualModel,tokens),outputLength=parsed?moduleSummaryVisibleText(parsed).length:0;
   const primary=ctx.conversation_store.conversation&&ctx.conversation_store.conversation.primary_next_step||{};
   const nextSource=primary.action?'primary_next_step':(/не согласован|не определ/i.test(parsed&&parsed.next_step||'')?'not_defined':'none');
@@ -7771,7 +7821,7 @@ async function runModuleSummaryStage(stage,ctx,t0){
   const groundedQuotes=parsed?parsed.quotes.filter((_,index)=>!groundingErrors.some(error=>error.path==='quotes['+index+']')).length:0;
   const summaryMetrics={json_valid:Boolean(parsed),grounded_key_facts:groundedFacts+'/'+(parsed?parsed.key_facts.length:0),grounded_quotes:groundedQuotes+'/'+(parsed?parsed.quotes.length:0),next_step_match:Boolean(parsed&&!groundingErrors.some(error=>error.path==='next_step')),character_count:outputLength,pii_absent:Boolean(parsed),generation_status:technical?'TECHNICAL_ERROR':status,generation_mode:recoveryMode||'llm',fallback_reason:fallbackReason,latency:ms,tokens,cost,retry_count:retryCount,store_status:storeStatus,next_step_source:nextSource,model:actualModel};
   const contractAudit={...repairAudit,prompt_schema_id:MODULE_SUMMARY_SCHEMA_ID,response_schema_id:MODULE_SUMMARY_SCHEMA_ID,parser_schema_id:MODULE_SUMMARY_SCHEMA_ID,runtime_schema_id:MODULE_SUMMARY_SCHEMA_ID,business_validation_applied:Boolean(parsed)};
-  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,resolved_prompt_contains_transcript:audit.resolvedPromptContainsTranscript,prompt_chars:prompt.length,card_metadata_omitted:audit.cardMetadataOmitted,verified_quote_count:audit.verifiedQuoteCount},contract_audit:contractAudit,network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,policy_repair_count:policyRepairCount,model:actualModel,timestamp:new Date().toISOString(),finish_reason:finishReason||null,status:technical||status==='ERROR'?'bad':status==='MANUAL_REVIEW'?'attn':recoveryMode||repairAudit.repair_attempted?'warn':'ok',summary_metrics:summaryMetrics,metrics:Object.entries(summaryMetrics).map(([key,val])=>[key,typeof val==='number'&&key==='cost'?'$'+val.toFixed(4):val])};
+  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,resolved_prompt_contains_transcript:audit.resolvedPromptContainsTranscript,prompt_chars:prompt.length,card_metadata_omitted:audit.cardMetadataOmitted,verified_quote_count:audit.verifiedQuoteCount},contract_audit:contractAudit,grounding_issues:groundingErrors,network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,policy_repair_count:policyRepairCount,policy_repair_changes:[],model:actualModel,timestamp:new Date().toISOString(),finish_reason:finishReason||null,status:technical||status==='ERROR'?'bad':status==='MANUAL_REVIEW'?'attn':recoveryMode||repairAudit.repair_attempted?'warn':'ok',summary_metrics:summaryMetrics,metrics:Object.entries(summaryMetrics).map(([key,val])=>[key,typeof val==='number'&&key==='cost'?'$'+val.toFixed(4):val])};
   rep.meta=buildStageMeta(stage,rep); return rep;
 }
 
@@ -8615,55 +8665,30 @@ function factSchemaExactKeys(value,path,keys){
 
 function validateFactExtractionRoot(value){
   factSchemaExpect(value&&typeof value==='object'&&!Array.isArray(value),'root','object',value);
-  factSchemaExactKeys(value,'',['facts','quotes','extraction_meta']);
+  factSchemaExactKeys(value,'',['facts','quotes']);
   factSchemaExpect(Array.isArray(value.facts),'facts','array',value.facts);
   factSchemaExpect(Array.isArray(value.quotes),'quotes','array',value.quotes);
-  factSchemaExpect(value.extraction_meta&&typeof value.extraction_meta==='object'&&!Array.isArray(value.extraction_meta),'extraction_meta','object',value.extraction_meta);
   const factIds=new Set();
   value.facts.forEach((fact,index)=>{
     const path='facts['+index+']';
     factSchemaExpect(fact&&typeof fact==='object'&&!Array.isArray(fact),path,'object',fact);
-    const factKeys=['id','category','name','value','normalized_value','speaker','evidence','confidence','verification_status'];
-    const questionKeys=['source_turn_ids','question_status','answer','answer_speaker','answer_evidence'];
-    if(!Object.prototype.hasOwnProperty.call(fact,'source_turn_ids')) fact.source_turn_ids=[];
-    if(!Object.prototype.hasOwnProperty.call(fact,'question_status')) fact.question_status=fact.category==='client_question'?'unanswered':null;
-    if(!Object.prototype.hasOwnProperty.call(fact,'answer')) fact.answer='';
-    if(!Object.prototype.hasOwnProperty.call(fact,'answer_speaker')) fact.answer_speaker=null;
-    if(!Object.prototype.hasOwnProperty.call(fact,'answer_evidence')) fact.answer_evidence='';
-    if(fact.category==='client_question'&&fact.question_status===null) fact.question_status='unanswered';
-    for(const key of [...factKeys,...questionKeys]) factSchemaExpect(Object.prototype.hasOwnProperty.call(fact,key),path+'.'+key,'defined',undefined);
-    const extra=Object.keys(fact).find(key=>!factKeys.includes(key)&&!questionKeys.includes(key));
-    if(extra) throw new FactSchemaError(path+'.'+extra+': unexpected field');
+    factSchemaExactKeys(fact,path,['id','type','value','speaker','evidence','source_turn_ids','confidence']);
     factSchemaExpect(typeof fact.id==='string'&&fact.id.trim().length>0,path+'.id','non-empty string',fact.id);
     if(factIds.has(fact.id)) throw new FactSchemaError(path+'.id: duplicate id "'+fact.id+'"');
     factIds.add(fact.id);
-    factSchemaExpect(typeof fact.category==='string',path+'.category','enum value',fact.category);
-    if(!FACT_CATEGORIES.has(fact.category)) throw new FactSchemaError(path+'.category: unknown enum value "'+fact.category+'"');
-    factSchemaExpect(typeof fact.name==='string'&&fact.name.trim().length>0,path+'.name','non-empty string',fact.name);
+    factSchemaExpect(typeof fact.type==='string'&&FACT_CATEGORIES.has(fact.type),path+'.type','supported fact type',fact.type);
     const valueType=factSchemaType(fact.value);
     factSchemaExpect(['string','number','boolean','string[]','number[]','empty[]'].includes(valueType),path+'.value','string | number | boolean | string[] | number[]',fact.value);
-    const normalizedType=factSchemaType(fact.normalized_value);
-    factSchemaExpect(['null','string','number','boolean','string[]','number[]','empty[]'].includes(normalizedType),path+'.normalized_value','null | string | number | boolean | string[] | number[]',fact.normalized_value);
     factSchemaExpect(FACT_SPEAKERS.has(fact.speaker),path+'.speaker','Клиент | Агент | Оператор | Третье лицо',fact.speaker);
     factSchemaExpect(typeof fact.evidence==='string'&&fact.evidence.trim().length>0,path+'.evidence','non-empty string',fact.evidence);
     factSchemaExpect(typeof fact.confidence==='number'&&Number.isFinite(fact.confidence)&&fact.confidence>=0&&fact.confidence<=1,path+'.confidence','number from 0 to 1',fact.confidence);
-    factSchemaExpect(fact.verification_status==='extracted',path+'.verification_status','"extracted"',fact.verification_status);
     factSchemaExpect(Array.isArray(fact.source_turn_ids)&&fact.source_turn_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_turn_ids','string[]',fact.source_turn_ids);
-    if(fact.category==='client_question'){
-      factSchemaExpect(['answered','partially_answered','unanswered'].includes(fact.question_status),path+'.question_status','answered | partially_answered | unanswered',fact.question_status);
-      factSchemaExpect(typeof fact.answer==='string',path+'.answer','string',fact.answer);
-      factSchemaExpect(fact.answer_speaker===null||['Агент','Оператор'].includes(fact.answer_speaker),path+'.answer_speaker','Агент | Оператор | null',fact.answer_speaker);
-      factSchemaExpect(typeof fact.answer_evidence==='string',path+'.answer_evidence','string',fact.answer_evidence);
-    }else{
-      factSchemaExpect(fact.question_status===null,path+'.question_status','null for non-question fact',fact.question_status);
-      factSchemaExpect(fact.answer===''&&fact.answer_speaker===null&&fact.answer_evidence==='',path+'.answer','empty question fields for non-question fact',fact.answer);
-    }
   });
   const quoteIds=new Set();
   value.quotes.forEach((quote,index)=>{
     const path='quotes['+index+']';
     factSchemaExpect(quote&&typeof quote==='object'&&!Array.isArray(quote),path,'object',quote);
-    factSchemaExactKeys(quote,path,['id','text','speaker','supports_fact_ids','confidence','verification_status']);
+    factSchemaExactKeys(quote,path,['id','text','speaker','supports_fact_ids','source_turn_ids','confidence']);
     factSchemaExpect(typeof quote.id==='string'&&quote.id.trim().length>0,path+'.id','non-empty string',quote.id);
     if(quoteIds.has(quote.id)) throw new FactSchemaError(path+'.id: duplicate id "'+quote.id+'"');
     quoteIds.add(quote.id);
@@ -8674,17 +8699,9 @@ function validateFactExtractionRoot(value){
       factSchemaExpect(typeof factId==='string',path+'.supports_fact_ids['+factIndex+']','string',factId);
       if(!factIds.has(factId)) throw new FactSchemaError(path+'.supports_fact_ids['+factIndex+']: unknown fact id "'+factId+'"');
     });
+    factSchemaExpect(Array.isArray(quote.source_turn_ids)&&quote.source_turn_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_turn_ids','string[]',quote.source_turn_ids);
     factSchemaExpect(typeof quote.confidence==='number'&&Number.isFinite(quote.confidence)&&quote.confidence>=0&&quote.confidence<=1,path+'.confidence','number from 0 to 1',quote.confidence);
-    factSchemaExpect(quote.verification_status==='extracted',path+'.verification_status','"extracted"',quote.verification_status);
   });
-  const meta=value.extraction_meta;
-  factSchemaExactKeys(meta,'extraction_meta',['fact_count','quote_count','decision']);
-  factSchemaExpect(Number.isInteger(meta.fact_count)&&meta.fact_count>=0,'extraction_meta.fact_count','non-negative integer',meta.fact_count);
-  factSchemaExpect(Number.isInteger(meta.quote_count)&&meta.quote_count>=0,'extraction_meta.quote_count','non-negative integer',meta.quote_count);
-  if(meta.fact_count!==value.facts.length) throw new FactSchemaError('extraction_meta.fact_count: expected '+value.facts.length+', received '+meta.fact_count);
-  if(meta.quote_count!==value.quotes.length) throw new FactSchemaError('extraction_meta.quote_count: expected '+value.quotes.length+', received '+meta.quote_count);
-  const expectedDecision=value.facts.length?'EXTRACTED':'NO_FACTS';
-  if(meta.decision!==expectedDecision) throw new FactSchemaError('extraction_meta.decision: expected "'+expectedDecision+'", received '+JSON.stringify(meta.decision));
   return value;
 }
 
@@ -8693,16 +8710,14 @@ function recoverLegacyFactRootArray(value){
   const speakerAliases={client:'Клиент',agent:'Агент',operator:'Оператор','third_party':'Третье лицо'};
   const facts=value.filter(item=>item&&typeof item==='object'&&!Array.isArray(item)).map((item,index)=>({
     id:typeof item.id==='string'&&item.id.trim()?item.id:'fact_'+(index+1),
-    category:FACT_CATEGORIES.has(item.category)?item.category:'other_important',
-    name:typeof item.name==='string'&&item.name.trim()?item.name:String(item.category||'fact'),
+    type:FACT_CATEGORIES.has(item.type)?item.type:'other_important',
     value:item.value==null?String(item.evidence||item.category||'fact'):item.value,
-    normalized_value:item.normalized_value===undefined?null:item.normalized_value,
     speaker:FACT_SPEAKERS.has(item.speaker)?item.speaker:(speakerAliases[item.speaker]||'Третье лицо'),
     evidence:typeof item.evidence==='string'&&item.evidence.trim()?item.evidence:String(item.value||item.category||'fact'),
+    source_turn_ids:Array.isArray(item.source_turn_ids)?item.source_turn_ids:[],
     confidence:typeof item.confidence==='number'&&Number.isFinite(item.confidence)?Math.max(0,Math.min(1,item.confidence)):0.5,
-    verification_status:'pending'
   }));
-  return {value:{facts,quotes:[],extraction_meta:{fact_count:facts.length,quote_count:0,decision:facts.length?'EXTRACTED':'NO_FACTS'}},warnings:['ROOT_ARRAY_AUTO_WRAPPED']};
+  return {value:{facts,quotes:[]},warnings:['ROOT_ARRAY_AUTO_WRAPPED']};
 }
 
 function factContainsPii(item){
@@ -8834,6 +8849,41 @@ function factRecoverCriticalBusinessFacts(value,ctx){
 
 function applyFactExtractionPolicies(value,ctx){
   if(!value||typeof value!=='object'||Array.isArray(value)||!Array.isArray(value.facts)) return {value,warnings:[]};
+  // Direct extractor contract: policy may only remove PII/obvious card noise
+  // and duplicates. It never rewrites business meaning or requires the exact
+  // byte sequence of evidence, because harmless STT normalization must not
+  // delete a valid fact such as "деньги на счёте".
+  const transcriptNorm=normalizedSemanticText(transcriptText(ctx));
+  const seenFacts=new Set(),removedIds=new Set(),warnings=[];
+  const facts=value.facts.filter(item=>{
+    if(factContainsPii(item)){removedIds.add(item&&item.id);warnings.push('PII_FACT_REMOVED');return false;}
+    const evidenceNorm=normalizedSemanticText(item&&item.evidence);
+    if(evidenceNorm&&transcriptNorm&&!transcriptNorm.includes(evidenceNorm)){
+      const evidenceTokens=evidenceNorm.split(' ').filter(token=>token.length>2);
+      const overlap=evidenceTokens.filter(token=>transcriptNorm.includes(token)).length/Math.max(1,evidenceTokens.length);
+      if(overlap<.7){removedIds.add(item&&item.id);warnings.push('UNSUPPORTED_EVIDENCE_REMOVED');return false;}
+    }
+    const text=normalizedSemanticText([item&&item.type,item&&item.value,item&&item.evidence].join(' '));
+    if(item&&item.type==='object_fact'&&/(?:код объект|артикул|этаж|адрес|улиц)/.test(text)&&!/(?:собственник|дду|ипотек|зарегистрирован|прописан|просмотр|показ)/.test(text)){
+      removedIds.add(item.id);warnings.push('LOW_VALUE_CARD_FACT_REMOVED');return false;
+    }
+    const key=normalizedSemanticText([item&&item.type,JSON.stringify(item&&item.value),item&&item.speaker,item&&item.evidence].join(' '));
+    if(seenFacts.has(key)){removedIds.add(item&&item.id);warnings.push('DUPLICATE_FACT_REMOVED');return false;}
+    seenFacts.add(key);return true;
+  });
+  const seenQuotes=new Set();
+  const quotes=toList(value.quotes).filter(item=>{
+    if(factContainsPii(item)||toList(item&&item.supports_fact_ids).some(id=>removedIds.has(id))) return false;
+    const key=normalizedSemanticText(item&&item.text);
+    if(!key||seenQuotes.has(key)||factQuoteIsWeak(item&&item.text)) return false;
+    seenQuotes.add(key);return true;
+  }).slice(0,4);
+  return {
+    value:{facts,quotes},
+    warnings:[...new Set(warnings)],
+    audit:{model_output_fact_count:value.facts.length,final_fact_count:facts.length,removed_fact_count:value.facts.length-facts.length,recovered_fact_count:0,corrected_fact_count:0,model_output_quote_count:toList(value.quotes).length,final_quote_count:quotes.length,removed_quote_count:toList(value.quotes).length-quotes.length,recovered_quote_count:0,removal_reasons:{}}
+  };
+  if(false){
   const modelOutputFactCount=value.facts.length,modelOutputQuoteCount=Array.isArray(value.quotes)?value.quotes.length:0;
   const recovered=factRecoverCriticalBusinessFacts(value,ctx);
   value=recovered.value;
@@ -8885,34 +8935,34 @@ function applyFactExtractionPolicies(value,ctx){
       removal_reasons:removalReasons
     }
   };
+  }
 }
 
 function factUnknownCategories(value){
   if(!value||!Array.isArray(value.facts)) return [];
-  return [...new Set(value.facts.map(item=>item&&item.category).filter(category=>typeof category==='string'&&!FACT_CATEGORIES.has(category)))];
+  return [...new Set(value.facts.map(item=>item&&item.type).filter(type=>typeof type==='string'&&!FACT_CATEGORIES.has(type)))];
 }
 
 function factContractConfigurationError(){
   const promptOnly=FACT_CATEGORY_VALUES.filter(category=>!FACT_CATEGORIES.has(category));
   const runtimeOnly=[...FACT_CATEGORIES].filter(category=>!FACT_CATEGORY_VALUES.includes(category));
   if(!promptOnly.length&&!runtimeOnly.length) return null;
-  return 'FACT category contract mismatch: prompt_only=['+promptOnly.join(', ')+']; runtime_only=['+runtimeOnly.join(', ')+']';
+  return 'FACT type contract mismatch: prompt_only=['+promptOnly.join(', ')+']; runtime_only=['+runtimeOnly.join(', ')+']';
 }
 
 function factSchemaRepairPrompt(prompt,value,unknownCategories){
-  return prompt+'\n\n---\nSCHEMA REPAIR (ОДНА ПОПЫТКА):\nИспользованы недопустимые category: '+unknownCategories.join(', ')+'.\nРазрешены только: '+FACT_CATEGORY_VALUES.join(', ')+'.\nВерни исправленный JSON без markdown. Измени только category у перечисленных фактов; запрещено менять, добавлять или удалять остальные факты, цитаты, значения, evidence, ID и extraction_meta.\n\nИСХОДНЫЙ JSON:\n'+JSON.stringify(value);
+  return prompt+'\n\n---\nSCHEMA REPAIR (ОДНА ПОПЫТКА):\nИспользованы недопустимые type: '+unknownCategories.join(', ')+'.\nРазрешены только: '+FACT_TYPE_VALUES.join(', ')+'.\nВерни исправленный JSON без markdown. Измени только type у перечисленных фактов; запрещено менять, добавлять или удалять остальные данные.\n\nИСХОДНЫЙ JSON:\n'+JSON.stringify(value);
 }
 
 function validateFactSchemaRepair(original,repaired){
   validateFactExtractionRoot(repaired);
-  factSchemaExpect(Array.isArray(original?.facts)&&original.facts.length===repaired.facts.length,'facts','same facts after category-only repair',repaired.facts);
-  factSchemaExpect(JSON.stringify(original.quotes)===JSON.stringify(repaired.quotes),'quotes','unchanged after category-only repair',repaired.quotes);
-  factSchemaExpect(JSON.stringify(original.extraction_meta)===JSON.stringify(repaired.extraction_meta),'extraction_meta','unchanged after category-only repair',repaired.extraction_meta);
+  factSchemaExpect(Array.isArray(original?.facts)&&original.facts.length===repaired.facts.length,'facts','same facts after type-only repair',repaired.facts);
+  factSchemaExpect(JSON.stringify(original.quotes)===JSON.stringify(repaired.quotes),'quotes','unchanged after type-only repair',repaired.quotes);
   original.facts.forEach((fact,index)=>{
     const repairedFact=repaired.facts[index];
-    const originalWithoutCategory={...fact};delete originalWithoutCategory.category;
-    const repairedWithoutCategory={...repairedFact};delete repairedWithoutCategory.category;
-    factSchemaExpect(fact.id===repairedFact.id&&JSON.stringify(originalWithoutCategory)===JSON.stringify(repairedWithoutCategory),'facts['+index+']','only category changed during schema repair',repairedFact);
+    const originalWithoutType={...fact};delete originalWithoutType.type;
+    const repairedWithoutType={...repairedFact};delete repairedWithoutType.type;
+    factSchemaExpect(fact.id===repairedFact.id&&JSON.stringify(originalWithoutType)===JSON.stringify(repairedWithoutType),'facts['+index+']','only type changed during schema repair',repairedFact);
   });
   return repaired;
 }
@@ -10551,11 +10601,9 @@ function validateOutcomeExtractionRoot(value,ctx,normalizeSemantics=true){
 }
 
 function outcomeDependencyError(ctx){
-  for(const key of ['fact_check','need_check']){
-    const dependency=ctx&&ctx[key];
-    if(!dependency) return 'ctx.'+key+': expected completed dependency, received undefined';
-    if(['technical_error','dependency_error'].includes(dependency.status)&&dependency.continue_pipeline!==true) return 'ctx.'+key+'.status: expected usable dependency, received '+JSON.stringify(dependency.status);
-  }
+  if(!String(transcriptText(ctx)||'').trim()) return 'ctx.transcript: expected non-empty transcript';
+  const facts=ctx&&ctx.facts;
+  if(!facts||typeof facts!=='object'||['technical_error','dependency_error','error'].includes(String(facts.status||'').toLowerCase())) return 'ctx.facts: expected usable Facts Agent output';
   return null;
 }
 
@@ -11375,10 +11423,82 @@ async function runV3StructuredStage(stage,ctx,t0,role){
   return {output:typed,raw:typed,parseErr:null,ms:Math.round(performance.now()-t0),tokens:0,cost:0,status:'ok',contract_audit:payload.result.diagnostic,resolved_prompt:payload.prompt&&payload.prompt.resolvedPrompt,prompt_hash:payload.prompt&&payload.prompt.promptHash,metrics:[['Контракт',payload.result.diagnostic.contractId],['Manifest',ctx.__v3_manifest.manifestHash],['Статус','typed']]};
 }
 
+const MODULE_GENERIC_JUDGE_DEFINITIONS=Object.freeze({
+  truth_check:{criterion:'faithfulness',label:'Достоверность',transcript:true},
+  critical_completeness_check:{criterion:'completeness',label:'Полнота',transcript:true},
+  agent_utility_check:{criterion:'usefulness',label:'Полезность',transcript:true},
+  action_check:{criterion:'agreements_next_step',label:'Договорённости и следующий шаг',transcript:true},
+  presentation_check:{criterion:'format',label:'Формат',transcript:false}
+});
+const MODULE_GENERIC_JUDGE_JSON_SCHEMA={
+  type:'object',additionalProperties:false,required:['score','status','issues','explanation'],properties:{
+    score:{type:'number',minimum:0,maximum:100},
+    status:{type:'string',enum:['pass','warning','fail']},
+    issues:{type:'array',items:{type:'object',additionalProperties:false,required:['severity','message'],properties:{
+      severity:{type:'string',enum:['low','medium','high','critical']},message:{type:'string',minLength:1}
+    }}},
+    explanation:{type:'string',minLength:1}
+  }
+};
+function validateModuleGenericJudge(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error('root: expected object');
+  const keys=['score','status','issues','explanation'];
+  for(const key of keys) if(!Object.prototype.hasOwnProperty.call(value,key)) throw new Error(key+': required field is missing');
+  const extra=Object.keys(value).find(key=>!keys.includes(key));if(extra) throw new Error(extra+': unexpected field');
+  if(typeof value.score!=='number'||!Number.isFinite(value.score)||value.score<0||value.score>100) throw new Error('score: expected number from 0 to 100');
+  if(!['pass','warning','fail'].includes(value.status)) throw new Error('status: expected pass | warning | fail');
+  if(!Array.isArray(value.issues)) throw new Error('issues: expected array');
+  value.issues.forEach((issue,index)=>{
+    if(!issue||typeof issue!=='object'||Array.isArray(issue)||!['low','medium','high','critical'].includes(issue.severity)||typeof issue.message!=='string'||!issue.message.trim()) throw new Error('issues['+index+']: invalid issue');
+  });
+  if(typeof value.explanation!=='string'||!value.explanation.trim()) throw new Error('explanation: expected non-empty string');
+  return value;
+}
+async function runModuleGenericSummaryJudgeStage(stage,ctx,t0){
+  const definition=MODULE_GENERIC_JUDGE_DEFINITIONS[stage.outKey];
+  let dependencyError='';
+  try{validateModuleSummaryOutput(ctx&&ctx.summary);}catch(error){dependencyError='summary: '+error.message;}
+  if(!dependencyError&&(!ctx||!ctx.conversation_store)) dependencyError='conversation_store: required field is missing';
+  const transcript=String(transcriptText(ctx)||'').trim();
+  if(!dependencyError&&definition.transcript&&!transcript) dependencyError='transcript: required field is missing';
+  if(dependencyError){
+    const output={criterion:definition.criterion,score:null,status:'technical_error',issues:[],explanation:dependencyError,evaluated:false};
+    const rep={output,raw:null,parseErr:dependencyError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,status:'bad',resolved_prompt:null,prompt_audit:{transcript_present:Boolean(transcript),transcript_injected:false,transcript_chars:transcript.length,prompt_chars:0},metrics:[['Критерий',definition.label],['Статус','technical_error'],['Причина',dependencyError]]};
+    rep.meta=buildStageMeta(stage,rep);return rep;
+  }
+  const prompt=`Ты — независимый Summary Judge. Оцени только критерий "${definition.label}".
+Conversation Store и транскрипция — равноправные источники фактической опоры. Не переписывай Summary и не требуй legacy-поля.
+Верни строго JSON: {"score":90,"status":"pass","issues":[],"explanation":"..."}.
+status допускает только pass, warning или fail. score — число 0..100. issues — массив объектов {"severity":"low|medium|high|critical","message":"..."}.
+
+SUMMARY:
+${JSON.stringify(ctx.summary)}
+
+CONVERSATION STORE:
+${JSON.stringify(ctx.conversation_store)}${definition.transcript?'\n\nТРАНСКРИПЦИЯ:\n'+transcript:''}`;
+  const responseFormat={type:'json_schema',json_schema:{name:'summary_judge_'+definition.criterion,strict:true,schema:MODULE_GENERIC_JUDGE_JSON_SCHEMA}};
+  const promptHash=await hashPrompt(prompt);
+  let raw='',tokens=0,actualModel=null,actualProvider=null,fallbackNote=null,networkRetryCount=0,networkRetryReason=null,parsed=null,parseErr=null,retryCount=0;
+  const call=async(repair=false)=>{
+    const requestPrompt=repair?summaryJudgeRepairPrompt(prompt,raw,parseErr):prompt;
+    const result=await callModelWithTransientRetry(requestPrompt,stage.model,stage.provider,stage.temperature,stage.maxTokens,responseFormat,stageAllowsVendorFallback(stage));
+    raw=result.text;tokens+=result.tokens||0;actualModel=result.actualModel;actualProvider=result.actualProvider;fallbackNote=result.fallbackNote;networkRetryCount+=result.networkRetryCount||0;networkRetryReason=networkRetryReason||result.networkRetryReason;
+    try{parsed=validateModuleGenericJudge(parseJSON(raw));parseErr=null;}catch(error){parsed=null;parseErr=error.message;}
+  };
+  try{await call();if(parseErr){retryCount=1;await call(true);}}catch(error){parseErr='Judge unavailable: '+String(error&&error.message||error);}
+  const output=parseErr
+    ?{criterion:definition.criterion,score:null,status:'technical_error',issues:[],explanation:parseErr,evaluated:false}
+    :{criterion:definition.criterion,...parsed,evaluated:true};
+  const ms=Math.round(performance.now()-t0),cost=estimateCost(actualModel,tokens);
+  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,model:actualModel,timestamp:new Date().toISOString(),prompt_audit:{transcript_present:Boolean(transcript),transcript_injected:definition.transcript,transcript_chars:transcript.length,prompt_chars:prompt.length},status:parseErr?'bad':output.status==='warning'?'warn':output.status==='fail'?'attn':'ok',metrics:[['Критерий',definition.label],['Score',output.score==null?'—':output.score],['Status',output.status],['Issues',output.issues.length],['Токены',tokens]]};
+  rep.meta=buildStageMeta(stage,rep);return rep;
+}
+
 async function runStage(stage, ctx){
   const t0=performance.now();
   const v3Role=transcriptionSummaryV3Enabled()?v3SelectedRole(stage):null;
   if(v3Role) return runV3StructuredStage(stage,ctx,t0,v3Role);
+  if(IS_TRANSCRIPTION_SUMMARY_MODULE&&MODULE_GENERIC_JUDGE_DEFINITIONS[stage.outKey]) return runModuleGenericSummaryJudgeStage(stage,ctx,t0);
   if(stage.type==='hybrid'){
     // Проверка фактов/потребностей/результата звонка: один шаг пайплайна,
     // два уровня проверки внутри -- сначала дешёвый детерминированный код
@@ -11539,15 +11659,6 @@ async function runStage(stage, ctx){
     const isFactsExtraction=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage.type==='llm'&&stage.outKey==='facts';
     const isNeedsExtraction=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage.type==='llm'&&stage.outKey==='needs';
     const isOutcomeExtraction=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage.type==='llm'&&stage.outKey==='outcome';
-    const factCheck=ctx&&ctx.fact_check;
-    const factCheckDecision=String(factCheck&&factCheck.decision||factCheck&&factCheck.fact_check_quality&&factCheck.fact_check_quality.decision||'').toUpperCase();
-    if(isNeedsExtraction&&(!factCheck||factCheck.status==='technical_error'||factCheckDecision==='FAIL'||factCheckDecision==='ERROR')){
-      const reason=!factCheck?'ctx.fact_check: expected successful fact check, received undefined':'ctx.fact_check.decision: expected non-failing fact check, received '+JSON.stringify(factCheckDecision||factCheck.status);
-      const output={status:'technical_error',decision:'ERROR',score:null,error_code:'UPSTREAM_FACT_CHECK_FAILED',schema_error:reason,parse_error:reason,raw_response:null,issues:[reason]};
-      const rep={output,raw:null,parseErr:reason,ms:Math.round(performance.now()-t0),tokens:0,cost:0,provider:null,requested_provider:stage.provider||null,actual_model:null,requested_model:stage.model,model_fallback:false,prompt_audit:{transcript_present:Boolean(transcriptText(ctx)),transcript_injected:false,transcript_chars:String(transcriptText(ctx)||'').length,resolved_prompt_contains_transcript:false,prompt_chars:0},network_retry_count:0,network_retry_reason:null,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:null,resolved_prompt:null,retry_attempt:ctx.__summary_retry_attempt||0,model:null,timestamp:new Date().toISOString(),status:'bad',metrics:[['LLM','не вызывался'],['Decision','ERROR'],['Причина',reason]]};
-      rep.meta=buildStageMeta(stage,rep);
-      return rep;
-    }
     const outcomeDependency=isOutcomeExtraction&&outcomeDependencyError(ctx);
     if(outcomeDependency){
       const output={status:'dependency_error',decision:'ERROR',score:null,error_code:'DEPENDENCY_ERROR',schema_error:outcomeDependency,parse_error:outcomeDependency,raw_response:null,issues:[outcomeDependency]};
@@ -11858,12 +11969,27 @@ function buildPipelineExecutionSummary(active,stageReports,stoppedAtIndex){
   const successfulReports=executedReports.filter(item=>['ok','warn','attn'].includes(item.report?.status));
   const stoppedReport=stoppedAtIndex>=0?stageReports.find(item=>item.stage?.outKey===active[stoppedAtIndex]?.outKey):null;
   const phaseBoundaryStop=stoppedReport?.report?.phase_boundary_stop===true&&stoppedReport.report.status!=='bad';
+  const byKey=new Map(countedReports.map(item=>[item.stage?.outKey,item.report]));
+  const failed=key=>{
+    const report=byKey.get(key);
+    return !report||report.execution_status==='NOT_RUN'||report.status==='bad'||['technical_error','dependency_error','error','failed'].includes(String(report.output&&report.output.status||'').toLowerCase());
+  };
+  const summaryOrCrmFailed=failed('summary')||failed('crm');
+  const extractorFailures=['facts','needs','outcome'].filter(failed);
+  const judgeFailures=['truth_check','critical_completeness_check','agent_utility_check','action_check','presentation_check'].filter(failed);
+  const validationFailed=failed('validation');
+  let pipelineStatus='SUCCESS';
+  if(summaryOrCrmFailed||validationFailed||(stoppedAtIndex>=0&&!phaseBoundaryStop)) pipelineStatus='FAILED';
+  else if(extractorFailures.length) pipelineStatus='PARTIAL_FAILURE';
+  else if(judgeFailures.length||countedReports.some(item=>item.report?.status==='warn')) pipelineStatus='SUCCESS_WITH_WARNINGS';
   return {
-    pipeline_status:stoppedAtIndex>=0&&!phaseBoundaryStop?'TECHNICAL_ERROR':'SUCCESS',
+    pipeline_status:pipelineStatus,
     steps_total:countedStages.length,
     steps_executed:executedReports.length,
     steps_successful:successfulReports.length,
     stopped_at_stage:stoppedAtIndex>=0?(active[stoppedAtIndex].outKey||'facts'):null,
+    extractor_failures:extractorFailures,
+    judge_failures:judgeFailures,
     stages:countedStages.map(stage=>{
       const matched=countedReports.find(item=>item.stage?.outKey===stage.outKey);
       if(!matched||matched.report?.execution_status==='NOT_RUN') return {outKey:stage.outKey||'',status:'NOT_RUN'};
@@ -12643,6 +12769,13 @@ function renderModuleSummaryResult(summary){
   }
   html+='<p class="fl" style="margin-top:4px">Договорённости и следующий шаг</p>';
   html+='<div class="summary-facts"><div>• '+escapeHtml(summary.next_step||'—')+'</div></div>';
+  const customerNeeds=customerNeedsValues(ctx);
+  html+='<p class="fl" style="margin-top:4px">Потребности клиента</p>';
+  html+='<div class="summary-facts">'
+    +'<div>• <b>Интересует:</b> '+escapeHtml(customerNeeds.interest.length?customerNeeds.interest.join(', '):'не определено')+'</div>'
+    +'<div>• <b>Источник средств:</b> '+escapeHtml(customerNeeds.funding_source)+'</div>'
+    +'<div>• <b>Срок покупки:</b> '+escapeHtml(customerNeeds.purchase_term)+'</div>'
+    +'</div>';
   return html;
 }
 
