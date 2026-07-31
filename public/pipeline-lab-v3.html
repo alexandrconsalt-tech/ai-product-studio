@@ -9670,7 +9670,7 @@ function validateNeedCommonItem(item,path,verifiedFactIds){
 }
 
 function verifiedNeedFacts(ctx){
-  return listFrom(ctx&&ctx.fact_check&&ctx.fact_check.verified_facts).filter(item=>item&&typeof item==='object'&&typeof item.id==='string');
+  return moduleOutputList(ctx&&ctx.facts,['facts']).filter(item=>item&&typeof item==='object'&&typeof item.id==='string');
 }
 
 function recoverLegacyNeedInterestStrings(value){
@@ -10510,7 +10510,44 @@ function normalizeOutcomeSemantics(value,ctx){
 }
 
 function validateOutcomeExtractionRoot(value,ctx,normalizeSemantics=true){
-  if(value&&typeof value==='object'&&Array.isArray(value.call_results)&&value.call_results.every(item=>item&&typeof item==='object'&&Array.isArray(item.source_fact_ids)&&Array.isArray(item.source_turn_ids))){
+  if(value&&typeof value==='object'&&Array.isArray(value.call_results)){
+    const directOutcome={
+      call_results:value.call_results.map((item,index)=>({
+        id:String(item&&item.id||'result_'+(index+1)),
+        value:String(item&&item.value||'').trim(),
+        confidence:Number(item&&item.confidence),
+        source_fact_ids:toList(item&&item.source_fact_ids).map(String),
+        source_turn_ids:toList(item&&item.source_turn_ids).map(id=>typeof id==='number'?'turn_'+id:String(id))
+      })),
+      agreements:toList(value.agreements).map((item,index)=>({
+        id:String(item&&item.id||'agreement_'+(index+1)),
+        action:String(item&&item.action||'').trim(),
+        owner:String(item&&item.owner||'').trim(),
+        recipient:String(item&&item.recipient||'').trim(),
+        deadline:String(item&&item.deadline||'').trim(),
+        channel:String(item&&item.channel||'').trim(),
+        status:['confirmed','not_defined'].includes(String(item&&item.status||''))?String(item.status):'not_defined',
+        confidence:Number(item&&item.confidence),
+        source_fact_ids:toList(item&&item.source_fact_ids).map(String),
+        source_turn_ids:toList(item&&item.source_turn_ids).map(id=>typeof id==='number'?'turn_'+id:String(id))
+      })),
+      primary_next_step:{
+        agreement_ids:toList(value.primary_next_step&&value.primary_next_step.agreement_ids).map(String),
+        action:String(value.primary_next_step&&value.primary_next_step.action||'').trim(),
+        owner:String(value.primary_next_step&&value.primary_next_step.owner||'').trim(),
+        recipient:String(value.primary_next_step&&value.primary_next_step.recipient||'').trim(),
+        deadline:String(value.primary_next_step&&value.primary_next_step.deadline||'').trim(),
+        channel:String(value.primary_next_step&&value.primary_next_step.channel||'').trim(),
+        status:['confirmed','not_defined'].includes(String(value.primary_next_step&&value.primary_next_step.status||''))?String(value.primary_next_step.status):'not_defined',
+        confidence:Number(value.primary_next_step&&value.primary_next_step.confidence)
+      },
+      outcome_meta:{
+        result_count:value.call_results.length,
+        agreement_count:toList(value.agreements).length,
+        decision:value.call_results.length||toList(value.agreements).length?'EXTRACTED':'NO_OUTCOME'
+      }
+    };
+    value=directOutcome;
     outcomeExactKeys(value,'',['call_results','agreements','primary_next_step','outcome_meta']);
     const resultIds=new Set(),agreementIds=new Set();
     value.call_results.forEach((item,index)=>{
@@ -12668,7 +12705,7 @@ function renderReport(stage, rep, num){
   else if(moduleActionCheckStage&&rep.output){ body+=renderActionCheckPanel(rep.output); }
   else if(modulePresentationCheckStage&&rep.output){ body+=renderPresentationCheckPanel(rep.output); }
   else if(moduleCrmStage&&rep.output){ body+=renderModuleCrmPanel(rep.output); }
-  else if(moduleSummaryStage&&rep.output&&['GENERATED','MANUAL_REVIEW'].includes(rep.output.status)){ body+=renderModuleSummaryResult(rep.output); }
+  else if(moduleSummaryStage&&rep.output&&['GENERATED','MANUAL_REVIEW'].includes(rep.summary_metrics?.generation_status)){ body+=renderModuleSummaryResult(rep.output); }
   else if(moduleSummaryStage&&rep.output){ body+='<div class="out" style="color:var(--bad)">'+escapeHtml(JSON.stringify(rep.output,null,2))+'</div>'; }
   else if(summaryNewStage&&isSummaryNewTechnicalError(rep.output)){ body+='<div class="out" style="color:var(--bad)">Техническая ошибка: '+escapeHtml(meta.explanation)+'</div>'; }
   else if(rep.error){ body+='<div class="out" style="color:var(--bad)">Ошибка: '+escapeHtml(rep.error)+'</div>'; }
@@ -12683,7 +12720,7 @@ function renderReport(stage, rep, num){
 
   const st=rep.status||'ok';
   const who=whoLabel(stage,rep);
-  const badgeLabel=moduleSummaryStage?(rep.output?.status==='MANUAL_REVIEW'?'Ручная проверка':rep.output?.status==='GENERATED'?'Сформировано':'Ошибка'):summaryNewStage?(meta.execution_status==='SUCCESS'?'Выполнено':'Техническая ошибка'):badgeText(st);
+  const badgeLabel=moduleSummaryStage?(rep.summary_metrics?.generation_status==='MANUAL_REVIEW'?'Ручная проверка':rep.summary_metrics?.generation_status==='GENERATED'?'Сформировано':'Ошибка'):summaryNewStage?(meta.execution_status==='SUCCESS'?'Выполнено':'Техническая ошибка'):badgeText(st);
   el.innerHTML='<div class="rep-h">'
     +'<div class="ri" style="background:'+M.bg+';color:'+M.c+'">'+num+'</div>'
     +'<div class="rt"><div class="rn">'+escapeHtml(stage.name)+'</div>'

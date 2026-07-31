@@ -12,13 +12,27 @@ describe("13-stage direct production runtime regression", () => {
   it("uses transcript + facts for Needs and makes Needs optional for Outcome", () => {
     const audit = section("function stageContextAudit", "function attachReviewerScores");
     const outcomeDependency = section("function outcomeDependencyError", "const OUTCOME_CHECK_QUALITY_KEYS");
+    const needFacts = section("function verifiedNeedFacts", "function recoverLegacyNeedInterestStrings");
     const runStage = section("async function runStage", "function buildPipelineExecutionSummary");
 
     expect(audit).toContain("needs:['transcript','facts']");
     expect(audit).toContain("outcome:['transcript','facts']");
     expect(audit).toContain("key==='outcome'?['needs']:[]");
     expect(outcomeDependency).not.toMatch(/fact_check|need_check|verified_/);
+    expect(needFacts).toContain("moduleOutputList(ctx&&ctx.facts,['facts'])");
+    expect(needFacts).not.toContain("fact_check");
     expect(runStage).not.toContain("UPSTREAM_FACT_CHECK_FAILED");
+  });
+
+  it("normalizes Outcome model output to the direct extractor contract", () => {
+    const outcomeParser = section(
+      "function validateOutcomeExtractionRoot",
+      "function validateOutcomeCheckInput",
+    );
+    expect(outcomeParser).toContain("const directOutcome=");
+    expect(outcomeParser).toContain("source_fact_ids:toList(item&&item.source_fact_ids).map(String)");
+    expect(outcomeParser).toContain("typeof id==='number'?'turn_'+id:String(id)");
+    expect(outcomeParser).not.toContain("ctx.fact_check");
   });
 
   it("builds Store from direct extractor outputs with stable attribute types", () => {
@@ -45,6 +59,7 @@ describe("13-stage direct production runtime regression", () => {
     expect(renderer).toContain("Потребности клиента");
     expect(renderer).toContain("Источник средств:");
     expect(pipeline).toContain("customer_needs:customerNeedsValues(ctx)");
+    expect(pipeline).toContain("rep.summary_metrics?.generation_status==='GENERATED'?'Сформировано':'Ошибка'");
   });
 
   it("routes all five Judges through the shared minimal response contract", () => {
