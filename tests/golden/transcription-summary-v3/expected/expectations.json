@@ -1,0 +1,134 @@
+[
+  {
+    "id": "full_success",
+    "facts": ["интерес к новостройке", "покупка за наличные", "срок до трёх месяцев"],
+    "needs": ["новостройка", "наличные / депозит", "до 3 месяцев"],
+    "outcome": "agreed follow-up with agent as owner",
+    "store": "complete",
+    "summary": "goal, funding and confirmed plan delivery",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [75,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "no_identified_need",
+    "facts": ["клиент изучает предложения"],
+    "needs": [],
+    "outcome": "no confirmed agreement",
+    "store": "complete",
+    "summary": "exploratory contact without invented need",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [50,100], "usefulness": [50,100], "agreements_next_step": [50,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": ["DRY_RUN","SKIPPED"]
+  },
+  {
+    "id": "no_agreement",
+    "facts": ["квартира рядом с метро"],
+    "needs": ["близость к метро"],
+    "outcome": "no agreement",
+    "store": "complete",
+    "summary": "agreementNextStep is null",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [50,100], "agreements_next_step": [75,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "no_next_step",
+    "facts": ["двухкомнатная квартира", "без ремонта"],
+    "needs": ["две комнаты", "без ремонта"],
+    "outcome": "no next step",
+    "store": "complete",
+    "summary": "agreementNextStep is null",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [50,100], "agreements_next_step": [75,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "question_not_fact",
+    "facts": [],
+    "needs": [],
+    "outcome": "agent will clarify legal scheme",
+    "store": "complete without assignment fact",
+    "summary": "question remains a question",
+    "judgeScoreRanges": {"faithfulness": [100,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [75,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "cash_colloquial",
+    "facts": ["без ипотеки", "деньги на депозите"],
+    "needs": ["наличные / депозит"],
+    "outcome": "funding captured",
+    "store": "complete",
+    "summary": "canonical funding attribute only",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [50,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": ["DRY_RUN","SKIPPED"]
+  },
+  {
+    "id": "multiple_requirements",
+    "facts": ["две комнаты", "рядом метро", "готовая отделка", "не первый этаж"],
+    "needs": ["all four requirements preserved"],
+    "outcome": "agent will select matching options",
+    "store": "complete",
+    "summary": "requirements are not silently dropped",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [75,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "role_confusion_guard",
+    "facts": [],
+    "needs": [],
+    "outcome": "agent sends, client receives",
+    "store": "complete",
+    "summary": "owner and recipient remain distinct",
+    "judgeScoreRanges": {"faithfulness": [100,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [100,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "short_operator_call",
+    "facts": [],
+    "needs": [],
+    "outcome": "transfer only",
+    "store": "complete",
+    "summary": "short operator context without invented business facts",
+    "judgeScoreRanges": {"faithfulness": [100,100], "completeness": [50,100], "usefulness": [50,100], "agreements_next_step": [50,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": ["DRY_RUN","SKIPPED"]
+  },
+  {
+    "id": "objection_and_follow_up",
+    "facts": ["price objection", "completion-date concern"],
+    "needs": ["price comparison", "completion documents"],
+    "outcome": "agent sends materials by Friday",
+    "store": "complete",
+    "summary": "objection and confirmed next step retained",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [100,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "alexandra_cash_on_account_parents_purchase_evening_follow_up",
+    "facts": ["деньги на счету", "агент свяжется вечером и сообщит статус квартиры"],
+    "needs": ["наличные / депозит"],
+    "outcome": "primary next step is evening status contact; conditional showing is not an agreement",
+    "store": "complete with funding-source-policy-v3 and no legacy fields",
+    "summary": "cash funding and confirmed evening follow-up without invented appointed showing",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [100,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "snezhana_sale_move_46sqm_duplicate_listing_price_growth_follow_up",
+    "facts": ["клиент продаёт свою квартиру и планирует переезд", "вопросы о задвоенном объявлении и росте цены"],
+    "needs": ["предпочтение около 46 м²"],
+    "outcome": "agent clarifies the situation and calls back",
+    "store": "complete without invented viewing or financing details",
+    "summary": "sale, move, preferred area, listing questions and confirmed follow-up retained",
+    "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [100,100], "format": [75,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  }
+]

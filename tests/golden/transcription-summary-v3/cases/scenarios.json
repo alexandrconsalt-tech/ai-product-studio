@@ -1,0 +1,104 @@
+[
+  {
+    "id": "full_success",
+    "title": "Полный успешный звонок",
+    "turns": [
+      {"speaker": "client", "text": "Ищу новостройку, покупаю за наличные, хочу выбрать в течение трёх месяцев."},
+      {"speaker": "agent", "text": "Сегодня отправлю три планировки на email."},
+      {"speaker": "client", "text": "Хорошо, жду планировки."}
+    ]
+  },
+  {
+    "id": "no_identified_need",
+    "title": "Потребность не выявлена",
+    "turns": [
+      {"speaker": "agent", "text": "Подскажите, какой объект вы рассматриваете?"},
+      {"speaker": "client", "text": "Пока просто изучаю предложения."}
+    ]
+  },
+  {
+    "id": "no_agreement",
+    "title": "Нет договорённости",
+    "turns": [
+      {"speaker": "client", "text": "Рассматриваю квартиру рядом с метро."},
+      {"speaker": "agent", "text": "Понял ваши требования."}
+    ]
+  },
+  {
+    "id": "no_next_step",
+    "title": "Нет следующего шага",
+    "turns": [
+      {"speaker": "client", "text": "Нужна двухкомнатная квартира без ремонта."},
+      {"speaker": "agent", "text": "Спасибо за информацию."}
+    ]
+  },
+  {
+    "id": "question_not_fact",
+    "title": "Вопрос не является фактом",
+    "turns": [
+      {"speaker": "client", "text": "Там переуступка?"},
+      {"speaker": "agent", "text": "Уточню юридическую схему объекта."}
+    ]
+  },
+  {
+    "id": "cash_colloquial",
+    "title": "Разговорная формулировка наличных",
+    "turns": [
+      {"speaker": "client", "text": "Без ипотеки, деньги уже на депозите."},
+      {"speaker": "agent", "text": "Зафиксировал способ покупки."}
+    ]
+  },
+  {
+    "id": "multiple_requirements",
+    "title": "Несколько требований",
+    "turns": [
+      {"speaker": "client", "text": "Нужны две комнаты, рядом метро, готовая отделка и не первый этаж."},
+      {"speaker": "agent", "text": "Подберу варианты по всем четырём условиям."}
+    ]
+  },
+  {
+    "id": "role_confusion_guard",
+    "title": "Проверка ролей",
+    "turns": [
+      {"speaker": "agent", "text": "Я отправлю расчёт завтра."},
+      {"speaker": "client", "text": "Да, отправьте мне расчёт."}
+    ]
+  },
+  {
+    "id": "short_operator_call",
+    "title": "Короткий операторский звонок",
+    "turns": [
+      {"speaker": "operator", "text": "Соединяю вас со специалистом."},
+      {"speaker": "client", "text": "Хорошо."}
+    ]
+  },
+  {
+    "id": "objection_and_follow_up",
+    "title": "Возражение и последующий шаг",
+    "turns": [
+      {"speaker": "client", "text": "Цена кажется высокой, и я сомневаюсь в сроке сдачи."},
+      {"speaker": "agent", "text": "До пятницы отправлю сравнение цен и документы по сроку сдачи."},
+      {"speaker": "client", "text": "Договорились, посмотрю материалы."}
+    ]
+  },
+  {
+    "id": "alexandra_cash_on_account_parents_purchase_evening_follow_up",
+    "title": "Деньги на счету и условный показ",
+    "turns": [
+      {"speaker": "client", "text": "Деньги на счету, квартиру для меня покупают родители."},
+      {"speaker": "agent", "text": "Сегодня вечером свяжусь и сообщу, свободна ли квартира."},
+      {"speaker": "client", "text": "Хорошо, буду ждать звонка."},
+      {"speaker": "agent", "text": "Если всё подтвердится, завтра смогу показать квартиру."}
+    ]
+  },
+  {
+    "id": "snezhana_sale_move_46sqm_duplicate_listing_price_growth_follow_up",
+    "title": "Продажа своей квартиры, переезд и вопросы по объявлению",
+    "turns": [
+      {"speaker": "client", "text": "Я продаю свою квартиру и планирую переезд."},
+      {"speaker": "client", "text": "Предпочтительно около 46 квадратных метров."},
+      {"speaker": "client", "text": "Почему объявление задвоено и почему выросла цена?"},
+      {"speaker": "agent", "text": "Уточню ситуацию и перезвоню."}
+    ]
+  }
+]

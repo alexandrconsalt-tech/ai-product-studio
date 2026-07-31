@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * Shape of the `postMessage` payload public/pipeline-lab-v3.html sends to
  * its parent window after a run finishes (see that file's
@@ -45,4 +47,26 @@ export type PipelineLabV3RunMessage = Readonly<{
 
 export function isPipelineLabV3RunMessage(data: unknown): data is PipelineLabV3RunMessage {
   return typeof data === "object" && data !== null && (data as { source?: unknown }).source === "pipeline-lab-v3" && (data as { type?: unknown }).type === "run-complete";
+}
+
+export const PipelineRuntimeConfigSchema = z.object({
+  transcriptionSummaryV3Enabled: z.boolean(),
+  transcriptionSummaryV3CrmDryRun: z.boolean(),
+  transcriptionSummaryV3Required: z.boolean(),
+  transcriptionSummaryV3PipelineVersion: z.literal("3.0.0"),
+}).strict();
+
+export type PipelineRuntimeConfig = z.infer<typeof PipelineRuntimeConfigSchema>;
+
+export const PipelineLabV3ConfigMessageSchema = z.object({
+  source: z.literal("ai-communication-studio"),
+  type: z.literal("runtime-config"),
+  config: PipelineRuntimeConfigSchema,
+}).strict();
+
+export type PipelineLabV3ConfigMessage = z.infer<typeof PipelineLabV3ConfigMessageSchema>;
+
+export function parsePipelineLabV3ConfigMessage(data: unknown): PipelineLabV3ConfigMessage | null {
+  const parsed = PipelineLabV3ConfigMessageSchema.safeParse(data);
+  return parsed.success ? parsed.data : null;
 }
