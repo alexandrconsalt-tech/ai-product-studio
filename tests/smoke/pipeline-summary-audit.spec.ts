@@ -124,6 +124,87 @@ test("Summary принимает только четыре пользовате�
   expect(result.extraFieldRejected).toBe(true);
 });
 
+test("Summary детерминированно сокращает небольшой перелимит без fallback", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const longText = "Подтверждённая информация из разговора без новых фактов. ".repeat(7);
+    const repaired = moduleSummaryDeterministicRepair({
+      conversation_result: longText,
+      key_facts: [
+        { label: "Параметры объекта", value: longText },
+        { label: "Условия сделки", value: longText },
+      ],
+      quotes: [{ text: longText }],
+      next_step: longText,
+    });
+    let valid = false;
+    try {
+      validateModuleSummaryOutput(repaired.value);
+      valid = true;
+    } catch {
+      valid = false;
+    }
+    return {
+      valid,
+      visibleLength: moduleSummaryVisibleText(repaired.value).length,
+      repairAttempted: repaired.repair_attempted,
+      removedItems: repaired.removed_items,
+      contractStatus: repaired.contract_status,
+    };
+  });
+  expect(result).toMatchObject({
+    valid: true,
+    repairAttempted: true,
+    contractStatus: "RECOVERED_WITH_WARNING",
+  });
+  expect(result.visibleLength).toBeLessThanOrEqual(1200);
+  expect(result.removedItems).toContain("content_over_1200_shortened");
+});
+
+test("Need превращает отклонённые 38 м² в минимальную площадь", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => normalizeNeedExtractionSemantics({
+    attributes: {
+      interest: [],
+      funding_source: { value: "не определено", confidence: 1, evidence: "", source_fact_ids: [], verification_status: "extracted" },
+      purchase_term: { value: "не определено", confidence: 1, evidence: "", source_fact_ids: [], verification_status: "extracted" },
+    },
+    requirements: [{
+      id: "requirement_1",
+      type: "rejected_option",
+      value: "38 м² — слишком мало",
+      confidence: 0.99,
+      evidence: "Я уже смотрела 38, для меня слишком мало.",
+      source_fact_ids: ["fact_1"],
+      verification_status: "extracted",
+    }],
+    need_meta: { interest_count: 0, requirements_count: 1, decision: "EXTRACTED" },
+  }, {
+    facts: {
+      facts: [{
+        id: "fact_1",
+        type: "client_requirement",
+        value: "38 м² слишком мало, идеально 46 м²",
+        speaker: "Клиент",
+        evidence: "Я уже смотрела 38, для меня слишком мало. Идеально 46.",
+        source_turn_ids: ["turn_1"],
+        confidence: 0.99,
+      }],
+      quotes: [],
+    },
+  }));
+  expect(result.requirements).toEqual([
+    expect.objectContaining({
+      type: "minimum_area",
+      value: "больше 38 м²",
+      source_fact_ids: ["fact_1"],
+    }),
+  ]);
+  expect(result.need_meta.transformations).toContainEqual(
+    expect.objectContaining({ type: "REJECTED_AREA_TO_MINIMUM_AREA" }),
+  );
+});
+
 test("Quality Gate усредняет только доступные оценки и не блокирует pipeline", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
