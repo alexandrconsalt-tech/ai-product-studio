@@ -52,7 +52,7 @@ const SUMMARY_JUDGE_CRITERION = {
 const BUSINESS_INSTRUCTIONS = {
   facts_agent: "Извлеки только явно подтверждённые факты и цитаты. verification_status каждого валидного элемента должен быть extracted.",
   needs_agent: "Используй ctx.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check. Разделяй потребности, требования и CRM-атрибуты. verification_status каждого валидного элемента должен быть extracted.",
-  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_results, agreements, primary_next_step и outcome_meta строго по JSON Schema. call_results всегда массив объектов, а не строк. Не используй call_result, agreement_id или text.",
+  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_result, agreements и primary_next_step строго по JSON Schema. call_result всегда строка. Не используй call_results, agreement_id, outcome_meta или text.",
 } as const;
 
 const PROMPT_VERSION_BY_STAGE = {

@@ -30,15 +30,19 @@ describe("13-stage direct production runtime regression", () => {
     expect(runStage).not.toContain("UPSTREAM_FACT_CHECK_FAILED");
   });
 
-  it("normalizes Outcome model output to the direct extractor contract", () => {
+  it("uses one singular Outcome contract in prompt, structured output, parser and Store", () => {
     const outcomeParser = section(
       "function validateOutcomeExtractionRoot",
       "function validateOutcomeCheckInput",
     );
-    expect(outcomeParser).toContain("const directOutcome=");
-    expect(outcomeParser).toContain("source_fact_ids:toList(item&&item.source_fact_ids).map(String)");
-    expect(outcomeParser).toContain("typeof id==='number'?'turn_'+id:String(id)");
+    const promptResolver = section("function ensureModuleTranscriptPrompt", "function factExtractionContractAppendix");
+    const runStage = section("async function runStage", "function buildPipelineExecutionSummary");
+    expect(outcomeParser).toContain("Object.prototype.hasOwnProperty.call(value,'call_result')");
+    expect(outcomeParser).toContain("return {call_result:value.call_result.trim(),agreements,primary_next_step:primary}");
     expect(outcomeParser).not.toContain("ctx.fact_check");
+    expect(promptResolver).toContain("Поле call_results запрещено");
+    expect(runStage).toContain("schema:OUTCOME_RESPONSE_SCHEMA");
+    expect(runStage).toContain("all_contracts_match:isFactsExtraction||isNeedsExtraction||isOutcomeExtraction?true:null");
   });
 
   it("builds Store from direct extractor outputs with stable attribute types", () => {
@@ -50,6 +54,7 @@ describe("13-stage direct production runtime regression", () => {
     expect(store).toContain("const needsSource=ctx&&ctx.needs");
     expect(store).toContain("const outcomeSource=ctx&&ctx.outcome");
     expect(store).toContain("attributes:{interest:[...new Set(interest)],funding_source,purchase_term}");
+    expect(store).toContain("call_result:String(outcomeSource&&outcomeSource.call_result||'')");
     expect(store).toContain("'dependency_error'");
     expect(store).toContain("funding_source='наличные / депозит'");
     expect(store).not.toMatch(/ctx&&ctx\.(?:fact_check|need_check)/);
@@ -74,6 +79,16 @@ describe("13-stage direct production runtime regression", () => {
     expect(pipeline).toContain("required:['score','status','issues','explanation']");
     expect(pipeline).toContain("if(IS_TRANSCRIPTION_SUMMARY_MODULE&&MODULE_GENERIC_JUDGE_DEFINITIONS[stage.outKey])");
     expect(pipeline).toContain("prompt_chars:prompt.length");
+    expect(pipeline).toContain("Не требуй телефон, код объекта");
+    expect(pipeline).toContain("буду ждать звонка");
+  });
+
+  it("reports partial context and honest CRM attribute persistence", () => {
+    expect(pipeline).toContain("complete_on_partial_context");
+    expect(pipeline).toContain("pipeline_context_complete");
+    expect(pipeline).toContain("attributes_included_in_payload:true");
+    expect(pipeline).toContain("attributes_saved_to_crm_fields:false");
+    expect(pipeline).toContain("status:extractorErrors.length?'REVIEW_REQUIRED':'SAVED'");
   });
 
   it("reports honest top-level pipeline states", () => {

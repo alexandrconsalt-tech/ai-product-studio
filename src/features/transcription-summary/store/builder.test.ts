@@ -43,7 +43,7 @@ describe("Conversation Store v3.2 из raw Extractor", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.store.source_errors).toContain("outcome");
-    expect(result.store.call_results).toEqual([]);
+    expect(result.store.call_result).toBe("");
     expect(result.store.agreements).toEqual([]);
     expect(result.store.primary_next_step).toEqual(EMPTY_OUTCOME_V3.primary_next_step);
   });

@@ -97,7 +97,6 @@ function storeItemIds(input: SummaryJudgeInputV3): Set<string> {
     store.attributes.purchase_term
       ? [store.attributes.purchase_term]
       : [],
-    store.call_results,
     store.agreements,
   ];
   return new Set(collections.flat().flatMap((item) =>

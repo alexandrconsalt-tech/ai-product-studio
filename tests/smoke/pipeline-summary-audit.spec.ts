@@ -149,11 +149,19 @@ test("Quality Gate усредняет только доступные оценк
       action_check: base(100),
       presentation_check: base(100),
     }).output;
-    return { complete, partial, critical };
+    const partialContext = CODE_FUNCS.summaryQualityGate({}, {
+      truth_check: base(100),
+      critical_completeness_check: base(100),
+      agent_utility_check: base(100),
+      action_check: base(100),
+      presentation_check: base(100),
+      conversation_store: { conversation: { partial: true, source_errors: ["outcome"] } },
+    }).output;
+    return { complete, partial, critical, partialContext };
   });
   expect(result.complete).toMatchObject({
     summary_quality_score: 95,
-    quality_status: "EXCELLENT",
+    quality_status: "PASS",
     evaluation_status: "complete",
     evaluated_criteria: 5,
     total_criteria: 5,
@@ -161,17 +169,22 @@ test("Quality Gate усредняет только доступные оценк
   });
   expect(result.partial).toMatchObject({
     summary_quality_score: 93.8,
-    quality_status: "GOOD",
+    quality_status: "PASS",
     evaluation_status: "partial",
     evaluated_criteria: 4,
     blocking: false,
   });
   expect(result.critical).toMatchObject({
     summary_quality_score: 100,
-    quality_status: "NEEDS_ATTENTION",
+    quality_status: "WARNING",
     blocking: false,
   });
   expect(result.critical.critical_issues).toHaveLength(1);
+  expect(result.partialContext).toMatchObject({
+    evaluation_status: "complete_on_partial_context",
+    pipeline_context_complete: false,
+    extractor_errors: ["outcome"],
+  });
 });
 
 test("CRM сохраняет валидный Summary даже без результата Gate", async ({ page }) => {
@@ -199,9 +212,11 @@ test("CRM сохраняет валидный Summary даже без резул
   });
   expect(result).toMatchObject({
     status: "SAVED",
-    decision: "SAVED_WITH_PARTIAL_EVALUATION",
+    decision: "SAVED_WITH_WARNING",
     summary_saved: true,
-    attributes_saved: true,
+    attributes_included_in_payload: true,
+    attributes_saved_to_crm_fields: false,
+    attributes_saved: false,
     quality_saved: true,
     payload: {
       summary: {

@@ -241,7 +241,7 @@ export function buildConversationStoreV3(
       ...safeNeeds.business_needs,
       ...safeNeeds.property_requirements,
     ]),
-    call_results: uniqueById(safeOutcome.call_results),
+    call_result: safeOutcome.call_result,
     agreements: uniqueById(safeOutcome.agreements),
     primary_next_step: safeOutcome.primary_next_step,
     source_quality: sourceQuality,

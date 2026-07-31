@@ -111,36 +111,23 @@ const needs = {
 } as const;
 
 const outcome = {
-  call_results: [{
-    id: "result-1",
-    value: "согласована отправка планировок",
-    confidence: 1,
-    source_fact_ids: [],
-    source_turn_ids: ["turn-outcome"],
-  }],
+  call_result: "согласована отправка планировок",
   agreements: [{
     id: "agreement-1",
     action: "Отправить планировки",
     owner: "Агент",
-    recipient: "Клиент",
     deadline: "",
     channel: "email",
     status: "confirmed",
-    confidence: 1,
-    source_fact_ids: [],
-    source_turn_ids: ["turn-outcome"],
+    evidence: "Отправлю планировки на email.",
   }],
   primary_next_step: {
-    agreement_ids: ["agreement-1"],
     action: "Отправить планировки",
     owner: "Агент",
-    recipient: "Клиент",
     deadline: "",
     channel: "email",
     status: "confirmed",
-    confidence: 1,
   },
-  outcome_meta: { result_count: 1, agreement_count: 1, decision: "EXTRACTED" },
 } as const;
 
 export function createPhase4StoreInput(): BuildConversationStoreV3Input {
@@ -158,16 +145,12 @@ export function createPhase4StoreWithoutAgreementInput(): BuildConversationStore
       ...outcome,
       agreements: [],
       primary_next_step: {
-        agreement_ids: [],
         action: "",
         owner: "",
-        recipient: "",
         deadline: "",
         channel: "",
         status: "not_defined",
-        confidence: 0,
       },
-      outcome_meta: { result_count: 1, agreement_count: 0, decision: "EXTRACTED" },
     },
   };
 }

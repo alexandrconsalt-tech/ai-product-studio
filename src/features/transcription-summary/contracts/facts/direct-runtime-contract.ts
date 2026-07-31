@@ -2,16 +2,18 @@ import { z } from "zod";
 
 export const DIRECT_FACT_TYPES = [
   "client_goal",
-  "client_need",
+  "client_context",
+  "client_requirement",
+  "client_preference",
   "client_finance",
-  "client_question",
+  "client_timing",
   "client_objection",
   "client_constraint",
-  "client_preference",
-  "client_motivation",
-  "object_fact",
-  "legal_context",
-  "agreement_signal",
+  "open_question",
+  "agent_information",
+  "agent_commitment",
+  "agreement",
+  "communication_result",
   "other_important",
 ] as const;
 

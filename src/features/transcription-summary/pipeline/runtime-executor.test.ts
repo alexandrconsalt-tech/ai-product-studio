@@ -78,7 +78,8 @@ describe("v3 runtime executor dependencies", () => {
     }));
     expect(prompts[0]).toContain('"facts"');
     expect(prompts[0]).toContain('"needs"');
-    expect(prompts[0]).toContain("call_results всегда массив объектов");
+    expect(prompts[0]).toContain("call_result всегда строка");
+    expect(prompts[0]).not.toContain("call_results всегда массив");
     expect(prompts[0]).not.toContain("facts_verified");
     expect(prompts[0]).not.toContain("needs_verified");
   });
