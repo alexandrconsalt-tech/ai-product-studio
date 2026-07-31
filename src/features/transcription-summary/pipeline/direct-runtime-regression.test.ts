@@ -66,6 +66,7 @@ describe("13-stage direct production runtime regression", () => {
     expect(renderer).toContain("Источник средств:");
     expect(pipeline).toContain("customer_needs:customerNeedsValues(ctx)");
     expect(pipeline).toContain("rep.summary_metrics?.generation_status==='GENERATED'?'Сформировано':'Ошибка'");
+    expect(pipeline).toContain("const moduleSummaryStructured=IS_TRANSCRIPTION_SUMMARY_MODULE&&sm&&typeof sm.conversation_result==='string'");
   });
 
   it("routes all five Judges through the shared minimal response contract", () => {

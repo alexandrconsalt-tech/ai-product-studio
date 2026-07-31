@@ -12912,7 +12912,7 @@ function renderFinal(totalTokens, totalCost, stageReports){
   const pipelineTechnical=execution.pipeline_status==='TECHNICAL_ERROR';
   const summaryTechnical=IS_SUMMARY_NEW_PROJECT&&isSummaryNewTechnicalError(sm);
   const summaryStructured=IS_SUMMARY_NEW_PROJECT&&sm&&typeof sm.summary==='string'&&Array.isArray(sm.key_facts)&&Array.isArray(sm.quotes)&&Array.isArray(sm.next_steps);
-  const moduleSummaryStructured=IS_TRANSCRIPTION_SUMMARY_MODULE&&sm&&['GENERATED','MANUAL_REVIEW'].includes(sm.status)&&typeof sm.conversation_result==='string';
+  const moduleSummaryStructured=IS_TRANSCRIPTION_SUMMARY_MODULE&&sm&&typeof sm.conversation_result==='string'&&Array.isArray(sm.key_facts)&&Array.isArray(sm.quotes)&&typeof sm.next_step==='string';
   const summary = (sm&&(sm.conversation_result||sm.summary)) || '—';
   const el=document.createElement('div'); el.className='final';
   const decision = summaryTechnical||pipelineTechnical?'TECHNICAL_ERROR':(gate?gate.decision:'—');
