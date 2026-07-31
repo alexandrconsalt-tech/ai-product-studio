@@ -163,7 +163,7 @@ test("Summary детерминированно сокращает небольш
 
 test("Need превращает отклонённые 38 м² в минимальную площадь", async ({ page }) => {
   await page.goto(moduleUrl);
-  const result = await page.evaluate(() => normalizeNeedExtractionSemantics({
+  const result = await page.evaluate(() => validateNeedExtractionRoot({
     attributes: {
       interest: [],
       funding_source: { value: "не определено", confidence: 1, evidence: "", source_fact_ids: [], verification_status: "extracted" },

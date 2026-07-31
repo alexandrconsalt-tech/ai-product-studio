@@ -9660,7 +9660,7 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
 }
 
 const NEED_ITEM_KEYS=['value','confidence','evidence','source_fact_ids','verification_status'];
-const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE','RECOVER_FUNDING_SOURCE','RECOVER_LEGACY_INTEREST_STRING']);
+const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE','RECOVER_FUNDING_SOURCE','RECOVER_LEGACY_INTEREST_STRING','REJECTED_AREA_TO_MINIMUM_AREA']);
 
 class NeedSchemaError extends Error{
   constructor(message){super(message);this.name='NeedSchemaError';}
@@ -10007,6 +10007,8 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
         ? ['type','from','to','source_fact_ids']
         : item&&item.type==='RECOVER_LEGACY_INTEREST_STRING'
         ? ['type','output_interest_id']
+        : item&&item.type==='REJECTED_AREA_TO_MINIMUM_AREA'
+        ? ['type','output_requirement_id','source_fact_ids']
         : ['type','output_requirement_id','source_requirement_ids'];
       needExactKeys(item,path,keys);
       needExpect(NEED_TRANSFORMATION_TYPES.has(item.type),path+'.type','canonical transformation type',item.type);
@@ -10021,6 +10023,10 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
         return;
       }
       needExpect(typeof item.output_requirement_id==='string'&&item.output_requirement_id.trim().length>0,path+'.output_requirement_id','non-empty string',item.output_requirement_id);
+      if(item.type==='REJECTED_AREA_TO_MINIMUM_AREA'){
+        needExpect(Array.isArray(item.source_fact_ids)&&item.source_fact_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_fact_ids','non-empty string[]',item.source_fact_ids);
+        return;
+      }
       needExpect(Array.isArray(item.source_requirement_ids)&&item.source_requirement_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_requirement_ids','non-empty string[]',item.source_requirement_ids);
     });
   }
