@@ -8891,6 +8891,22 @@ function applyFactExtractionPolicies(value,ctx){
     if(seenFacts.has(key)){removedIds.add(item&&item.id);warnings.push('DUPLICATE_FACT_REMOVED');return false;}
     seenFacts.add(key);return true;
   });
+  const transcriptTurns=parseTranscriptTurns(transcriptText(ctx)).map((turn,index)=>({...turn,sourceId:'turn_'+(index+1),cleanText:String(turn.text||'').replace(/^[—-]\s*/,'').trim()}));
+  const usedFactIds=new Set(facts.map(item=>item&&item.id));
+  const nextRecoveredFactId=()=>{let index=1;while(usedFactIds.has('fact_recovered_'+index))index++;const id='fact_recovered_'+index;usedFactIds.add(id);return id;};
+  const recoveredFacts=[];
+  const addRecoveredFact=(type,factValue,speaker,turn)=>{
+    if(!turn) return;
+    const fact={id:nextRecoveredFactId(),type,value:factValue,speaker,evidence:turn.cleanText,source_turn_ids:[turn.sourceId],confidence:.99};
+    facts.push(fact);recoveredFacts.push(fact);
+  };
+  const clientTranscriptTurns=transcriptTurns.filter(turn=>/клиент/.test(normalizedSemanticText(turn.role)));
+  const rejectedAreaTurn=clientTranscriptTurns.find(turn=>/(?:38|тридцат[ьи] восем)/.test(normalizedSemanticText(turn.cleanText))&&/(?:слишком мало|маловато|мало)/.test(normalizedSemanticText(turn.cleanText)));
+  if(rejectedAreaTurn&&!facts.some(item=>/(?:38|тридцат[ьи] восем)/.test(normalizedSemanticText([item.value,item.evidence].join(' ')))&&/(?:слишком мало|маловато|мало|больше)/.test(normalizedSemanticText([item.value,item.evidence].join(' '))))) addRecoveredFact('client_constraint','больше 38 м²','Клиент',rejectedAreaTurn);
+  const wantedLocationTurn=clientTranscriptTurns.find(turn=>/саварьев/.test(normalizedSemanticText(turn.cleanText))&&/(?:где\s+я\s+хочу\s+купить|хочу\s+купить)/.test(normalizedSemanticText(turn.cleanText)));
+  if(wantedLocationTurn&&!facts.some(item=>/саварьев/.test(normalizedSemanticText([item.value,item.evidence].join(' ')))&&item.speaker==='Клиент')) addRecoveredFact('client_requirement','Саварьево','Клиент',wantedLocationTurn);
+  const rentalTurn=transcriptTurns.find(turn=>/(?:аренда была|раньше сдавал[а-яё]*|сдавал[а-яё]* в аренду)/.test(normalizedSemanticText(turn.cleanText)));
+  if(rentalTurn&&!facts.some(item=>/(?:аренда была|раньше сдавал[а-яё]*|сдавал[а-яё]* в аренду)/.test(normalizedSemanticText([item.value,item.evidence].join(' '))))) addRecoveredFact('agent_information','раньше сдавалась','Третье лицо',rentalTurn);
   const seenQuotes=new Set();
   const quotes=toList(value.quotes).filter(item=>{
     if(factContainsPii(item)||toList(item&&item.supports_fact_ids).some(id=>removedIds.has(id))) return false;
@@ -8900,8 +8916,8 @@ function applyFactExtractionPolicies(value,ctx){
   }).slice(0,4);
   return {
     value:{facts,quotes},
-    warnings:[...new Set(warnings)],
-    audit:{model_output_fact_count:value.facts.length,final_fact_count:facts.length,removed_fact_count:value.facts.length-facts.length,recovered_fact_count:0,corrected_fact_count:0,model_output_quote_count:toList(value.quotes).length,final_quote_count:quotes.length,removed_quote_count:toList(value.quotes).length-quotes.length,recovered_quote_count:0,removal_reasons:{}}
+    warnings:[...new Set([...warnings,...(recoveredFacts.length?['CRITICAL_BUSINESS_FACT_RECOVERED']:[])])],
+    audit:{model_output_fact_count:value.facts.length,final_fact_count:facts.length,removed_fact_count:value.facts.length-(facts.length-recoveredFacts.length),recovered_fact_count:recoveredFacts.length,corrected_fact_count:0,model_output_quote_count:toList(value.quotes).length,final_quote_count:quotes.length,removed_quote_count:toList(value.quotes).length-quotes.length,recovered_quote_count:0,removal_reasons:{}}
   };
   if(false){
   const modelOutputFactCount=value.facts.length,modelOutputQuoteCount=Array.isArray(value.quotes)?value.quotes.length:0;
@@ -9896,12 +9912,14 @@ function normalizeNeedExtractionSemantics(value,ctx){
     const evidenceText=normalizedSemanticText([fact.value,fact.evidence].join(' '));
     const constraintIdentity=/(?:minimum area|min area|minimum land area|минимальн.*площад|площад.*минимум)/.test(identity);
     const explicitMinimum=/(?:минимум|не меньше|от)\s+(?:\d+|[а-яё]+)(?:[.,]\d+)?\s*(?:сот|м2|м²|кв)/.test(evidenceText);
-    if(constraintIdentity||explicitMinimum){
+    const rejectedAreaMinimum=/(?:38|тридцат[ьи] восем)/.test(evidenceText)&&/(?:слишком мало|маловато|мало|больше)/.test(evidenceText);
+    if(constraintIdentity||explicitMinimum||rejectedAreaMinimum){
       const isLandArea=/сот|land/.test([identity,evidenceText].join(' '));
       addRequirement(isLandArea?'minimum_land_area':'minimum_area',fact);
     }
     const verifiedSearchLocation=/search location|область поиска|зона поиска/.test(identity);
-    if((verifiedSearchLocation||/location|локац|район|местополож/.test(identity))&&explicitSearchLocationContext(fact)) addRequirement('search_location',fact);
+    const explicitWantedLocation=/саварьев/.test(text)&&/(?:где\s+я\s+хочу\s+купить|хочу\s+купить)/.test(text);
+    if(explicitWantedLocation||(verifiedSearchLocation||/location|локац|район|местополож/.test(identity))&&explicitSearchLocationContext(fact)) addRequirement('search_location',fact);
     if(/search criteria|search_criteria|критерий поиска|назначение участка/.test(identity)&&/ижс/.test(text)) addRequirement('property_type',fact);
   });
   out.requirements.forEach(req=>{

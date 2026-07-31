@@ -205,6 +205,62 @@ test("Need превращает отклонённые 38 м² в минимал
   );
 });
 
+test("Fact→Need восстанавливает пропущенные критерии Снежаны с provenance", async ({ page }) => {
+  await page.goto(moduleUrl);
+  const result = await page.evaluate(() => {
+    const transcript = [
+      "Клиент: Я просто хотела посмотреть, понять, что из себя представляет такая квартира в Саварьево, где я хочу купить.",
+      "Клиент: Я уже смотрела 38, для меня слишком мало.",
+      "Клиент: Идеально 46. У меня у самой 45.",
+      "Неизвестный спикер: Там сейчас никто не проживает. Аренда была. Квартира пустая, прописанных никого нет, без обременений.",
+    ].join("\n");
+    const policy = applyFactExtractionPolicies({
+      facts: [{
+        id: "fact_1",
+        type: "client_requirement",
+        value: "площадь около 46 м²",
+        speaker: "Клиент",
+        evidence: "Идеально 46. У меня у самой 45.",
+        source_turn_ids: ["turn_3"],
+        confidence: 0.9,
+      }],
+      quotes: [],
+    }, { __transcript: transcript });
+    const needs = normalizeNeedExtractionSemantics({
+      attributes: {
+        interest: [],
+        funding_source: { value: "не определено", confidence: 1, evidence: "", source_fact_ids: [], verification_status: "extracted" },
+        purchase_term: { value: "не определено", confidence: 1, evidence: "", source_fact_ids: [], verification_status: "extracted" },
+      },
+      requirements: [{
+        id: "requirement_1",
+        type: "preferred_area",
+        value: "около 46 м²",
+        confidence: 0.9,
+        evidence: "Идеально 46. У меня у самой 45.",
+        source_fact_ids: ["fact_1"],
+        verification_status: "extracted",
+      }],
+      need_meta: { interest_count: 0, requirements_count: 1, decision: "EXTRACTED" },
+    }, { facts: policy.value });
+    return { policy, needs };
+  });
+  expect(result.policy.audit.recovered_fact_count).toBe(3);
+  expect(result.policy.value.facts).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: "client_constraint", value: "больше 38 м²", speaker: "Клиент" }),
+    expect.objectContaining({ type: "client_requirement", value: "Саварьево", speaker: "Клиент" }),
+    expect.objectContaining({ type: "agent_information", value: "раньше сдавалась", speaker: "Третье лицо" }),
+  ]));
+  expect(result.needs.requirements).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: "search_location", value: "Саварьево" }),
+    expect.objectContaining({ type: "minimum_area", value: "больше 38 м²" }),
+    expect.objectContaining({ type: "preferred_area", value: "около 46 м²" }),
+  ]));
+  for (const requirement of result.needs.requirements) {
+    expect(requirement.source_fact_ids).not.toHaveLength(0);
+  }
+});
+
 test("Quality Gate усредняет только доступные оценки и не блокирует pipeline", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
