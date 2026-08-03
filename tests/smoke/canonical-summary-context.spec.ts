@@ -88,7 +88,7 @@ function scenario(id: string) {
     quotes: [{ id: "quote_legal", text: "Для меня важно, чтобы не было обременений", speaker: "Клиент", supports_fact_ids: ["inheritance"], confidence: 0.99 }],
   });
   return store({
-    facts: [fact("objection", "client_objection", "Клиента смущает шум", undefined, { business_priority: "critical" })],
+    facts: [fact("objection", "client_constraint", "Шум критичен, не рассматриваю шумную квартиру", undefined, { business_priority: "critical" })],
     requirements: [requirement("lift", "other_requirement", "Наличие лифта"), requirement("area", "minimum_area", "от 60 м²"), requirement("metro", "search_location", "рядом с метро"), requirement("rooms", "property_type", "двухкомнатная квартира")],
     call_result: "Агент подготовит подборку.", agreements: [{ id: "agreement_primary", action: "подготовить подборку", owner: "агент", recipient: "клиент", deadline: "завтра", channel: "email", status: "promised", evidence: "Завтра подготовлю подборку", confidence: 0.99 }], primary_next_step: primary("подготовить подборку", "завтра", "email"),
     quotes: [{ id: "quote_noise", text: "Шум для меня критичен, такую квартиру не возьму", speaker: "Клиент", supports_fact_ids: ["objection"], confidence: 0.99 }],
@@ -204,6 +204,7 @@ test("Golden Dataset достигает заданных бизнес-метри
   let requiredTotal = 0, requiredHit = 0, selectedTotal = 0, selectedRelevant = 0, forbiddenTotal = 0, forbiddenRejected = 0, duplicateTotal = 0, duplicateRejected = 0, nextCorrect = 0, quoteTotal = 0, quoteCorrect = 0;
   for (const golden of goldenDataset) {
     const context = await build(page, scenario(golden.id)); const values = selectedValues(context); const text = normalize(values.join(" "));
+    expect(context.ranking_diagnostics.critical_meanings_lost, golden.id).toBe(0);
     requiredTotal += golden.required_meanings.length; requiredHit += golden.required_meanings.filter((tokens) => meaningPresent(text, tokens)).length;
     forbiddenTotal += golden.forbidden_meanings.length; forbiddenRejected += golden.forbidden_meanings.filter((tokens) => !meaningPresent(text, tokens)).length;
     const relevant = [...golden.required_meanings, ...golden.allowed_meanings]; selectedTotal += values.length;

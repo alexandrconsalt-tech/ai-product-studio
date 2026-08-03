@@ -7472,7 +7472,7 @@ function canonicalSummarySlot(sourceType,value,item={}){
   if(type==='primary next step') return 'primary_next_step';
   if(/client goal|client context|client need/.test(type)) return 'client_context';
   if(/client finance|client timing|price limit|budget|funding source|purchase term/.test(type)) return 'financial_context';
-  if(/client objection/.test(type)||/(?:смуща|возраж|не устраива|отказ|слишком дорог|сомнен|возможност[а-я]* торг|нужен торг|торг обязател)/.test(text)) return 'objections';
+  if(/client objection/.test(type)||/(?:смуща|возраж|не устраива|отказ|слишком дорог|сомнен|возможност[а-я]* торг|нужен торг|торг обязател|шум[а-я ]*(?:критич|не рассматрива)|не рассматрива[а-я ]*шум)/.test(text)) return 'objections';
   if(/open question/.test(type)) return ['answered'].includes(String(item.question_status||''))?'important_agent_information':'open_questions';
   if(/agent information/.test(type)) return 'important_agent_information';
   if(/agent commitment|agreement/.test(type)) return 'important_agent_information';
@@ -7516,7 +7516,7 @@ function canonicalSummaryAdjustments(slot,item,value,evidence,quoteSupport=false
   if(['primary_next_step','open_questions'].includes(slot)||/agent commitment|agreement/.test(moduleSummaryNorm(item&&item.type||''))) add('AGENT_ACTION_REQUIRED',10,'Требует действия агента.');
   if(evidence.length>1)add('MULTIPLE_EVIDENCE',10,'Подтверждено несколькими независимыми источниками.');
   if(quoteSupport)add('QUALITY_QUOTE',5,'Есть самостоятельная значимая цитата клиента.');
-  if(/property type/.test(sourceType))add('BROAD_PROPERTY_TYPE',-30,'Общий тип объекта уступает более конкретным ограничениям при заполнении лимитированного слота.');
+  if(/property type/.test(sourceType)||/(?:студи[яюи]?|одно(?:комнат)?н|двухкомнат|трехкомнат|трёхкомнат)[а-я ]*квартир/.test(text))add('BROAD_PROPERTY_TYPE',-40,'Общий тип объекта уступает более конкретным ограничениям при заполнении лимитированного слота.');
   if(canonicalSummaryConfidence(item&&item.confidence)<.7)add('LOW_CONFIDENCE',-15,'Confidence ниже безопасного порога.');
   if(moduleSummaryTokens(value).length<2)add('TOO_GENERAL',-15,'Факт слишком общий или неконкретный.');
   return adjustments;
