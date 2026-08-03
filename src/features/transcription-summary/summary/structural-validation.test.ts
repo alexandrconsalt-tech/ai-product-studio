@@ -254,4 +254,25 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(documents.ok).toBe(true);
     if (documents.ok) expect(documents.value.conversation_result).not.toContain("предоставить документы");
   });
+
+  it("считает компактный call result покрытым не только в последнем предложении", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент проверяет юридическую чистоту. Агент подтвердил готовность предоставить документы. Ключевое значение: почту.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Агент отправит документы сегодня по электронной почте.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "goal", kind: "client_goal", block: "conversation_result", text: "Клиент проверяет юридическую чистоту", required: true, exclusive: false, sourceIds: ["goal"] },
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Согласована отправка документов для проверки", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент отправит документы сегодня по электронной почте.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toContain("Отправка документов согласована.");
+    expect(result.diagnostics.missingMeaningIds).toEqual([]);
+  });
 });

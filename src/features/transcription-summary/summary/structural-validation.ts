@@ -204,7 +204,9 @@ function meaningCoveredWithExclusiveNextStep(
   if (!nextMeaning || meaning.block !== "conversation_result") return false;
   if (meaning.kind === "conversation_result"
     && sharedNextStepAction(meaning.text, nextMeaning.text)
-    && isAllowedCompactOutcome(summary.conversation_result.split(/(?<=[.!?])\s+/u).at(-1) ?? "", nextMeaning.text)) {
+    && summary.conversation_result
+      .split(/(?<=[.!?])\s+/u)
+      .some((sentence) => isAllowedCompactOutcome(sentence, nextMeaning.text))) {
     return true;
   }
   const nextProtected = new Set(protectedTokens(nextMeaning.text));
