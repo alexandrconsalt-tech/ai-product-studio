@@ -201,4 +201,57 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value.conversation_result).not.toContain("альтернативными вариантами");
     expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
   });
+
+  it("восстанавливает отрицательный смысл из aggregate result после удаления next step", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру. Агент отправит подборку завтра по электронной почте.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Агент отправит подборку завтра по электронной почте.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Шум критичен, шумную квартиру не рассматривает. Агент отправит подборку завтра по электронной почте.", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент отправит подборку завтра по электронной почте.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toContain("шумную квартиру не рассматривает");
+    expect(result.value.conversation_result).not.toContain("завтра");
+    expect(result.value.conversation_result).not.toContain("электронной почте");
+    expect(result.diagnostics.protectedValueViolations).toEqual([]);
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
+
+  it("удаляет парафразы предложить варианты и предоставить документы", () => {
+    const variants = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру. Агент подтвердил, что свяжется и предложит варианты.",
+      key_facts: [], quotes: [], next_step: "Агент позвонит и предложит альтернативные варианты завтра по телефону.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Клиент ищет квартиру", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент позвонит и предложит альтернативные варианты завтра по телефону.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(variants.ok).toBe(true);
+    if (variants.ok) expect(variants.value.conversation_result).not.toContain("предложит варианты");
+
+    const documents = applySummaryPlanAndValidate({
+      conversation_result: "Клиент запросил документы. Агент подтвердил готовность предоставить документы.",
+      key_facts: [], quotes: [], next_step: "Агент отправит документы сегодня по электронной почте.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Клиент запросил документы", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент отправит документы сегодня по электронной почте.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(documents.ok).toBe(true);
+    if (documents.ok) expect(documents.value.conversation_result).not.toContain("предоставить документы");
+  });
 });

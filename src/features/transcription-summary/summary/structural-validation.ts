@@ -122,7 +122,7 @@ function exactNextStepDuplicated(conversationResult: string, nextStep: string): 
 }
 
 const NEXT_STEP_ACTION_FAMILIES = [
-  /(?:отправ|пришл|направ|переда|подготов|подбор)/u,
+  /(?:отправ|пришл|направ|переда|предостав|подготов|подбор|подбер|предлож|вариант)/u,
   /(?:позвон|перезвон|созвон|связ|контакт)/u,
   /(?:встреч|встрет|приед|приех|прибы|осмотр|просмотр)/u,
   /(?:показ|демонстр)/u,
@@ -157,6 +157,13 @@ function enforceExclusiveNextStep(conversationResult: string, nextStep: string):
   const compact = compactConversationResult(nextStep);
   if (!kept.some((sentence) => isAllowedCompactOutcome(sentence, nextStep))) kept.push(compact);
   return { value: kept.join(" ").trim(), changed: true };
+}
+
+function negativeStatements(value: string): readonly string[] {
+  return value
+    .split(/(?<=[.!?;])\s+|,\s+/u)
+    .map((part) => part.trim().replace(/[.!?;\s]+$/u, ""))
+    .filter((part) => part.length > 0 && hasNegation(part));
 }
 
 function nextStepDuplicatedInText(conversationResult: string, nextStep: string): boolean {
@@ -211,6 +218,7 @@ export function applySummaryPlanAndValidate(
 ): StructuralValidationResult {
   const transformations: SummaryStructuralTransformation[] = [];
   const requiredResult = plan.meanings.filter((item) => item.required && item.block === "conversation_result");
+  const required = plan.meanings.filter((item) => item.required);
   const plannedFacts = plan.meanings.filter((item) => item.block === "key_facts");
   const plannedQuotes = plan.meanings.filter((item) => item.block === "quotes");
   const nextMeaning = plan.meanings.find((item) => item.block === "next_step");
@@ -298,6 +306,23 @@ export function applySummaryPlanAndValidate(
     });
   }
 
+  const negationCoveredByDedicatedFact = required.some((item) => item.block === "key_facts" && hasNegation(item.text));
+  if (!negationCoveredByDedicatedFact && !hasNegation(candidate.conversation_result)) {
+    const restoredNegations = requiredResult.flatMap((meaning) => negativeStatements(meaning.text));
+    if (restoredNegations.length) {
+      candidate = {
+        ...candidate,
+        conversation_result: `${candidate.conversation_result.trim()} ${restoredNegations.map((item) => `${item}.`).join(" ")}`.trim(),
+      };
+      transformations.push({
+        ruleId: "summary.protected-value-restored.v1",
+        fieldPath: "conversation_result",
+        meaningId: requiredResult.find((meaning) => negativeStatements(meaning.text).length)?.meaningId ?? null,
+        reason: "A canonical negative constraint was restored after exclusive next-step repair.",
+      });
+    }
+  }
+
   if (nextMeaning) {
     const exclusive = enforceExclusiveNextStep(candidate.conversation_result, candidate.next_step);
     if (exclusive.changed) {
@@ -311,7 +336,6 @@ export function applySummaryPlanAndValidate(
     }
   }
 
-  const required = plan.meanings.filter((item) => item.required);
   const missingMeaningIds = required
     .filter((item) => !meaningCoveredWithExclusiveNextStep(candidate, item, nextMeaning) && !meaningDuplicatesNextStep(item, nextMeaning))
     .map((item) => item.meaningId);
