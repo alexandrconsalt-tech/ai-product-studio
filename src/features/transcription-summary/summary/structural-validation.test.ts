@@ -116,4 +116,26 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value.conversation_result).not.toContain("19:00");
     expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
   });
+
+  it("сохраняет бюджет при удалении next step из partial Store result", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру для внучки. Агент позвонит завтра по телефону.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Агент позвонит завтра по телефону.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Клиент ищет квартиру для внучки с бюджетом до 9 миллионов. Агент позвонит завтра по телефону.", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент позвонит завтра по телефону.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toContain("9 миллионов");
+    expect(result.value.conversation_result).not.toContain("завтра");
+    expect(result.diagnostics.protectedValueViolations).toEqual([]);
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
 });

@@ -136,6 +136,12 @@ function compactConversationResult(nextStep: string): string {
   return "Следующий шаг согласован.";
 }
 
+function protectedValueStatement(value: string): string {
+  if (/(?:руб|₽|млн|миллион|тыс)/u.test(value)) return `Бюджет: ${value}.`;
+  if (/(?:м2|м²|кв\. м)/u.test(value)) return `Площадь: ${value}.`;
+  return `Ключевое значение: ${value}.`;
+}
+
 function meaningDuplicatesNextStep(meaning: SummaryPlanMeaning, nextMeaning: SummaryPlanMeaning | undefined): boolean {
   if (!nextMeaning || meaning.meaningId === nextMeaning.meaningId) return false;
   return exactNextStepDuplicated(meaning.text, nextMeaning.text)
@@ -231,6 +237,25 @@ export function applySummaryPlanAndValidate(
       fieldPath: "conversation_result",
       meaningId: nextMeaning.meaningId,
       reason: "A paraphrased primary next step duplicate introduced during required-meaning repair was removed.",
+    });
+  }
+
+
+  const nextProtected = new Set(nextMeaning ? protectedTokens(nextMeaning.text) : []);
+  for (const meaning of requiredResult) {
+    const missingProtected = protectedTokens(meaning.text)
+      .filter((item) => !nextProtected.has(item))
+      .filter((item) => !protectedPresent(candidate.conversation_result, item));
+    if (!missingProtected.length) continue;
+    candidate = {
+      ...candidate,
+      conversation_result: `${candidate.conversation_result.trim()} ${missingProtected.map(protectedValueStatement).join(" ")}`.trim(),
+    };
+    transformations.push({
+      ruleId: "summary.protected-value-restored.v1",
+      fieldPath: "conversation_result",
+      meaningId: meaning.meaningId,
+      reason: "Non-next-step protected values were restored after exclusive next-step repair.",
     });
   }
 
