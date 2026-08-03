@@ -78,4 +78,22 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value.next_step).toContain("Telegram");
     expect(result.diagnostics.protectedValueViolations).toEqual([]);
   });
+
+  it("удаляет парафразированный дубль action, time и channel до Judges", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру от 60 м². Агент подтвердил, что завтра пришлёт по электронной почте подборку квартир от 60 м².",
+      key_facts: [{ label: "Площадь", value: "от 60 м²" }, { label: "Ограничение", value: "не рассматривает шумную квартиру" }],
+      quotes: [],
+      next_step: "Агент отправит подборку квартир от 60 м² по электронной почте завтра.",
+    }, {
+      ...plan,
+      meanings: plan.meanings.map((meaning) => meaning.meaningId === "primary_next_step"
+        ? { ...meaning, text: "Агент отправит подборку квартир от 60 м² по электронной почте завтра." }
+        : meaning),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toBe("Клиент ищет квартиру от 60 м². Обсуждение продолжено.");
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
 });

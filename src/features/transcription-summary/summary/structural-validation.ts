@@ -61,10 +61,10 @@ function technicalResidue(value: string): readonly string[] {
 
 function protectedTokens(value: string): readonly string[] {
   const patterns = [
-    /\b\d{1,2}:\d{2}\b/gu,
-    /\b\d+(?:[.,]\d+)?\s*(?:м²|кв\.?\s*м(?:етр(?:а|ов)?)?|руб(?:лей|ля)?|₽|млн|миллион(?:а|ов)?|тыс(?:яч)?)\b/giu,
-    /\b(?:сегодня|завтра|послезавтра|понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье)\b/giu,
-    /\b(?:телефон|почт[аеу]|email|e-mail|whatsapp|telegram|смс|звонок|перезвон)\b/giu,
+    /(?<![\p{L}\p{N}])\d{1,2}:\d{2}(?![\p{L}\p{N}])/gu,
+    /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:м²|кв\.?\s*м(?:етр(?:а|ов)?)?|руб(?:лей|ля)?|₽|млн|миллион(?:а|ов)?|тыс(?:яч)?)(?![\p{L}\p{N}])/giu,
+    /(?<![\p{L}\p{N}])(?:сегодня|завтра|послезавтра|понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье)(?![\p{L}\p{N}])/giu,
+    /(?<![\p{L}\p{N}])(?:телефон|почт[аеу]|email|e-mail|whatsapp|telegram|смс|звонок|перезвон)(?![\p{L}\p{N}])/giu,
   ];
   return [...new Set(patterns.flatMap((pattern) => value.match(pattern) ?? []).map(normalized))];
 }
@@ -108,7 +108,22 @@ function exactNextStepDuplicated(conversationResult: string, nextStep: string): 
   const result = normalized(conversationResult);
   if (exact.length >= 10 && result.includes(exact)) return true;
   const details = protectedTokens(nextStep);
-  return details.length > 0 && details.every((item) => result.includes(item)) && overlap(result, nextStep) >= 0.75;
+  if (!details.length || !details.every((item) => result.includes(item))) return false;
+  const actionFamilies = [
+    /(?:отправ|пришл|направ|подбор)/u,
+    /(?:позвон|перезвон|созвон)/u,
+    /(?:встрет|приех|просмотр)/u,
+    /(?:показ|демонстр)/u,
+  ];
+  if (details.length >= 2 && actionFamilies.some((pattern) => pattern.test(result) && pattern.test(normalized(nextStep)))) {
+    return true;
+  }
+  return overlap(result, nextStep) >= (details.length >= 2 ? 0.45 : 0.75);
+}
+
+function nextStepDuplicatedInText(conversationResult: string, nextStep: string): boolean {
+  return exactNextStepDuplicated(conversationResult, nextStep)
+    || conversationResult.split(/(?<=[.!?])\s+/u).some((sentence) => exactNextStepDuplicated(sentence, nextStep));
 }
 
 function compactConversationResult(nextStep: string): string {
@@ -159,13 +174,9 @@ export function applySummaryPlanAndValidate(
       reason: "Generated conversation result contained JSON or a technical error token.",
     });
   }
-  if (nextMeaning && exactNextStepDuplicated(conversationResult, nextMeaning.text)) {
-    const exact = normalized(nextMeaning.text).replace(/[.!?]+$/u, "");
+  if (nextMeaning && nextStepDuplicatedInText(conversationResult, nextMeaning.text)) {
     const kept = conversationResult.split(/(?<=[.!?])\s+/u).filter((sentence) => {
-      const current = normalized(sentence).replace(/[.!?]+$/u, "");
-      return current !== exact && !(protectedTokens(nextMeaning.text).length > 0
-        && protectedTokens(nextMeaning.text).every((item) => current.includes(item))
-        && overlap(current, nextMeaning.text) >= 0.75);
+      return !exactNextStepDuplicated(sentence, nextMeaning.text);
     });
     conversationResult = kept.join(" ").trim() || compactConversationResult(nextMeaning.text);
     transformations.push({
@@ -235,7 +246,7 @@ export function applySummaryPlanAndValidate(
     return missing.map((item) => `${meaning.meaningId}:${item}`);
   });
   const residue = technicalResidue(allText);
-  const nextStepDuplicationCount = nextMeaning && exactNextStepDuplicated(candidate.conversation_result, candidate.next_step) ? 1 : 0;
+  const nextStepDuplicationCount = nextMeaning && nextStepDuplicatedInText(candidate.conversation_result, candidate.next_step) ? 1 : 0;
   const diagnostics: SummaryFinalDiagnosticsV3 = {
     requiredMeaningIds: required.map((item) => item.meaningId),
     missingMeaningIds,
