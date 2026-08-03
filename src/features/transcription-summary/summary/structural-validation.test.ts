@@ -93,7 +93,7 @@ describe("Summary Plan and post-final Structural Validator", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.conversation_result).toBe("Клиент ищет квартиру от 60 м². Обсуждение продолжено.");
+    expect(result.value.conversation_result).toBe("Клиент ищет квартиру от 60 м². Отправка подборки согласована. Обсуждение продолжено.");
     expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
   });
 
@@ -136,6 +136,69 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value.conversation_result).toContain("9 миллионов");
     expect(result.value.conversation_result).not.toContain("завтра");
     expect(result.diagnostics.protectedValueViolations).toEqual([]);
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
+
+  it("удаляет время и место встречи из результата при парафразе next step", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Встреча подтверждена: клиент приедет завтра в 19:00 к входу в дом. Стороны связываются только в случае изменений.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Клиент прибыть на встречу/осмотр завтра в 19:00 лично, у входа в дом.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Встреча согласована завтра в 19:00 у входа в дом", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Клиент прибыть на встречу/осмотр завтра в 19:00 лично, у входа в дом.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toBe("Стороны связываются только в случае изменений. Просмотр согласован.");
+    expect(result.value.conversation_result).not.toContain("19:00");
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
+
+  it("оставляет отрицание в dedicated key fact без ложной ошибки conversation_result", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет двухкомнатную квартиру от 60 м² рядом с метро.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Агент отправит подборку завтра по электронной почте.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Клиент ищет двухкомнатную квартиру и не рассматривает шумные варианты", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "noise", kind: "key_fact", block: "key_facts", text: "шумную квартиру не рассматривает", required: true, exclusive: false, sourceIds: ["turn"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент отправит подборку завтра по электронной почте.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.key_facts).toContainEqual({ label: "Ограничение", value: "шумную квартиру не рассматривает" });
+    expect(result.diagnostics.protectedValueViolations).toEqual([]);
+  });
+
+  it("заменяет согласованное действие кратким результатом без деталей next step", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру для внучки с бюджетом до 9 миллионов. Агент согласовал следующий шаг — связаться с клиентом с альтернативными вариантами.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Позвонить клиенту с альтернативными вариантами завтра по телефону.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Клиент ищет квартиру для внучки с бюджетом до 9 миллионов", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Позвонить клиенту с альтернативными вариантами завтра по телефону.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toBe("Клиент ищет квартиру для внучки с бюджетом до 9 миллионов. Договорились о повторном звонке.");
+    expect(result.value.conversation_result).not.toContain("альтернативными вариантами");
     expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
   });
 });

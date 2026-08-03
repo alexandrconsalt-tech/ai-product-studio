@@ -196,6 +196,16 @@ function transportFor(item: Case): StructuredProviderTransport {
   };
 }
 
+function expectedConversationOutcome(item: Case): string {
+  const next = item.next.action.toLocaleLowerCase("ru-RU");
+  if (/(?:осмотр|просмотр|встреч)/u.test(next)) return "Просмотр согласован";
+  if (/(?:документ)/u.test(next)) return "Отправка документов согласована";
+  if (/(?:позвон|перезвон|созвон|связ)/u.test(next)) return "Договорились о повторном звонке";
+  if (/(?:подбор|вариант)/u.test(next)) return "Отправка подборки согласована";
+  if (/(?:видео|материал)/u.test(next)) return "Отправка материалов согласована";
+  return item.callResult.replace(/[.]$/u, "");
+}
+
 describe("nine audited scenarios through production typed v3 orchestrator", () => {
   it.each(cases)("$id has clean post-final diagnostics and reaches CRM DRY_RUN", async (item) => {
     const executor = new RuntimeTranscriptionSummaryV3StageExecutor({
@@ -222,7 +232,10 @@ describe("nine audited scenarios through production typed v3 orchestrator", () =
     expect(result.report.status, JSON.stringify({ capturedErrors, stages: result.report.stages.map((stage) => ({ id: stage.stage_id, status: stage.status, error: stage.error_code, issues: stage.validation_result.issues })) })).toBe("SUCCESS");
     expect(result.report.crm_status).toBe("DRY_RUN");
     expect(summary.conversation_result).toContain(item.goal);
-    expect(summary.conversation_result).toContain(item.callResult.replace(/[.]$/u, ""));
+    expect([
+      item.callResult.replace(/[.]$/u, ""),
+      expectedConversationOutcome(item),
+    ].some((outcome) => summary.conversation_result.includes(outcome))).toBe(true);
     expect(summary.conversation_result).not.toContain(item.next.deadline);
     expect(summary.next_step).toContain(item.next.deadline);
     const visibleSummary = [summary.conversation_result, ...summary.key_facts.map((entry) => entry.value), summary.next_step].join(" ");

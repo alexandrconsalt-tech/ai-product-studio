@@ -121,18 +121,58 @@ function exactNextStepDuplicated(conversationResult: string, nextStep: string): 
   return overlap(result, nextStep) >= (details.length >= 2 ? 0.45 : 0.75);
 }
 
+const NEXT_STEP_ACTION_FAMILIES = [
+  /(?:отправ|пришл|направ|переда|подготов|подбор)/u,
+  /(?:позвон|перезвон|созвон|связ|контакт)/u,
+  /(?:встреч|встрет|приед|приех|прибы|осмотр|просмотр)/u,
+  /(?:показ|демонстр)/u,
+] as const;
+
+function sharedNextStepAction(value: string, nextStep: string): boolean {
+  const actual = normalized(value);
+  const expected = normalized(nextStep);
+  return NEXT_STEP_ACTION_FAMILIES.some((pattern) => pattern.test(actual) && pattern.test(expected));
+}
+
+function isAllowedCompactOutcome(value: string, nextStep: string): boolean {
+  return normalized(value).replace(/[.!?]+$/u, "")
+    === normalized(compactConversationResult(nextStep)).replace(/[.!?]+$/u, "");
+}
+
+function containsNextStepDetail(value: string, nextStep: string): boolean {
+  if (isAllowedCompactOutcome(value, nextStep)) return false;
+  if (exactNextStepDuplicated(value, nextStep)) return true;
+  if (!sharedNextStepAction(value, nextStep)) return false;
+  return /(?:агент|менеджер|риелтор|договор|соглас|подтверд|следующ|обязал|(?<![\p{L}\p{N}])(?:завтра|сегодня|утром|вечером|max)(?![\p{L}\p{N}])|\d{1,2}:\d{2}|электронн\S*\s+почт|telegram|whatsapp)/iu.test(normalized(value));
+}
+
+function enforceExclusiveNextStep(conversationResult: string, nextStep: string): Readonly<{ value: string; changed: boolean }> {
+  const sentences = conversationResult
+    .replace(/([.;])\s+(?=(?:агент|менеджер|риелтор)(?![\p{L}\p{N}]))/giu, "$1\n")
+    .split(/(?<=[.!?])\s+|\n+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const kept = sentences.filter((sentence) => !containsNextStepDetail(sentence, nextStep));
+  if (kept.length === sentences.length) return { value: conversationResult.trim(), changed: false };
+  const compact = compactConversationResult(nextStep);
+  if (!kept.some((sentence) => isAllowedCompactOutcome(sentence, nextStep))) kept.push(compact);
+  return { value: kept.join(" ").trim(), changed: true };
+}
+
 function nextStepDuplicatedInText(conversationResult: string, nextStep: string): boolean {
-  return exactNextStepDuplicated(conversationResult, nextStep)
-    || conversationResult.split(/(?<=[.!?])\s+/u).some((sentence) => exactNextStepDuplicated(sentence, nextStep));
+  return conversationResult
+    .replace(/([.;])\s+(?=(?:агент|менеджер|риелтор)(?![\p{L}\p{N}]))/giu, "$1\n")
+    .split(/(?<=[.!?])\s+|\n+/u)
+    .some((sentence) => containsNextStepDetail(sentence, nextStep));
 }
 
 function compactConversationResult(nextStep: string): string {
   const value = normalized(nextStep);
-  if (/(?:просмотр|встрет)/u.test(value)) return "Просмотр согласован.";
+  if (/(?:осмотр|просмотр|встреч|встрет)/u.test(value)) return "Просмотр согласован.";
   if (/(?:документ)/u.test(value)) return "Отправка документов согласована.";
   if (/(?:перезвон|повторн\S* звон|позвон)/u.test(value)) return "Договорились о повторном звонке.";
   if (/(?:подбор|вариант)/u.test(value)) return "Отправка подборки согласована.";
-  if (/(?:видео|материал)/u.test(value)) return "Отправка материалов согласована.";
+  if (/(?:видео|материал|планиров)/u.test(value)) return "Отправка материалов согласована.";
   return "Следующий шаг согласован.";
 }
 
@@ -155,6 +195,11 @@ function meaningCoveredWithExclusiveNextStep(
 ): boolean {
   if (meaningCovered(summary, meaning)) return true;
   if (!nextMeaning || meaning.block !== "conversation_result") return false;
+  if (meaning.kind === "conversation_result"
+    && sharedNextStepAction(meaning.text, nextMeaning.text)
+    && isAllowedCompactOutcome(summary.conversation_result.split(/(?<=[.!?])\s+/u).at(-1) ?? "", nextMeaning.text)) {
+    return true;
+  }
   const nextProtected = new Set(protectedTokens(nextMeaning.text));
   const sharesExclusiveDetail = protectedTokens(meaning.text).some((item) => nextProtected.has(item));
   return sharesExclusiveDetail && overlap(summary.conversation_result, meaning.text) >= 0.5;
@@ -181,10 +226,7 @@ export function applySummaryPlanAndValidate(
     });
   }
   if (nextMeaning && nextStepDuplicatedInText(conversationResult, nextMeaning.text)) {
-    const kept = conversationResult.split(/(?<=[.!?])\s+/u).filter((sentence) => {
-      return !exactNextStepDuplicated(sentence, nextMeaning.text);
-    });
-    conversationResult = kept.join(" ").trim() || compactConversationResult(nextMeaning.text);
+    conversationResult = enforceExclusiveNextStep(conversationResult, nextMeaning.text).value;
     transformations.push({
       ruleId: "summary.exclusive-next-step.v1",
       fieldPath: "conversation_result",
@@ -225,12 +267,9 @@ export function applySummaryPlanAndValidate(
   }
 
   if (nextMeaning && nextStepDuplicatedInText(candidate.conversation_result, candidate.next_step)) {
-    const kept = candidate.conversation_result
-      .split(/(?<=[.!?])\s+/u)
-      .filter((sentence) => !exactNextStepDuplicated(sentence, candidate.next_step));
     candidate = {
       ...candidate,
-      conversation_result: kept.join(" ").trim() || compactConversationResult(nextMeaning.text),
+      conversation_result: enforceExclusiveNextStep(candidate.conversation_result, candidate.next_step).value,
     };
     transformations.push({
       ruleId: "summary.exclusive-next-step.v1",
@@ -259,6 +298,19 @@ export function applySummaryPlanAndValidate(
     });
   }
 
+  if (nextMeaning) {
+    const exclusive = enforceExclusiveNextStep(candidate.conversation_result, candidate.next_step);
+    if (exclusive.changed) {
+      candidate = { ...candidate, conversation_result: exclusive.value };
+      transformations.push({
+        ruleId: "summary.exclusive-next-step.v1",
+        fieldPath: "conversation_result",
+        meaningId: nextMeaning.meaningId,
+        reason: "Exclusive next-step details restored by protected-value repair were removed from conversation_result.",
+      });
+    }
+  }
+
   const required = plan.meanings.filter((item) => item.required);
   const missingMeaningIds = required
     .filter((item) => !meaningCoveredWithExclusiveNextStep(candidate, item, nextMeaning) && !meaningDuplicatesNextStep(item, nextMeaning))
@@ -283,7 +335,9 @@ export function applySummaryPlanAndValidate(
       : meaning.block === "key_facts" ? candidate.key_facts.map((item) => item.value).join(" ")
         : meaning.block === "next_step" ? candidate.next_step : candidate.quotes.map((item) => item.text).join(" ");
     const missing = expected.filter((item) => !protectedPresent(actualBlock, item));
-    if (hasNegation(meaning.text) && !hasNegation(actualBlock)) missing.push("negation");
+    const negationCoveredByDedicatedFact = meaning.block === "conversation_result"
+      && required.some((item) => item.block === "key_facts" && hasNegation(item.text));
+    if (hasNegation(meaning.text) && !negationCoveredByDedicatedFact && !hasNegation(actualBlock)) missing.push("negation");
     return missing.map((item) => `${meaning.meaningId}:${item}`);
   });
   const residue = technicalResidue(allText);

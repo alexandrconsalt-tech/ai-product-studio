@@ -30,7 +30,10 @@ describe("Summary Agent v3", () => {
     });
     expect(result).toMatchObject({
       ok: true,
-      value: fixture.output,
+      value: {
+        ...fixture.output,
+        conversation_result: "Клиент уточнил условия покупки. Отправка материалов согласована.",
+      },
       diagnostic: {
         sourceValidationStatus: "valid",
         structuredOutputApplied: true,
