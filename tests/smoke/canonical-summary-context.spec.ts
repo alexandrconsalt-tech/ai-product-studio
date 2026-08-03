@@ -123,6 +123,28 @@ test("повторный просмотр не создаёт искусстве
   expect(context.financial_context).toEqual([]); expect(context.objections).toEqual([]);
 });
 
+test("aggregate call_result не вытесняется отдельным communication_result", async ({ page }) => {
+  const data = scenario("repeat_viewing");
+  data.conversation.facts.push(fact("communication", "communication_result", "связь только при изменениях"));
+  const context = await build(page, data);
+  expect(normalize(context.conversation_result?.value)).toContain("просмотр согласован");
+  expect(normalize(context.important_agent_information.map((item: Item) => item.value).join(" "))).toContain("связь только при изменениях");
+  expect(context.ranking_diagnostics.critical_meanings_lost, JSON.stringify(context.excluded_items)).toBe(0);
+});
+
+test("структурированное объединённое требование покрывает отдельные локации", async ({ page }) => {
+  const data = scenario("mystolovo");
+  data.conversation.facts.push(
+    fact("location_m", "client_requirement", "Мистолово"),
+    fact("location_k", "client_requirement", "Капитолово"),
+    fact("location_l", "client_requirement", "Лаврики"),
+  );
+  const context = await build(page, data);
+  const text = normalize(context.critical_requirements.map((item: Item) => item.value).join(" "));
+  expect(text).toContain("мистолово, капитолово, лаврики");
+  expect(context.ranking_diagnostics.critical_meanings_lost, JSON.stringify(context.excluded_items)).toBe(0);
+});
+
 test("покупка для внучки сохраняет цель, бюджет, требования, юридический смысл и звонок", async ({ page }) => {
   const context = await build(page, scenario("granddaughter")); const text = normalize(selectedValues(context).join(" "));
   for (const tokens of goldenDataset[2].required_meanings) expect(meaningPresent(text, tokens)).toBe(true);

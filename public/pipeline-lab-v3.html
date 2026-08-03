@@ -7467,7 +7467,8 @@ function canonicalSummaryCardOnly(value,cardMetadata={}){
 }
 function canonicalSummarySlot(sourceType,value,item={}){
   const type=moduleSummaryNorm(sourceType),text=moduleSummaryNorm(value),priority=String(item.business_priority||item.priority||'');
-  if(type==='conversation result'||type==='communication result') return 'conversation_result';
+  if(type==='conversation result') return 'conversation_result';
+  if(type==='communication result') return 'important_agent_information';
   if(type==='primary next step') return 'primary_next_step';
   if(/client goal|client context|client need/.test(type)) return 'client_context';
   if(/client finance|client timing|price limit|budget|funding source|purchase term/.test(type)) return 'financial_context';
@@ -7529,8 +7530,25 @@ function canonicalSummaryDuplicate(left,right){
   const a=moduleSummaryNorm(leftItem?leftItem.value:left),b=moduleSummaryNorm(rightItem?rightItem.value:right);if(!a||!b)return false;
   const numbersA=a.match(/\b\d+(?:[.,]\d+)?\b/g)||[],numbersB=b.match(/\b\d+(?:[.,]\d+)?\b/g)||[];
   if(numbersA.length&&numbersB.length&&numbersA.some(number=>!numbersB.includes(number))&&numbersB.some(number=>!numbersA.includes(number)))return false;
-  if(a===b||a.includes(b)&&b.length>=12||b.includes(a)&&a.length>=12)return true;
+  if(a===b||a.includes(b)&&(b.length>=12||b.length>=4&&moduleSummaryTokens(a).length>=2)||b.includes(a)&&(a.length>=12||a.length>=4&&moduleSummaryTokens(b).length>=2))return true;
   return Math.min(summarySemanticSimilarity(a,b),summarySemanticSimilarity(b,a))>=.84;
+}
+function canonicalSummarySelectionPriority(item){
+  if(item&&item.id==='conversation_result')return 40;
+  if(item&&item.canonical_attribute)return 30;
+  if(item&&item._structured_requirement&&/,/.test(canonicalSummaryText(item.value)))return 20;
+  if(/,/.test(canonicalSummaryText(item&&item.value)))return 10;
+  return 0;
+}
+function canonicalSummaryMeaningCovered(item,selected){
+  const raw=canonicalSummaryText(item&&item.value),value=moduleSummaryNorm(raw);if(!value)return false;
+  const minimumLength=/^[A-ZА-ЯЁ0-9-]{2,}$/u.test(raw)?2:4;
+  return selected.some(candidate=>{
+    const kept=moduleSummaryNorm(candidate&&candidate.value);if(!kept)return false;
+    const itemNumbers=value.match(/\b\d+(?:[.,]\d+)?\b/g)||[],keptNumbers=kept.match(/\b\d+(?:[.,]\d+)?\b/g)||[];
+    if(itemNumbers.length&&itemNumbers.some(number=>!keptNumbers.includes(number)))return false;
+    return kept===value||kept.includes(value)&&value.length>=minimumLength;
+  });
 }
 function canonicalSummaryPublicItem(item){
   const result={id:item.id,value:item.value,source_type:item.source_type,source_ids:item.source_ids,evidence:item.evidence,confidence:item.confidence,base_score:item.base_score,adjustments:item.adjustments,summary_priority_score:item.summary_priority_score,target_slot:item.target_slot};
@@ -7549,7 +7567,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
     value=canonicalSummaryText(value);const id=String(item&&item.id||options.id||'summary_context_'+(++sequence));
     const evidence=canonicalSummaryEvidence(item);const slot=slotOverride||canonicalSummarySlot(sourceType,value,item);const sourceIds=canonicalSummarySourceIds(item,id);
     const baseScore=canonicalSummaryBaseScore(sourceType,slot,value,item);const confidence=canonicalSummaryConfidence((item&&item.confidence)??options.confidence??1);
-    const draft={id,value,source_type:sourceType,source_ids:sourceIds,evidence,confidence,base_score:baseScore,adjustments:[],summary_priority_score:0,target_slot:slot,canonical_attribute:Boolean(options.canonical_attribute),_components:null};
+    const draft={id,value,source_type:sourceType,source_ids:sourceIds,evidence,confidence,base_score:baseScore,adjustments:[],summary_priority_score:0,target_slot:slot,canonical_attribute:Boolean(options.canonical_attribute),_structured_requirement:Boolean(options.structured_requirement),_components:null};
     if(!value){excluded.push(canonicalSummaryExcluded(draft,'empty_value'));return;}
     if(canonicalSummaryIsRejected(item)){excluded.push(canonicalSummaryExcluded(draft,'source_rejected'));return;}
     if(canonicalSummaryNoise(value)){draft.adjustments=[{code:'ORGANIZATIONAL_NOISE',delta:-20,reason:'Организационная деталь не помогает продолжить работу.'}];excluded.push(canonicalSummaryExcluded(draft,'organizational_noise'));return;}
@@ -7569,7 +7587,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
         add('agent_information','Вопрос: '+canonicalSummaryText(fact.value||fact.evidence)+'. Ответ: '+canonicalSummaryText(fact.answer||fact.answer_evidence),{...fact,evidence_items:[fact.evidence,fact.answer_evidence]},'important_agent_information',{store_verified:true});
       }else add(type,(fact&&fact.value)??(fact&&fact.normalized_value),fact,null,{store_verified:true});
     });
-    toList(conversation.requirements).slice().sort((a,b)=>String(a&&a.id||'').localeCompare(String(b&&b.id||''),'ru')).forEach(requirement=>add(String(requirement&&requirement.type||'client_requirement'),(requirement&&requirement.normalized_value)??(requirement&&requirement.value),requirement,null,{store_verified:true}));
+    toList(conversation.requirements).slice().sort((a,b)=>String(a&&a.id||'').localeCompare(String(b&&b.id||''),'ru')).forEach(requirement=>add(String(requirement&&requirement.type||'client_requirement'),(requirement&&requirement.normalized_value)??(requirement&&requirement.value),requirement,null,{store_verified:true,structured_requirement:true}));
     const attributes=conversation.attributes&&typeof conversation.attributes==='object'?conversation.attributes:{};
     toList(attributes.interest).forEach((item,index)=>add('crm_attribute_interest',(item&&item.value)??item,{...(item&&typeof item==='object'?item:{}),id:item&&item.id||'crm_interest_'+index},'critical_requirements',{canonical_attribute:true,store_verified:true}));
     ['funding_source','purchase_term'].forEach(name=>{const item=attributes[name];const value=canonicalSummaryText((item&&item.value)??item);if(value&&!/^не определено$/i.test(value))add('crm_attribute_'+name,value,{...(item&&typeof item==='object'?item:{}),id:item&&item.id||'crm_'+name},'financial_context',{canonical_attribute:true,store_verified:true});});
@@ -7591,7 +7609,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
     });
   }catch(error){technical_error=true;warnings.push({code:'CANDIDATE_COLLECTION_WARNING',message:String(error&&error.message||error)});}
   const merged=[];
-  candidates.slice().sort((a,b)=>b.base_score-a.base_score||b.confidence-a.confidence||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
+  candidates.slice().sort((a,b)=>b.base_score-a.base_score||b.confidence-a.confidence||canonicalSummarySelectionPriority(b)-canonicalSummarySelectionPriority(a)||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
     const existing=merged.find(item=>item.target_slot===candidate.target_slot&&canonicalSummaryDuplicate(item,candidate));
     if(!existing){merged.push(candidate);return;}
     existing.source_ids=[...new Set([...existing.source_ids,...candidate.source_ids])];existing.evidence=[...new Set([...existing.evidence,...candidate.evidence])];existing.confidence=Math.max(existing.confidence,candidate.confidence);existing.canonical_attribute=existing.canonical_attribute||candidate.canonical_attribute;
@@ -7600,7 +7618,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
   });
   const bySlot=Object.fromEntries(Object.keys(CANONICAL_SUMMARY_SLOT_LIMITS).map(slot=>[slot,[]])),selected=[];
   CANONICAL_SUMMARY_SLOT_ORDER.forEach(slot=>{
-    merged.filter(item=>item.target_slot===slot).sort((a,b)=>b.summary_priority_score-a.summary_priority_score||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
+    merged.filter(item=>item.target_slot===slot).sort((a,b)=>b.summary_priority_score-a.summary_priority_score||canonicalSummarySelectionPriority(b)-canonicalSummarySelectionPriority(a)||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
       const duplicate=selected.find(item=>canonicalSummaryDuplicate(item,candidate));
       if(duplicate){cross_slot_duplicates_removed.push({removed_id:candidate.id,kept_id:duplicate.id,removed_slot:slot,kept_slot:duplicate.target_slot});excluded.push(canonicalSummaryExcluded(candidate,'cross_slot_duplicate',duplicate));return;}
       if(candidate.summary_priority_score<40&&!['conversation_result','primary_next_step'].includes(slot)){excluded.push(canonicalSummaryExcluded(candidate,'below_threshold'));return;}
@@ -7609,7 +7627,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
       bySlot[slot].push(candidate);selected.push(candidate);
     });
   });
-  const critical_meanings_lost=excluded.filter(item=>item.score>=90&&['slot_limit','total_limit'].includes(item.reason)).length;
+  const critical_meanings_lost=excluded.filter(item=>item.score>=90&&['slot_limit','total_limit'].includes(item.reason)&&!canonicalSummaryMeaningCovered(item,selected)).length;
   const conversationResult=bySlot.conversation_result[0]||null,primaryNextStep=bySlot.primary_next_step[0]||null;
   const storePrimary=conversation.primary_next_step&&conversation.primary_next_step.status!=='not_defined'?moduleSummaryNaturalNextStep(conversation):'';
   const primary_next_step_consistent=!storePrimary||Boolean(primaryNextStep&&moduleSummaryNorm(primaryNextStep.value)===moduleSummaryNorm(storePrimary));
