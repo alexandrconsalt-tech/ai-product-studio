@@ -96,4 +96,24 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value.conversation_result).toBe("Клиент ищет квартиру от 60 м². Обсуждение продолжено.");
     expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
   });
+
+  it("повторно удаляет дубль после required-meaning restoration", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент подтвердил готовность приехать.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Клиент встретится с агентом завтра в 19:00 у входа в дом.",
+    }, {
+      version: "summary-plan-v3.1.0",
+      meanings: [
+        { meaningId: "conversation_result", kind: "conversation_result", block: "conversation_result", text: "Встреча согласована завтра в 19:00 у входа в дом", required: true, exclusive: false, sourceIds: ["result"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Клиент встретится с агентом завтра в 19:00 у входа в дом.", required: true, exclusive: true, sourceIds: ["next"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).not.toContain("19:00");
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
 });

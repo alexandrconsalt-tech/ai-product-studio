@@ -218,6 +218,22 @@ export function applySummaryPlanAndValidate(
     transformations.push({ ruleId: "summary.required-meaning-restored.v1", fieldPath: "conversation_result", meaningId: meaning.meaningId, reason: "Required meaning was missing after generation and was restored from canonical context." });
   }
 
+  if (nextMeaning && nextStepDuplicatedInText(candidate.conversation_result, candidate.next_step)) {
+    const kept = candidate.conversation_result
+      .split(/(?<=[.!?])\s+/u)
+      .filter((sentence) => !exactNextStepDuplicated(sentence, candidate.next_step));
+    candidate = {
+      ...candidate,
+      conversation_result: kept.join(" ").trim() || compactConversationResult(nextMeaning.text),
+    };
+    transformations.push({
+      ruleId: "summary.exclusive-next-step.v1",
+      fieldPath: "conversation_result",
+      meaningId: nextMeaning.meaningId,
+      reason: "A paraphrased primary next step duplicate introduced during required-meaning repair was removed.",
+    });
+  }
+
   const required = plan.meanings.filter((item) => item.required);
   const missingMeaningIds = required
     .filter((item) => !meaningCoveredWithExclusiveNextStep(candidate, item, nextMeaning) && !meaningDuplicatesNextStep(item, nextMeaning))
