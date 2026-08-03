@@ -127,6 +127,18 @@ function meaningDuplicatesNextStep(meaning: SummaryPlanMeaning, nextMeaning: Sum
     || overlap(meaning.text, nextMeaning.text) >= 0.8;
 }
 
+function meaningCoveredWithExclusiveNextStep(
+  summary: SummaryV3,
+  meaning: SummaryPlanMeaning,
+  nextMeaning: SummaryPlanMeaning | undefined,
+): boolean {
+  if (meaningCovered(summary, meaning)) return true;
+  if (!nextMeaning || meaning.block !== "conversation_result") return false;
+  const nextProtected = new Set(protectedTokens(nextMeaning.text));
+  const sharesExclusiveDetail = protectedTokens(meaning.text).some((item) => nextProtected.has(item));
+  return sharesExclusiveDetail && overlap(summary.conversation_result, meaning.text) >= 0.5;
+}
+
 export function applySummaryPlanAndValidate(
   generated: SummaryV3,
   plan: SummaryPlanV3,
@@ -189,7 +201,7 @@ export function applySummaryPlanAndValidate(
 
   for (const meaning of requiredResult) {
     if (meaningDuplicatesNextStep(meaning, nextMeaning)) continue;
-    if (meaningCovered(candidate, meaning)) continue;
+    if (meaningCoveredWithExclusiveNextStep(candidate, meaning, nextMeaning)) continue;
     const suffix = meaning.text.replace(/[.!?\s]+$/u, "");
     candidate = { ...candidate, conversation_result: `${candidate.conversation_result.replace(/\s+$/u, "")} ${suffix}.`.trim() };
     transformations.push({ ruleId: "summary.required-meaning-restored.v1", fieldPath: "conversation_result", meaningId: meaning.meaningId, reason: "Required meaning was missing after generation and was restored from canonical context." });
@@ -197,7 +209,7 @@ export function applySummaryPlanAndValidate(
 
   const required = plan.meanings.filter((item) => item.required);
   const missingMeaningIds = required
-    .filter((item) => !meaningCovered(candidate, item) && !meaningDuplicatesNextStep(item, nextMeaning))
+    .filter((item) => !meaningCoveredWithExclusiveNextStep(candidate, item, nextMeaning) && !meaningDuplicatesNextStep(item, nextMeaning))
     .map((item) => item.meaningId);
   const duplicatedMeaningIds = plan.meanings.filter((meaning) => meaning.exclusive && (() => {
     const blocks = (["conversation_result", "key_facts", "next_step", "quotes"] as const).filter((block) => {
@@ -211,7 +223,10 @@ export function applySummaryPlanAndValidate(
   })()).map((item) => item.meaningId);
   const allText = [candidate.conversation_result, ...candidate.key_facts.flatMap((item) => [item.label, item.value]), ...candidate.quotes.map((item) => item.text), candidate.next_step].join(" ");
   const protectedValueViolations = required.flatMap((meaning) => {
-    const expected = protectedTokens(meaning.text);
+    const nextStepProtected = nextMeaning && meaning.block !== "next_step"
+      ? new Set(protectedTokens(nextMeaning.text))
+      : new Set<string>();
+    const expected = protectedTokens(meaning.text).filter((item) => !nextStepProtected.has(item));
     const actualBlock = meaning.block === "conversation_result" ? candidate.conversation_result
       : meaning.block === "key_facts" ? candidate.key_facts.map((item) => item.value).join(" ")
         : meaning.block === "next_step" ? candidate.next_step : candidate.quotes.map((item) => item.text).join(" ");

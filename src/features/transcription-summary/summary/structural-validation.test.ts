@@ -57,4 +57,25 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value.next_step).toContain("18:00");
     expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
   });
+
+  it("не требует канал next step повторно в результате разговора", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру. Отправка вариантов согласована.",
+      key_facts: [{ label: "Площадь", value: "от 60 м²" }, { label: "Ограничение", value: "не рассматривает шумную квартиру" }],
+      quotes: [],
+      next_step: "Агент отправит три варианта сегодня вечером в Telegram.",
+    }, {
+      ...plan,
+      meanings: plan.meanings.map((meaning) => meaning.meaningId === "result-1"
+        ? { ...meaning, text: "Отправка трёх вариантов в Telegram согласована" }
+        : meaning.meaningId === "primary_next_step"
+          ? { ...meaning, text: "Агент отправит три варианта сегодня вечером в Telegram." }
+          : meaning),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).not.toContain("Telegram");
+    expect(result.value.next_step).toContain("Telegram");
+    expect(result.diagnostics.protectedValueViolations).toEqual([]);
+  });
 });
