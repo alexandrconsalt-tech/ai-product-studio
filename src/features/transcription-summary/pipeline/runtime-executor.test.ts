@@ -101,4 +101,13 @@ describe("v3 runtime executor dependencies", () => {
     });
     expect(result.audit.errorCode).toBeNull();
   });
+
+  it("согласование повторного просмотра не создаёт Needs schema error", async () => {
+    const result = await executor([]).execute("needs_agent", context({
+      facts_agent: FactsV3Contract.validator.parse(FactsV3Contract.fixtures.valid),
+    }, "Готов приехать завтра. Встречаемся в 19:00 у входа в дом. Подтверждаю."));
+    expect(result.status).toBe("SUCCESS_WITH_WARNING");
+    expect(NeedsV3Schema.parse(result.value).property_requirements).toEqual([]);
+    expect(result.audit.validationIssues).toContainEqual(expect.objectContaining({ code: "EMPTY_NEEDS_NORMALIZED" }));
+  });
 });

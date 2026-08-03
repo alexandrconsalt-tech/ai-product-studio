@@ -68,8 +68,8 @@ function remainingTimeout(context: PipelineExecutionContext, stageLimitMs: numbe
 
 function emptyNeedsResult(context: PipelineExecutionContext): unknown | null {
   const text = context.transcript.turns.map((turn) => turn.text).join(" ");
-  if (/(?:бюджет|наличн|ипотек|квартир|дом|участ|студи|комнат|метр|м²|купить|покуп)/iu.test(text)) return null;
-  if (!/(?:неудобно|перезвон|повторн\S* звон|связаться|после \d{1,2}:\d{2})/iu.test(text)) return null;
+  if (/(?:бюджет|наличн|ипотек|участ|студи|комнат|метр|м²|купить|покуп|ищу|нужн\S*|важн\S*|рассматрива)/iu.test(text)) return null;
+  if (!/(?:неудобно|перезвон|повторн\S* звон|связаться|после \d{1,2}:\d{2}|готов\S* приехать|встречаемся|подтверждаю)/iu.test(text)) return null;
   const first = context.transcript.turns[0];
   if (!first) return null;
   const base = {
