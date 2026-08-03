@@ -42,7 +42,7 @@ describe("transcription summary v3 runtime config", () => {
     });
   });
 
-  it("keeps production v3 disabled and not required", () => {
+  it("enables production only for the target product with both explicit flags", () => {
     expect(resolveTranscriptionSummaryV3RuntimeConfig(
       "project_transcription_summary_module",
       {
@@ -52,9 +52,21 @@ describe("transcription summary v3 runtime config", () => {
         TRANSCRIPTION_SUMMARY_V3_CRM_DRY_RUN: "true",
       },
     )).toMatchObject({
-      transcriptionSummaryV3Enabled: false,
+      transcriptionSummaryV3Enabled: true,
       transcriptionSummaryV3CrmDryRun: true,
-      transcriptionSummaryV3Required: false,
+      transcriptionSummaryV3Required: true,
+    });
+    expect(resolveTranscriptionSummaryV3RuntimeConfig(
+      "project_transcription_summary_module",
+      {
+        NODE_ENV: "production",
+        VERCEL_ENV: "production",
+        TRANSCRIPTION_SUMMARY_V3_ENABLED: "true",
+      },
+    )).toMatchObject({
+      transcriptionSummaryV3Enabled: false,
+      transcriptionSummaryV3CrmDryRun: false,
+      transcriptionSummaryV3Required: true,
     });
   });
 });

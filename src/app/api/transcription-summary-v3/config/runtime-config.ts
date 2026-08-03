@@ -14,18 +14,19 @@ export function resolveTranscriptionSummaryV3RuntimeConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ) {
   const isPreview = environment.VERCEL_ENV === "preview";
-  const nonProduction = isPreview || environment.NODE_ENV !== "production";
+  const isProduction = environment.VERCEL_ENV === "production";
+  const allowedEnvironment = isPreview || isProduction || environment.NODE_ENV !== "production";
   const enabledFlag = environment[TRANSCRIPTION_SUMMARY_V3_ENABLED_FLAG] === "true";
   const crmDryRun = environment[TRANSCRIPTION_SUMMARY_V3_CRM_DRY_RUN_FLAG] === "true";
   const productScoped = productId !== null && ALLOWED_PRODUCT_IDS.has(productId);
   return {
     transcriptionSummaryV3Enabled:
-      nonProduction
+      allowedEnvironment
       && enabledFlag
       && crmDryRun
       && productScoped,
     transcriptionSummaryV3CrmDryRun: crmDryRun,
-    transcriptionSummaryV3Required: isPreview && productScoped,
+    transcriptionSummaryV3Required: (isPreview || isProduction) && productScoped,
     transcriptionSummaryV3PipelineVersion: AI_SUMMARY_V3_PIPELINE_VERSION,
   };
 }

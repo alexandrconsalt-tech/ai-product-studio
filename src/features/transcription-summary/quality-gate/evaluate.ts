@@ -15,6 +15,8 @@ import {
 } from "../contracts/summary-judges/v3/contract";
 import { SummaryV3Schema } from "../contracts/summary/v3/contract";
 import { calculateSummaryContentHash } from "../summary-judges/input-builder";
+import { buildSummaryPlanV3 } from "../summary/summary-plan";
+import { applySummaryPlanAndValidate, type SummaryFinalDiagnosticsV3 } from "../summary/structural-validation";
 
 type Criterion = (typeof SUMMARY_CRITERIA)[number];
 
@@ -31,6 +33,9 @@ export type SummaryQualityGateDiagnosticV3 = Readonly<{
   policyVersion: typeof SUMMARY_QUALITY_GATE_POLICY_VERSION;
   weights: typeof SUMMARY_QUALITY_GATE_WEIGHTS;
   criterionScores: Readonly<Record<Criterion, number | null>>;
+  effectiveCriterionScores: Readonly<Record<Criterion, number | null>>;
+  decisionReasons: readonly string[];
+  postFinalDiagnostics: SummaryFinalDiagnosticsV3 | null;
   qualityScore: number | null;
   decision: "QUALITY_RECORDED";
   blockersCount: 0;
@@ -110,6 +115,16 @@ export function executeSummaryQualityGateV3(input: {
         criterion,
         message: issue.message,
       })));
+  const decisionReasons = [
+    ...criterionResults
+      .filter((item) => item.score !== null && item.score < 80)
+      .map((item) => `JUDGE_SCORE_BELOW_80:${item.criterion}:${item.score}`),
+    ...criticalIssues.map((item) => `CRITICAL_ISSUE:${item.criterion ?? "unknown"}:${item.code}`),
+  ];
+  const finalValidation = store.success && summary.success
+    ? applySummaryPlanAndValidate(summary.data, buildSummaryPlanV3(store.data))
+    : null;
+  const postFinalDiagnostics = finalValidation?.diagnostics ?? null;
   const computedStatus = status(qualityScore);
   const storeData = store.success ? store.data : null;
   const value = SummaryQualityGateResultV3Schema.parse({
@@ -159,6 +174,11 @@ export function executeSummaryQualityGateV3(input: {
       criterionScores: Object.fromEntries(
         criterionResults.map((item) => [item.criterion, item.score]),
       ) as Record<Criterion, number | null>,
+      effectiveCriterionScores: Object.fromEntries(
+        criterionResults.map((item) => [item.criterion, item.score]),
+      ) as Record<Criterion, number | null>,
+      decisionReasons,
+      postFinalDiagnostics,
       qualityScore,
       decision: "QUALITY_RECORDED",
       blockersCount: 0,

@@ -112,6 +112,55 @@ function expectedVerdict(score: SummaryJudgeV3["score"]): SummaryJudgeV3["verdic
   return "fail";
 }
 
+function attributeValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(attributeValue).filter(Boolean).join(" ");
+  if (value && typeof value === "object") {
+    const item = value as Record<string, unknown>;
+    return attributeValue(item.value ?? item.normalized_value ?? "");
+  }
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function applyCompletenessCrmCoverage(
+  input: SummaryJudgeInputV3,
+  value: SummaryJudgeV3,
+): SummaryJudgeV3 {
+  if (value.criterion !== "completeness") return value;
+  const attributes = input.conversationStore.attributes as Record<string, unknown>;
+  const covered = [
+    ["funding_source", attributes.funding_source, /funding|источник|средств|оплат|наличн|депозит|ипотек/iu],
+    ["purchase_term", attributes.purchase_term, /purchase.?term|срок|покупк/iu],
+    ["interest", attributes.interested_in ?? attributes.interest, /interest|интерес|объект|квартир/iu],
+  ] as const;
+  const coveredIds = new Set<string>();
+  const coveredPatterns: RegExp[] = [];
+  for (const [name, raw, pattern] of covered) {
+    const rendered = attributeValue(raw).toLocaleLowerCase("ru-RU");
+    if (!rendered || rendered === "не определено" || rendered === "not_defined") continue;
+    coveredPatterns.push(pattern);
+    const values = Array.isArray(raw) ? raw : [raw];
+    values.forEach((item) => {
+      if (item && typeof item === "object" && "id" in item && typeof item.id === "string") coveredIds.add(item.id);
+    });
+    coveredIds.add(name);
+  }
+  if (!coveredPatterns.length) return value;
+  const coveredFinding = (finding: SummaryJudgeFindingV3) =>
+    finding.storeItemIds?.some((itemId) => coveredIds.has(itemId)) === true
+    || coveredPatterns.some((pattern) => pattern.test(`${finding.message} ${finding.summaryFragment ?? ""}`));
+  const removed = value.payload.missingFinancialContext.filter(coveredFinding);
+  if (!removed.length) return value;
+  const removedKeys = new Set(removed.map((item) => `${item.code}\u0000${item.message}`));
+  const payload = {
+    ...value.payload,
+    missingFinancialContext: value.payload.missingFinancialContext.filter((item) => !coveredFinding(item)),
+  };
+  const issues = value.issues.filter((item) => !removedKeys.has(`${item.code}\u0000${item.message}`));
+  const candidate = { ...value, payload, issues } as SummaryJudgeV3;
+  if (payloadFindings(candidate).length || issues.length) return candidate;
+  return { ...candidate, score: 100, verdict: "pass" } as SummaryJudgeV3;
+}
+
 export function validateSummaryJudgeVerdict(
   input: SummaryJudgeInputV3,
   criterion: SummaryCriterionV3,
@@ -119,7 +168,7 @@ export function validateSummaryJudgeVerdict(
 ): SummaryJudgePostValidationResult {
   const parsed = SummaryJudgeV3Schema.safeParse(output);
   if (!parsed.success) return fail(parsed.error.message);
-  const value = parsed.data;
+  const value = applyCompletenessCrmCoverage(input, parsed.data);
   if (
     value.criterion !== criterion
     || value.payload.criterion !== criterion

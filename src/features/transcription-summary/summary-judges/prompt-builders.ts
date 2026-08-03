@@ -157,11 +157,13 @@ export function buildCompletenessJudgePrompt(
       "не требуй каждый блок во всех звонках",
       "не считай отсутствующие в Store данные пропуском",
       "не штрафуй за неопределённые funding source или purchase term",
+      "не считай пропуском funding_source, purchase_term или interest, если значение присутствует в conversationStore.attributes: эти поля отображаются пользователю в секции «Потребности клиента» и являются частью финального результата",
       "не требуй agreement или next step, если их нет в Store",
       "не оценивай достоверность, стиль или краткость",
     ],
     rules: [
       "каждый missing item должен ссылаться на существующий Store item или turn, когда ссылка применима",
+      `USER_VISIBLE_CUSTOMER_NEEDS=${stableStringify(input.conversationStore.attributes)}`,
     ],
   });
 }

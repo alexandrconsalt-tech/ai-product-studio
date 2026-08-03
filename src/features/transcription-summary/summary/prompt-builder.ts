@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { SummaryV3Contract } from "../contracts/summary/v3/contract";
 import { stableStringify } from "../contracts/schema-utils";
 import type { SummaryAgentInputV3 } from "../contracts/summary-input/v3/contract";
+import { buildSummaryPlanV3, type SummaryPlanV3 } from "./summary-plan";
 
 export type SummaryResolvedPromptV3 = Readonly<{
   basePrompt: string;
@@ -17,6 +18,7 @@ export type SummaryResolvedPromptV3 = Readonly<{
 
 export function buildSummaryPromptV3(
   input: SummaryAgentInputV3,
+  summaryPlan: SummaryPlanV3 = buildSummaryPlanV3(input.conversationStore),
 ): SummaryResolvedPromptV3 {
   const basePrompt = [
     "SYSTEM ROLE",
@@ -29,6 +31,8 @@ export function buildSummaryPromptV3(
     "- Не выводи служебные ID, confidence, verification statuses и technical metadata.",
     "- Не дублируй CRM-card данные без необходимости для смысла разговора.",
     "- Источник средств и срок покупки добавляй в текст только при реальной рабочей ценности; не дублируй CRM-карточку.",
+    "- Состав блоков задан SUMMARY PLAN. Ты формулируешь текст, но не переносишь meaning между блоками и не удаляешь required meaning.",
+    "- primary_next_step выводи только в next_step; точное действие, время, место и канал не повторяй в conversation_result.",
   ].join("\n");
   const sourcePriority = [
     "SOURCE PRIORITY",
@@ -49,6 +53,7 @@ export function buildSummaryPromptV3(
     basePrompt,
     `OUTPUT CONTRACT REFERENCE\n${SummaryV3Contract.id}@${SummaryV3Contract.version}\nschema_hash=${SummaryV3Contract.schemaHash}\nJSON_SCHEMA=${stableStringify(SummaryV3Contract.schema)}`,
     `CONVERSATION STORE V3 PAYLOAD\n${stableStringify(input.conversationStore)}`,
+    `SUMMARY PLAN\n${stableStringify(summaryPlan)}`,
     `FULL TRANSCRIPT CONTEXT\n${stableStringify(input.transcriptContext)}`,
     sourcePriority,
     constraints,

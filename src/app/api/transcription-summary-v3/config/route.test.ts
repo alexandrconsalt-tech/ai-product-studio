@@ -3,7 +3,7 @@ import { PipelineLabV3ConfigMessageSchema, PipelineRuntimeConfigSchema } from "@
 import { resolveTranscriptionSummaryV3RuntimeConfig } from "./runtime-config";
 
 describe("iframe v3 config boundary", () => {
-  it("is false by default and in production", () => {
+  it("is false by default and requires an explicit Vercel production scope", () => {
     expect(resolveTranscriptionSummaryV3RuntimeConfig("project_transcription_summary_module", {})).toEqual({
       transcriptionSummaryV3Enabled: false,
       transcriptionSummaryV3CrmDryRun: false,
@@ -12,9 +12,10 @@ describe("iframe v3 config boundary", () => {
     });
     expect(resolveTranscriptionSummaryV3RuntimeConfig("project_transcription_summary_module", {
       NODE_ENV: "production",
+      VERCEL_ENV: "production",
       TRANSCRIPTION_SUMMARY_V3_ENABLED: "true",
       TRANSCRIPTION_SUMMARY_V3_CRM_DRY_RUN: "true",
-    }).transcriptionSummaryV3Enabled).toBe(false);
+    }).transcriptionSummaryV3Enabled).toBe(true);
   });
 
   it("allows only the scoped product in non-production", () => {

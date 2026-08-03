@@ -15,6 +15,8 @@ import {
   type RepetitionTransformation,
   type SummarySourceErrorCode,
 } from "./source-validation";
+import { buildSummaryPlanV3, type SummaryPlanV3 } from "./summary-plan";
+import type { SummaryFinalDiagnosticsV3 } from "./structural-validation";
 
 export type SummaryExecutionErrorCode =
   | "SUMMARY_STORE_MISSING"
@@ -46,6 +48,8 @@ export type SummaryAgentV3Diagnostic = Readonly<{
   sourceValidationStatus: "valid" | "invalid" | "not_run";
   repetitionGuardStatus: "unchanged" | "transformed" | "not_run";
   repetitionTransformations: readonly RepetitionTransformation[];
+  summaryPlan: SummaryPlanV3 | null;
+  finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
   validationStatus: "valid" | "invalid" | "not_run";
   providerDiagnostic: SafeProviderDiagnostic | null;
   errorType: "dependency_error" | "provider_error" | "validation_error" | "source_error" | null;
@@ -111,6 +115,8 @@ export async function executeSummaryAgentV3(input: {
     sourceValidationStatus: "not_run" as const,
     repetitionGuardStatus: "not_run" as const,
     repetitionTransformations: [] as readonly RepetitionTransformation[],
+    summaryPlan: null,
+    finalDiagnostics: null,
     validationStatus: "not_run" as const,
     providerDiagnostic: null,
   };
@@ -134,7 +140,8 @@ export async function executeSummaryAgentV3(input: {
     };
   }
 
-  const prompt = buildSummaryPromptV3(builtInput.value);
+  const summaryPlan = buildSummaryPlanV3(builtInput.value.conversationStore);
+  const prompt = buildSummaryPromptV3(builtInput.value, summaryPlan);
   const completion = await executeStructuredCompletion({
     stageId: "summary_agent_v3",
     manifestHash: input.manifest.manifestHash,
@@ -161,6 +168,7 @@ export async function executeSummaryAgentV3(input: {
         storeId: builtInput.value.meta.storeId,
         storeContentHash: builtInput.value.conversationStore.content_hash,
         promptHash: prompt.promptHash,
+        summaryPlan,
         structuredOutputRequested: completion.diagnostic.structuredOutputRequested,
         structuredOutputApplied: completion.diagnostic.structuredOutputApplied,
         attemptCount: completion.diagnostic.attemptCount,
@@ -176,7 +184,7 @@ export async function executeSummaryAgentV3(input: {
     };
   }
 
-  const processed = processSummaryOutput(builtInput.value, completion.value);
+  const processed = processSummaryOutput(builtInput.value, completion.value, summaryPlan);
   if (!processed.ok) {
     return {
       ok: false,
@@ -188,6 +196,8 @@ export async function executeSummaryAgentV3(input: {
         storeId: builtInput.value.meta.storeId,
         storeContentHash: builtInput.value.conversationStore.content_hash,
         promptHash: prompt.promptHash,
+        summaryPlan,
+        finalDiagnostics: processed.finalDiagnostics,
         structuredOutputRequested: completion.diagnostic.structuredOutputRequested,
         structuredOutputApplied: completion.diagnostic.structuredOutputApplied,
         attemptCount: completion.diagnostic.attemptCount,
@@ -218,6 +228,8 @@ export async function executeSummaryAgentV3(input: {
       sourceValidationStatus: "valid",
       repetitionGuardStatus: processed.repetitionGuardStatus,
       repetitionTransformations: processed.transformations,
+      summaryPlan,
+      finalDiagnostics: processed.finalDiagnostics,
       validationStatus: "valid",
       providerDiagnostic: completion.diagnostic.providerDiagnostic,
       errorType: null,

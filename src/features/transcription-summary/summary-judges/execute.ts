@@ -52,6 +52,7 @@ export type SummaryJudgeDiagnosticV3 = Readonly<{
   structuredOutputApplied: boolean;
   attemptCount: number;
   repairAttempted: boolean;
+  rawScore: 0 | 25 | 50 | 75 | 100 | null;
   score: 0 | 25 | 50 | 75 | 100 | null;
   confidence: number | null;
   verdict: SummaryJudgeV3["verdict"] | null;
@@ -122,6 +123,7 @@ export async function executeSummaryJudgeV3(input: {
     structuredOutputApplied: false,
     attemptCount: 0,
     repairAttempted: false,
+    rawScore: null,
     score: null,
     confidence: null,
     verdict: null,
@@ -263,6 +265,9 @@ export async function executeSummaryJudgeV3(input: {
       structuredOutputApplied: completion.diagnostic.structuredOutputApplied,
       attemptCount: completion.diagnostic.attemptCount,
       repairAttempted: completion.diagnostic.repairAttempted,
+      rawScore: typeof completion.value === "object" && completion.value !== null && "score" in completion.value
+        ? completion.value.score as SummaryJudgeDiagnosticV3["rawScore"]
+        : null,
       score: validated.value.score,
       confidence: validated.value.confidence,
       verdict: validated.value.verdict,

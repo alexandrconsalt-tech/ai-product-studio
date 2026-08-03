@@ -182,4 +182,24 @@ describe("Summary Judge v3 discriminated output and formal post-validation", () 
     expect(JSON.stringify(fixture.input.summary)).toBe(beforeSummary);
     expect(JSON.stringify(fixture.verdict)).toBe(beforeVerdict);
   });
+
+  it("counts a visible CRM funding attribute as Completeness coverage", () => {
+    const fixture = createSummaryJudgeFixture("completeness");
+    const finding = createJudgeFinding("completeness", {
+      code: "missing_financial_context",
+      message: "В Summary отсутствует источник средств клиента.",
+    });
+    const candidate = {
+      ...withJudgeFinding(fixture.verdict, 50, finding),
+      payload: {
+        ...fixture.verdict.payload,
+        missingFinancialContext: [finding],
+      },
+    };
+    expect(validateSummaryJudgeVerdict(
+      fixture.input,
+      "completeness",
+      candidate,
+    )).toMatchObject({ ok: true, value: { score: 100, verdict: "pass", issues: [] } });
+  });
 });

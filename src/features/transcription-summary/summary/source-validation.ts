@@ -3,25 +3,29 @@ import {
   SummaryV3Schema,
   type SummaryV3,
 } from "../contracts/summary/v3/contract";
+import type { SummaryPlanV3 } from "./summary-plan";
+import {
+  applySummaryPlanAndValidate,
+  type SummaryFinalDiagnosticsV3,
+  type SummaryStructuralTransformation,
+} from "./structural-validation";
 
 export type SummarySourceErrorCode =
   | "SUMMARY_SOURCE_MISMATCH"
   | "SUMMARY_QUOTE_SOURCE_INVALID"
-  | "SUMMARY_OUTPUT_SCHEMA_INVALID";
+  | "SUMMARY_OUTPUT_SCHEMA_INVALID"
+  | "SUMMARY_STRUCTURAL_VALIDATION_FAILED";
 
-export type RepetitionTransformation = Readonly<{
-  ruleId: "summary.no-transform.v1";
-  removedPath: never;
-  normalizedValue: never;
-}>;
+export type RepetitionTransformation = SummaryStructuralTransformation;
 
 export type ProcessSummaryResult =
   | Readonly<{
       ok: true;
       value: SummaryV3;
       sourceValidationStatus: "valid";
-      repetitionGuardStatus: "unchanged";
-      transformations: readonly [];
+      repetitionGuardStatus: "unchanged" | "transformed";
+      transformations: readonly RepetitionTransformation[];
+      finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
     }>
   | Readonly<{
       ok: false;
@@ -33,6 +37,7 @@ export type ProcessSummaryResult =
       sourceValidationStatus: "invalid";
       repetitionGuardStatus: "not_run";
       transformations: readonly [];
+      finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
     }>;
 
 function fail(errorCode: SummarySourceErrorCode, message: string): ProcessSummaryResult {
@@ -42,6 +47,7 @@ function fail(errorCode: SummarySourceErrorCode, message: string): ProcessSummar
     sourceValidationStatus: "invalid",
     repetitionGuardStatus: "not_run",
     transformations: [],
+    finalDiagnostics: null,
   };
 }
 
@@ -52,14 +58,31 @@ function normalized(value: string): string {
 export function processSummaryOutput(
   input: SummaryAgentInputV3,
   output: unknown,
+  plan?: SummaryPlanV3,
 ): ProcessSummaryResult {
   const parsed = SummaryV3Schema.safeParse(output);
   if (!parsed.success) {
     return fail("SUMMARY_OUTPUT_SCHEMA_INVALID", parsed.error.message);
   }
 
+  const structural = plan ? applySummaryPlanAndValidate(parsed.data, plan) : null;
+  if (structural && !structural.ok) {
+    return {
+      ok: false,
+      error: {
+        status: "TECHNICAL_ERROR",
+        errorCode: "SUMMARY_STRUCTURAL_VALIDATION_FAILED",
+        message: `${structural.error}: ${JSON.stringify(structural.diagnostics)}`,
+      },
+      sourceValidationStatus: "invalid",
+      repetitionGuardStatus: "not_run",
+      transformations: [],
+      finalDiagnostics: structural.diagnostics,
+    };
+  }
+  const finalValue = structural?.value ?? parsed.data;
   const transcriptTexts = input.transcriptContext.turns.map((turn) => normalized(turn.text));
-  for (const quote of parsed.data.quotes) {
+  for (const quote of finalValue.quotes) {
     const quoteText = normalized(quote.text);
     if (!transcriptTexts.some((turnText) => turnText.includes(quoteText))) {
       return fail(
@@ -70,10 +93,10 @@ export function processSummaryOutput(
   }
 
   const userText = [
-    parsed.data.conversation_result,
-    ...parsed.data.key_facts.flatMap((fact) => [fact.label, fact.value]),
-    ...parsed.data.quotes.map((quote) => quote.text),
-    parsed.data.next_step,
+    finalValue.conversation_result,
+    ...finalValue.key_facts.flatMap((fact) => [fact.label, fact.value]),
+    ...finalValue.quotes.map((quote) => quote.text),
+    finalValue.next_step,
   ].join(" ");
   if (/\b(?:store[_ ]?id|manifest[_ ]?hash|confidence|verification_status|technical_error)\b/iu.test(userText)) {
     return fail("SUMMARY_SOURCE_MISMATCH", "Summary contains technical fields");
@@ -81,9 +104,10 @@ export function processSummaryOutput(
 
   return {
     ok: true,
-    value: parsed.data,
+    value: finalValue,
     sourceValidationStatus: "valid",
-    repetitionGuardStatus: "unchanged",
-    transformations: [],
+    repetitionGuardStatus: structural?.status ?? "unchanged",
+    transformations: structural?.transformations ?? [],
+    finalDiagnostics: structural?.diagnostics ?? null,
   };
 }

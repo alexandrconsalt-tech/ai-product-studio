@@ -301,7 +301,30 @@ implements TranscriptionSummaryV3StageExecutor {
         structuredOutputApplied: result.diagnostic.structuredOutputApplied,
         providerDiagnostic: providerAudit(result.diagnostic.providerDiagnostic),
         attempts: result.diagnostic.attemptCount,
+        transformations: result.diagnostic.repetitionTransformations.map((item) => ({
+          operation_id: item.ruleId,
+          operation_type: "normalized" as const,
+          field_path: item.fieldPath,
+          old_value: null,
+          new_value: item.meaningId,
+          rule_id: item.ruleId,
+          reason: item.reason,
+          source_refs: item.meaningId ? [item.meaningId] : [],
+          timestamp: new Date(0).toISOString(),
+        })),
         validationStatus: result.diagnostic.validationStatus,
+        validationIssues: [
+          ...(result.diagnostic.summaryPlan ? [{
+            path: "summary.plan",
+            code: "SUMMARY_PLAN",
+            message: JSON.stringify(result.diagnostic.summaryPlan),
+          }] : []),
+          ...(result.diagnostic.finalDiagnostics ? [{
+            path: "summary.final",
+            code: "POST_FINAL_DIAGNOSTICS",
+            message: JSON.stringify(result.diagnostic.finalDiagnostics),
+          }] : []),
+        ],
         errorType: result.ok ? null : result.diagnostic.errorType === "provider_error" ? "provider" : "schema",
         errorCode: result.diagnostic.errorCode,
         blocking: !result.ok,
@@ -337,6 +360,15 @@ implements TranscriptionSummaryV3StageExecutor {
         providerDiagnostic: providerAudit(result.diagnostic.providerDiagnostic),
         attempts: result.diagnostic.attemptCount,
         validationStatus: result.diagnostic.validationStatus,
+        validationIssues: [{
+          path: `summary_judge.${criterion}`,
+          code: "JUDGE_SCORE_AUDIT",
+          message: JSON.stringify({
+            criterion,
+            raw_score: result.diagnostic.rawScore,
+            effective_score: result.diagnostic.score,
+          }),
+        }],
         score: result.diagnostic.score,
         confidence: result.diagnostic.confidence,
         errorType: result.ok ? null : "provider",
@@ -387,6 +419,18 @@ implements TranscriptionSummaryV3StageExecutor {
             value: result.value,
             audit: codeAudit(context, "qualityGate", {
               score: result.value.qualityScore,
+              validationIssues: [
+                ...result.diagnostic.decisionReasons.map((reason) => ({
+                  path: "quality_gate.decision_reasons",
+                  code: reason.split(":", 1)[0] || "QUALITY_GATE_REASON",
+                  message: reason,
+                })),
+                ...(result.diagnostic.postFinalDiagnostics ? [{
+                  path: "quality_gate.post_final_diagnostics",
+                  code: "POST_FINAL_DIAGNOSTICS",
+                  message: JSON.stringify(result.diagnostic.postFinalDiagnostics),
+                }] : []),
+              ],
               errorType: result.diagnostic.errorCode ? "invariant" : null,
               errorCode: result.diagnostic.errorCode,
               blocking: false,

@@ -89,5 +89,15 @@ describe("Summary Quality Gate — только аналитика", () => {
       blocking: false,
     });
     expect(result.value.criticalIssues).toHaveLength(1);
+    expect(result.diagnostic.decisionReasons).toContain(
+      "CRITICAL_ISSUE:faithfulness:unsupported_claim",
+    );
+  });
+
+  it("reports criterion name when a Judge score is below 80", () => {
+    const fixture = createSummaryQualityGateFixture({ format: 75 });
+    const result = executeSummaryQualityGateV3(fixture);
+    expect(result.diagnostic.decisionReasons).toContain("JUDGE_SCORE_BELOW_80:format:75");
+    expect(result.diagnostic.effectiveCriterionScores.format).toBe(75);
   });
 });
