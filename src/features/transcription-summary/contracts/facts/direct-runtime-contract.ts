@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const DIRECT_FACT_TYPES = [
   "client_goal",
+  "client_need",
   "client_context",
   "client_requirement",
   "client_preference",
@@ -33,6 +34,7 @@ export const DirectFactSchema = z.object({
   evidence: z.string().trim().min(1),
   source_turn_ids: z.array(z.string().trim().min(1)),
   confidence: z.number().min(0).max(1),
+  business_priority: z.enum(["critical", "important", "secondary"]),
 }).strict();
 
 export const DirectFactQuoteSchema = z.object({

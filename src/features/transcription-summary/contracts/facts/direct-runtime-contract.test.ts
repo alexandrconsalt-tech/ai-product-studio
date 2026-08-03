@@ -21,6 +21,7 @@ describe("direct production Facts runtime contract", () => {
         evidence: "По поводу денег, у меня деньги на счету",
         source_turn_ids: ["turn_7"],
         confidence: 0.99,
+        business_priority: "important",
       }],
       quotes: [],
     }).facts[0].type).toBe("client_finance");
@@ -41,7 +42,7 @@ describe("direct production Facts runtime contract", () => {
     };
     expect(DirectFactsRuntimeSchema.safeParse({ facts: [legacy], quotes: [] }).success).toBe(false);
     for (const type of DIRECT_FACT_TYPES) expect(pipeline).toContain(`'${type}'`);
-    expect(pipeline).toContain("required:['id','type','value','speaker','evidence','source_turn_ids','confidence']");
+    expect(pipeline).toContain("required:['id','type','value','speaker','evidence','source_turn_ids','confidence','business_priority']");
     expect(pipeline).toContain("factSchemaExactKeys(value,'',['facts','quotes'])");
   });
 });

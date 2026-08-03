@@ -9,6 +9,8 @@ type GoldenCase = {
   expectedScore: number | null;
   expectedStatus: string;
   expectedEvaluation: string;
+  expectedDecision: string;
+  expectedBlocking: boolean;
 };
 
 const GOLDEN_CASES: GoldenCase[] = [
@@ -18,6 +20,8 @@ const GOLDEN_CASES: GoldenCase[] = [
     expectedScore: 95,
     expectedStatus: "PASS",
     expectedEvaluation: "complete",
+    expectedDecision: "REVIEW_REQUIRED",
+    expectedBlocking: true,
   },
   {
     name: "good",
@@ -25,6 +29,8 @@ const GOLDEN_CASES: GoldenCase[] = [
     expectedScore: 94,
     expectedStatus: "PASS",
     expectedEvaluation: "complete",
+    expectedDecision: "AUTO_SAVE",
+    expectedBlocking: false,
   },
   {
     name: "needs_attention",
@@ -32,6 +38,8 @@ const GOLDEN_CASES: GoldenCase[] = [
     expectedScore: 75,
     expectedStatus: "WARNING",
     expectedEvaluation: "complete",
+    expectedDecision: "REVIEW_REQUIRED",
+    expectedBlocking: true,
   },
   {
     name: "low_quality",
@@ -39,13 +47,17 @@ const GOLDEN_CASES: GoldenCase[] = [
     expectedScore: 60,
     expectedStatus: "FAIL",
     expectedEvaluation: "complete",
+    expectedDecision: "REVIEW_REQUIRED",
+    expectedBlocking: true,
   },
   {
     name: "partial_without_default_score",
     scores: [null, 100, 75, 100, 100],
-    expectedScore: 93.8,
-    expectedStatus: "PASS",
+    expectedScore: null,
+    expectedStatus: "NOT_EVALUATED",
     expectedEvaluation: "partial",
+    expectedDecision: "TECHNICAL_ERROR",
+    expectedBlocking: true,
   },
   {
     name: "not_evaluated",
@@ -53,6 +65,8 @@ const GOLDEN_CASES: GoldenCase[] = [
     expectedScore: null,
     expectedStatus: "NOT_EVALUATED",
     expectedEvaluation: "technical_error",
+    expectedDecision: "TECHNICAL_ERROR",
+    expectedBlocking: true,
   },
 ];
 
@@ -73,14 +87,16 @@ for (const goldenCase of GOLDEN_CASES) {
           ? { score: null, status: "technical_error", issues: [] }
           : { score: scores[index], status: scores[index] === 100 ? "pass" : "warning", issues: [] },
       ]));
+      ctx.summary = { conversation_result: "Клиенту нужен тихий двор.", key_facts: [], quotes: [], next_step: "Клиент вернётся с решением." };
+      ctx.conversation_store = { conversation: { partial: false, source_errors: [], attributes: {}, primary_next_step: { action: "вернуться с решением", status: "confirmed" } } };
       return CODE_FUNCS.summaryQualityGate({}, ctx).output;
     }, goldenCase.scores);
     expect(result).toMatchObject({
       summary_quality_score: goldenCase.expectedScore,
       quality_status: goldenCase.expectedStatus,
       evaluation_status: goldenCase.expectedEvaluation,
-      blocking: false,
-      decision: "QUALITY_RECORDED",
+      blocking: goldenCase.expectedBlocking,
+      decision: goldenCase.expectedDecision,
     });
   });
 }

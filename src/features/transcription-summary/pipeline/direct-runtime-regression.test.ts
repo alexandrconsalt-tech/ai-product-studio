@@ -60,13 +60,17 @@ describe("13-stage direct production runtime regression", () => {
     expect(store).not.toMatch(/ctx&&ctx\.(?:fact_check|need_check)/);
   });
 
-  it("does not rewrite grounded Summary and always renders customer needs", () => {
+  it("removes only known Summary quality defects and always renders customer needs", () => {
     const policy = section(
       "function moduleSummaryApplyStorePolicy",
       "function moduleSummaryTechnicalOutput",
     );
     const renderer = section("function renderModuleSummaryResult", "function renderSummaryNewResult");
-    expect(policy).toContain("return {value,count:0,changes:[]}");
+    expect(policy).toContain("card_fact_removed");
+    expect(policy).toContain("unfinished_quote_removed");
+    expect(policy).toContain("semantic_duplicate_removed");
+    expect(pipeline).toContain("if(parseErr==='TRUNCATED_JSON')");
+    expect(pipeline).toContain("Math.max(12000,Number(stage.maxTokens)||0)");
     expect(renderer).toContain("Потребности клиента");
     expect(renderer).toContain("Источник средств:");
     expect(pipeline).toContain("customer_needs:customerNeedsValues(ctx)");
@@ -88,7 +92,9 @@ describe("13-stage direct production runtime regression", () => {
     expect(pipeline).toContain("pipeline_context_complete");
     expect(pipeline).toContain("attributes_included_in_payload:true");
     expect(pipeline).toContain("attributes_saved_to_crm_fields:false");
-    expect(pipeline).toContain("status:extractorErrors.length?'REVIEW_REQUIRED':'SAVED'");
+    expect(pipeline).toContain("manualReview?'MANUAL_REVIEW'");
+    expect(pipeline).toContain("raw_scores:gate.raw_scores||{}");
+    expect(pipeline).toContain("effective_scores:gate.effective_scores||{}");
   });
 
   it("reports honest top-level pipeline states", () => {

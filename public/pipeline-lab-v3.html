@@ -368,11 +368,13 @@ const CODE_FN_LIST = ['stt','validate','store','factCheckCode','needCheckCode','
 
 const MODULE_SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентства недвижимости.
 
-Сформируй рабочий бриф по двум равноправным источникам: Conversation Store и полной транскрипции. Store даёт структурированные извлечённые данные. Транскрипция нужна для восстановления связи между репликами, уточнения контекста и ролей, понимания главного смысла и проверки, что Store ничего не исказил. При конфликте выбирай формулировку, достоверно подтверждённую транскрипцией. Не придумывай сведения, которых нет ни в Store, ни в транскрипции.
+Сформируй рабочий handoff следующему агенту только из канонических полей Conversation Store. Полная транскрипция — вспомогательный источник для дословной цитаты и проверки контекста, но не альтернативный источник новых фактов. Не придумывай сведения и не восстанавливай отсутствующие потребности самостоятельно.
 
-conversation_result — 2–4 коротких предложения: кто клиент и зачем обратился; что для него важно или какое есть ограничение; чем закончился разговор. key_facts — 0–3 пункта только с важным рабочим контекстом, которого ещё нет в conversation_result. quotes — 0–1 содержательная цитата о мотивации, сомнении или ограничении. next_step — одно естественное предложение: кто, что делает, когда и при каком условии.
+Перед ответом внутренне проверь четыре вопроса: зачем клиент обратился; что ему нужно или что блокирует решение; чем завершился разговор; кто и что делает дальше. Используй переданный INTERNAL SUMMARY PLAN, но не выводи его отдельным блоком.
 
-Не выводи адрес и параметры карточки, роль «частное лицо», имена сотрудников, соединение с агентом, уже закрытые вопросы, технические поля и значения «не определено». Не используй цитаты «да», «угу», «не нужна», просьбу соединить или техническую реплику. Не дублируй один смысл между блоками. Не используй технические ярлыки «Агент:», «владелец:», «статус:», «срок —». В «Нужно уточнить» включай только important_question со status="unanswered" или "partially_answered".
+conversation_result — 2–4 коротких предложения в порядке цель → основная потребность/требования → препятствие или открытый вопрос → результат разговора. key_facts — 2–4 уникальных пункта только с critical/important рабочим контекстом, которого ещё нет в conversation_result; не заполняй их данными карточки. quotes — 0–2 законченные содержательные цитаты о мотивации, сомнении или ограничении. next_step — одно естественное предложение: кто, что делает, когда и при каком условии.
+
+Не выводи адрес, цену и параметры карточки, роль «частное лицо», имена сотрудников, соединение с агентом, уже закрытые вопросы, технические поля и значения «не определено». Данные карточки CRM не обязаны повторяться в Summary. Не используй цитаты «да», «угу», «не нужна», просьбу соединить, техническую реплику или незавершённую цитату с тире/многоточием в конце. Не дублируй один смысл между conversation_result, key_facts, quotes и next_step. Не используй технические ярлыки «Агент:», «владелец:», «статус:», «срок —». В «Нужно уточнить» включай только open_question со status="unanswered" или "partially_answered".
 
 Верни строго JSON без пояснений:
 {
@@ -514,35 +516,78 @@ Semantic guards: proposed нельзя выдавать за подтвержд�
 
 Числа, status, next_step_verified и checked_components будут пересчитаны кодом. Один смысловой дефект верни один раз.`;
 
-const MODULE_PRESENTATION_CHECK_PROMPT = `Ты — независимый Checker формата, структуры и краткости CRM-саммари.
-
-Оцени только переданный объект summary: структуру, краткость, читаемость, смысловые повторы, перегруженность, удобство быстрого чтения и распределение информации по блокам. Умеренное пересечение conversation_result и key_facts допустимо. Краткое сообщение результата в conversation_result и операционная формулировка того же будущего действия в next_step — обязательные разные функции блоков, а не semantic_repetition. Прямая цитата, конструкция «клиент: …» или длинное пояснение в скобках внутри key_fact запрещены. Повтор одной цитаты внутри key_facts и quotes является semantic_repetition. Разговорные слова вне quotes и перегруженные скобочные конструкции снижают читаемость.
-
-Не ищи галлюцинации, ошибки сумм или ролей, пропущенные факты, практическую полезность и корректность договорённостей по транскрипции. Не предлагай новую версию summary. Такие issues не возвращай.
-
-Допустимые issue type: invalid_structure, missing_required_field, empty_required_field, too_many_key_facts, too_many_quotes, excessive_length, excessive_detail, semantic_repetition, duplicate_key_fact, fragmented_text, difficult_to_scan, long_sentence, unclear_wording, formal_intro, markdown_inside_value, heading_inside_value, forbidden_value, recommendation_in_next_step, empty_optional_item, mixed_meanings_in_key_fact, next_step_not_concise.
-
-forbidden_value используй только для значения «не определено» или телефонного номера. Подтверждённые бизнес-значения, включая канал MAX, не являются запрещёнными.
-
-Каждый summary_fragment должен быть непустым точным видимым фрагментом значения summary. Не возвращай JSON-сериализацию, имена ключей label/value, кавычки или скобки вокруг фрагмента. Один смысловой дефект верни один раз.
-
-Верни строго JSON без markdown и дополнительных полей:
-{
-  "status":"pass",
-  "score":100,
-  "structure_score":100,
-  "brevity_score":100,
-  "readability_score":100,
-  "repetition_score":100,
-  "limits_score":100,
-  "checks":{"required_fields_present":true,"conversation_result_valid":true,"key_facts_valid":true,"quotes_valid":true,"next_step_valid":true,"character_limit_valid":true,"no_excessive_repetition":true,"easy_to_scan":true},
-  "metrics":{"total_characters":0,"conversation_result_characters":0,"key_facts_count":0,"quotes_count":0,"next_step_characters":0,"sentence_count":0},
-  "errors":[{"type":"invalid_structure","field":"conversation_result","summary_fragment":"точный фрагмент summary","problem":"описание проблемы"}],
-  "warnings":[],
-  "explanation":"краткий итог"
-}
-
-Числа, checks, metrics, score и status будут пересчитаны кодом.`;
+const MODULE_PRESENTATION_CHECK_PROMPT = `Ты — независимый Format Judge CRM-саммари.
+Оцени только финальное Summary и переданные diagnostics.
+Не проверяй достоверность фактов по транскрипции.
+Не оценивай полноту разговора.
+Не оценивай правильность бизнес-результата.
+Не исправляй Summary.
+Твоя задача — оценить:
+1. структуру;
+2. краткость;
+3. читаемость;
+4. отсутствие смысловых повторов;
+5. отсутствие дублей CRM-карточки и атрибутов;
+6. качество формулировок;
+7. полезность распределения информации по блокам;
+8. качество цитат.
+## Входные данные
+Ты получаешь:
+- conversation_result;
+- key_facts;
+- quotes;
+- next_step;
+- CRM-атрибуты;
+- card_metadata;
+- deterministic diagnostics.
+Diagnostics являются обязательным источником сигналов. Нельзя игнорировать подтверждённые кодом нарушения.
+## Главный принцип
+Каждый смысл должен быть представлен один раз и в наиболее подходящем блоке.
+Умеренное тематическое пересечение допустимо, если каждый блок добавляет новую конкретику.
+Это не считается повтором: conversation_result «Клиент ищет загородный дом для постоянного проживания»; key_fact «Требование: участок не менее 6 соток».
+Это считается повтором: conversation_result «Клиент покупает квартиру для собственного проживания»; key_fact «Цель: покупка для собственного проживания».
+Также повтором считается одинаковая договорённость, переданная разными словами.
+## Проверка conversation_result
+Хороший блок: 1–2 коротких предложения; быстро передаёт цель, ситуацию и результат; не пересказывает весь разговор; не содержит полный следующий шаг, параметры карточки или длинное перечисление.
+Ошибки: более двух перегруженных предложений; несколько независимых тем в одном предложении; полный адрес; цена, площадь, этаж или комнатность карточки; дубли key_facts или next_step; операционный шум; сложная или неестественная формулировка.
+## Проверка key_facts
+Хорошие key_facts: от 1 до 4 пунктов; каждый добавляет новый смысл; помогает продолжить работу; не повторяет данные карточки, атрибуты, результат или следующий шаг.
+Ошибки: цель повторяет conversation_result; финансирование повторяет CRM-атрибут; дата и время повторяют next_step; адрес повторяет карточку; организационная деталь не влияет на работу; несколько пунктов выражают один смысл.
+## Проверка quotes
+Хорошая цитата принадлежит клиенту, добавляет самостоятельную позицию, передаёт мотив, возражение, ограничение или обязательное условие, не повторяет соседние блоки, закончена и понятна.
+Ошибки: искусственная или односложная цитата; повтор цели, финансирования или следующего шага; адрес или телефон; оборванная, повреждённая или бессмысленная фраза. Цитата не обязательна; пустой массив не является ошибкой.
+## Проверка next_step
+Хороший next_step: одно предложение; понятны ответственный и действие; срок указан только при наличии; нет адреса, длинного объяснения и повторов результата. Связанная последовательность допустима: «Агент утром подтвердит встречу и проведёт просмотр в 19:30».
+## Критические нарушения формата
+К критическим относятся: два и более смысловых повтора; повтор полного адреса; повтор следующего шага в нескольких блоках; три и более дубля CRM-атрибутов или карточки; незаконченная или бессмысленная фраза, мешающая пониманию; отсутствующий next_step при подтверждённой договорённости; повреждённая цитата; структура, которую невозможно быстро прочитать. При критическом нарушении решение не может быть PASS.
+## Шкала оценки
+Используй только 100, 95, 90, 85, 75, 50, 25 или 0.
+100 — идеально краткое, чистое и структурированное Summary.
+95 — одна минимальная стилистическая шероховатость.
+90 — один небольшой недостаток без смыслового дубля.
+85 — заметный, но некритичный недостаток: один повтор, слабая цитата или единичный CRM-дубль.
+75 — несколько заметных ошибок либо одно критическое нарушение.
+50 — Summary перегружено, содержит много повторов, CRM-мусор или неясные формулировки.
+25 — Summary трудно использовать.
+0 — формат отсутствует либо текст непригоден.
+## Жёсткие ограничения оценки
+- semantic_repetition_count >= 1 → максимум 85; >= 2 → максимум 75; >= 4 → максимум 50;
+- crm_duplication_count >= 1 → максимум 85;
+- address_duplication_count >= 1 → максимум 75;
+- next_step_duplicate_count >= 1 → максимум 75;
+- useless_quote_count >= 1 → максимум 85;
+- unfinished_quote_count >= 1 → максимум 75;
+- unclear_phrase_count >= 1 → максимум 75;
+- organizational_noise_count >= 2 → максимум 75;
+- next_step_present=false при подтверждённом шаге → максимум 50.
+Если применимо несколько ограничений, используй минимальный максимум.
+## Decision
+PASS — score >= 90 и нет критических нарушений; NEEDS_REWORK — 50–85; FAIL — ниже 50; TECHNICAL_ERROR — вход повреждён.
+## Формат ответа
+Верни только валидный JSON:
+{"score":75,"decision":"NEEDS_REWORK","summary":"Summary содержит подтверждённые diagnostics нарушения.","violations":[{"code":"SEMANTIC_REPETITION","severity":"major","blocks":["conversation_result","key_facts"],"description":"Цель повторена."}],"criteria":[{"name":"Структура","status":"pass","comment":"Обязательные блоки присутствуют."},{"name":"Краткость","status":"fail","comment":"Итог перегружен."},{"name":"Отсутствие повторов","status":"fail","comment":"Есть повторы."},{"name":"Отсутствие CRM-дублей","status":"fail","comment":"Есть дубль карточки."},{"name":"Ясность языка","status":"fail","comment":"Есть неестественная формулировка."}]}
+## Финальная проверка
+Перед ответом проверь: учтены все diagnostics; score соответствует ограничениям; PASS не выставлен при критическом нарушении; конкретные повторы перечислены; нарушения относятся только к формату; JSON соответствует схеме.`;
 
 // Ориентировочная стоимость за 1000 токенов -- оценка для отображения
 // расходов теста, а не точный биллинг вендора (реальная стоимость
@@ -648,10 +693,12 @@ Conversation Store (проверенные факты/потребности/р�
 //  валидные результаты трёх Extractor и поддерживает частичный контекст.
 // ═══════════════════════════════════════════════════════════════════════════
 const FACT_TYPE_VALUES=Object.freeze([
-  'client_goal','client_context','client_requirement','client_preference','client_finance','client_timing',
+  'client_goal','client_need','client_context','client_requirement','client_preference','client_finance','client_timing',
   'client_objection','client_constraint','open_question','agent_information','agent_commitment','agreement',
   'communication_result','other_important'
 ]);
+const FACT_BUSINESS_PRIORITY_VALUES=Object.freeze(['critical','important','secondary']);
+const FACT_BUSINESS_PRIORITIES=new Set(FACT_BUSINESS_PRIORITY_VALUES);
 // Имена оставлены как внутренние aliases для parser diagnostics сохранённых
 // отчётов. Активный response contract использует только поле `type`.
 const FACT_CATEGORY_VALUES=FACT_TYPE_VALUES;
@@ -662,10 +709,11 @@ const FACT_VALUE_JSON_SCHEMA={anyOf:[
 ]};
 const FACT_EXTRACTION_JSON_SCHEMA={
   type:'object',additionalProperties:false,required:['facts','quotes'],properties:{
-    facts:{type:'array',items:{type:'object',additionalProperties:false,required:['id','type','value','speaker','evidence','source_turn_ids','confidence'],properties:{
+    facts:{type:'array',items:{type:'object',additionalProperties:false,required:['id','type','value','speaker','evidence','source_turn_ids','confidence','business_priority'],properties:{
       id:{type:'string',minLength:1},type:{type:'string',enum:FACT_TYPE_VALUES},value:FACT_VALUE_JSON_SCHEMA,
       speaker:{type:'string',enum:['Клиент','Агент','Оператор','Третье лицо']},evidence:{type:'string',minLength:1},
-      source_turn_ids:{type:'array',items:{type:'string',minLength:1}},confidence:{type:'number',minimum:0,maximum:1}
+      source_turn_ids:{type:'array',items:{type:'string',minLength:1}},confidence:{type:'number',minimum:0,maximum:1},
+      business_priority:{type:'string',enum:FACT_BUSINESS_PRIORITY_VALUES}
     }}},
     quotes:{type:'array',items:{type:'object',additionalProperties:false,required:['id','text','speaker','supports_fact_ids','source_turn_ids','confidence'],properties:{
       id:{type:'string',minLength:1},text:{type:'string',minLength:1},speaker:{type:'string',enum:['Клиент']},
@@ -675,13 +723,15 @@ const FACT_EXTRACTION_JSON_SCHEMA={
   }
 };
 
-const NEED_CONTRACT_VERSION='needs_v2.1';
+const NEED_CONTRACT_VERSION='needs_v2.2';
 const NEED_RESPONSE_SCHEMA_ID='needs_v2';
 const NEED_PARSER_SCHEMA_ID='needs_v2';
 const NEED_INTEREST_VALUE_LIST=Object.freeze(['Новостройки','Ипотека','Строительство']);
 const NEED_FUNDING_VALUE_LIST=Object.freeze(['наличные / депозит','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено']);
 const NEED_TERM_VALUE_LIST=Object.freeze(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
 const NEED_REQUIREMENT_TYPE_LIST=Object.freeze(['search_location','property_type','market_type','residential_complex','rooms','minimum_area','preferred_area','maximum_area','minimum_land_area','maximum_land_area','repair','floor_preference','transport_accessibility','infrastructure','legal_requirement','price_limit','hard_constraint','rejected_option','other_requirement']);
+const NEED_REQUIREMENT_CATEGORY_LIST=Object.freeze(['location','property','finance','timing','legal','other']);
+const NEED_REQUIREMENT_PRIORITY_LIST=Object.freeze(['required','preferred']);
 const NEED_INTEREST_VALUES=new Set(NEED_INTEREST_VALUE_LIST);
 const NEED_FUNDING_VALUES=new Set(NEED_FUNDING_VALUE_LIST);
 const NEED_TERM_VALUES=new Set(NEED_TERM_VALUE_LIST);
@@ -711,8 +761,9 @@ const NEED_EXTRACTION_JSON_SCHEMA={
         value:{type:'string',enum:NEED_TERM_VALUE_LIST},...NEED_COMMON_PROPERTIES
       }}
     }},
-    requirements:{type:'array',items:{type:'object',additionalProperties:false,required:['id','type','value','confidence','evidence','source_fact_ids','verification_status'],properties:{
-      id:{type:'string',pattern:'^requirement_[1-9][0-9]*$'},type:{type:'string',enum:NEED_REQUIREMENT_TYPE_LIST},value:NEED_REQUIREMENT_VALUE_JSON_SCHEMA,...NEED_COMMON_PROPERTIES
+    requirements:{type:'array',items:{type:'object',additionalProperties:false,required:['id','type','category','value','priority','reason','confidence','evidence','source_fact_ids','verification_status'],properties:{
+      id:{type:'string',pattern:'^requirement_[1-9][0-9]*$'},type:{type:'string',enum:NEED_REQUIREMENT_TYPE_LIST},category:{type:'string',enum:NEED_REQUIREMENT_CATEGORY_LIST},value:NEED_REQUIREMENT_VALUE_JSON_SCHEMA,
+      priority:{type:'string',enum:NEED_REQUIREMENT_PRIORITY_LIST},reason:{type:'string',minLength:1},...NEED_COMMON_PROPERTIES
     }}},
     need_meta:{type:'object',additionalProperties:false,required:['interest_count','requirements_count','decision'],properties:{
       interest_count:{type:'integer',minimum:0},requirements_count:{type:'integer',minimum:0},decision:{type:'string',enum:['EXTRACTED','NO_NEEDS']}
@@ -784,7 +835,10 @@ attributes.interest — массив ОБЪЕКТОВ, не массив стр�
     {
       "id": "requirement_1",
       "type": "legal_requirement",
+      "category": "legal",
       "value": "важен статус НДС",
+      "priority": "required",
+      "reason": "Без подтверждения статуса клиент не готов продолжать",
       "confidence": 0.95,
       "evidence": "клиент прямо обозначил критерий",
       "source_fact_ids": ["fact_8"],
@@ -801,8 +855,14 @@ attributes.interest — массив ОБЪЕКТОВ, не массив стр�
 Допустимые funding_source: ${NEED_FUNDING_VALUE_LIST.join(', ')}.
 Допустимые purchase_term: ${NEED_TERM_VALUE_LIST.join(', ')}.
 Допустимые requirement.type: ${NEED_REQUIREMENT_TYPE_LIST.join(', ')}.
+Допустимые requirement.category: ${NEED_REQUIREMENT_CATEGORY_LIST.join(', ')}.
+Допустимые requirement.priority: required, preferred.
+Главный вопрос: что должно быть выполнено, чтобы клиент согласился двигаться дальше?
+required используй только для явно обязательного условия клиента: «обязательно», «главное», «только если», «не подходит без», «не готов, если». preferred — только для «хотелось бы», «желательно», «лучше», «предпочтительно», «было бы удобно».
+reason кратко объясняет влияние условия на решение клиента и не может копировать value.
 Звонок по апартаментам или конкретному ЖК сам по себе НЕ создаёт interest="Новостройки". Название, адрес, цена и параметры текущего объекта НЕ являются requirement.
 Вопрос клиента становится requirement только когда verified fact подтверждает значимый критерий, ограничение или условие решения. Состояние "пока не готов к просмотру" остаётся фактом и НЕ является requirement.
+Ответ «да» на параметр объявления, сведения агента об объекте, действие после звонка и маршрут клиента до объекта НЕ являются requirement. Фраза «клиент доберётся на метро» не создаёт critical requirement или transport_accessibility.
 Для funding_source="не определено" и purchase_term="не определено" source_fact_ids должен быть пустым; для любого определённого значения и каждого interest/requirement нужен хотя бы один verified source_fact_id.
 contractVersion=${NEED_CONTRACT_VERSION}; response_schema_id=${NEED_RESPONSE_SCHEMA_ID}; parser_schema_id=${NEED_PARSER_SCHEMA_ID}; schemaHash=${NEED_SCHEMA_HASH}.`;
 }
@@ -2782,7 +2842,7 @@ function ensureModuleTranscriptPrompt(stage, prompt, ctx){
 }
 
 function factExtractionContractAppendix(){
-  return '\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT AGENT:\nВерни только {"facts":[{"id":"fact_1","type":"client_goal","value":"...","speaker":"Клиент","evidence":"точный фрагмент","source_turn_ids":["turn_1"],"confidence":0.98}],"quotes":[]}.\nДопустимые type: '+FACT_TYPE_VALUES.map(value=>'"'+value+'"').join(', ')+'. Поля category, name, normalized_value, verification_status, question_status, answer, answer_speaker, answer_evidence и extraction_meta запрещены. Не извлекай имя, телефон, код объекта, этаж и технические данные карточки без самостоятельной рабочей ценности. Деньги на счёте — client_finance со значением "наличные / депозит". Evidence может содержать несущественные STT-различия; не удаляй понятный факт, подтверждённый полной репликой.';
+  return '\n\n---\nАКТИВНЫЙ КОНТРАКТ FACT AGENT:\nВерни только {"facts":[{"id":"fact_1","type":"client_goal","value":"...","speaker":"Клиент","evidence":"точный фрагмент","source_turn_ids":["turn_1"],"confidence":0.98,"business_priority":"critical"}],"quotes":[]}.\nДопустимые type: '+FACT_TYPE_VALUES.map(value=>'"'+value+'"').join(', ')+'. business_priority обязателен: critical — без факта нельзя понять потребность, препятствие, результат или следующий шаг; important — полезно для продолжения работы; secondary — дополнительная деталь, не обязательная для Summary. Приоритет извлечения: (1) цель, потребность, требования, предпочтения, ограничения и возражения клиента; (2) финансы и сроки; (3) незакрытые вопросы и причины паузы/отказа; (4) сведения агента только о юридическом риске, обременении, просмотре, изменении цены, документах или существенном состоянии объекта, если они влияют на решение или следующий шаг. Поля category, name, normalized_value, verification_status, question_status, answer, answer_speaker, answer_evidence и extraction_meta запрещены. Не извлекай приветствия, имя, факт завершения разговора, служебные реплики, повтор адреса, этаж, номер/код объекта и характеристики карточки без самостоятельной рабочей ценности. Маршрут клиента до объекта — secondary client_context, а не client_constraint. Деньги на счёте — client_finance со значением "наличные / депозит". Evidence может содержать несущественные STT-различия; не удаляй понятный факт, подтверждённый полной репликой.';
 }
 
 function moduleGenericCheck(kind, raw){
@@ -4701,15 +4761,30 @@ function conversationStoreRecoveredRequirements(facts,existing){
   const recovered=[];
   const add=(fact,type,value,normalizedValue)=>{
     if(present.has(fact.id)||existing.concat(recovered).some(item=>item.type===type&&conversationStoreCanonicalJson(item.normalized_value??item.value)===conversationStoreCanonicalJson(normalizedValue??value))) return;
-    recovered.push({id:'recovered_'+fact.id,type,value,...(normalizedValue===undefined?{}:{normalized_value:normalizedValue}),evidence:fact.evidence,source_fact_ids:[fact.id],confidence:fact.confidence,verification_status:'corrected',verification_reason:'Однозначно восстановлено из verified fact.',source:'need_check',recovery_code:'STRICT_FACT_TO_REQUIREMENT'});
+    const normalized=normalizeNeedRequirementFields({
+      id:'recovered_'+fact.id,type,category:needRequirementCategory(type),value,
+      ...(normalizedValue===undefined?{}:{normalized_value:normalizedValue}),
+      priority:fact.type==='client_preference'?'preferred':'required',
+      reason:'Восстановлено из прямого подтверждённого факта клиента.',
+      evidence:fact.evidence,source_fact_ids:[fact.id],confidence:fact.confidence,
+      verification_status:'extracted',source:'facts',recovery_code:'STRICT_FACT_TO_REQUIREMENT'
+    });
+    recovered.push(normalized);
   };
   facts.forEach(fact=>{
-    const text=normalizedSemanticText([fact.name,fact.value,fact.evidence].join(' '));
-    if(fact.category==='client_constraint'&&/(?:сот|площад)/.test(text)&&/(?:миним|не меньше|от\\s+\\d)/.test(text)&&Number.isFinite(Number(fact.normalized_value))) add(fact,'minimum_land_area',Number(fact.normalized_value),Number(fact.normalized_value));
-    if(fact.category==='client_finance'&&explicitClientMoneyContext(fact)&&Number.isFinite(Number(fact.normalized_value))) add(fact,'price_limit',Number(fact.normalized_value),Number(fact.normalized_value));
+    if(!fact||fact.speaker!=='Клиент'||!String(fact.id||'').trim()||!String(fact.evidence||'').trim()) return;
+    const factCategory=String(fact.type||fact.category||''),text=normalizedSemanticText([fact.name,fact.value,fact.evidence].join(' '));
+    if(!['client_need','client_requirement','client_constraint','client_preference','client_objection','open_question'].includes(factCategory)) return;
+    if(/(?:как (?:добраться|доехать)|пешком|на метро|от метро|до метро|маршрут)/.test(text)) return;
+    if(/(?:этаж|площадь|адрес|цена|стоимость|комнат|санузел|балкон|ремонт)/.test(text)&&!/(?:нужн|важн|обязател|не подход|не рассматрива|хочу|предпочита)/.test(text)) return;
+    if(factCategory==='open_question'&&!['unanswered','partially_answered'].includes(String(fact.question_status||'unanswered'))) return;
+    if(/(?:без лифта|наличи[ея] лифта|лифт обязател|нужен лифт)/.test(text)) add(fact,'other_requirement','Наличие лифта','Наличие лифта');
+    else if(/(?:сот|площад)/.test(text)&&/(?:миним|не меньше|больше|от\s+\d)/.test(text)&&Number.isFinite(Number(fact.normalized_value))) add(fact,/сот/.test(text)?'minimum_land_area':'minimum_area',Number(fact.normalized_value),Number(fact.normalized_value));
+    else if(factCategory==='client_constraint'||factCategory==='client_requirement'||factCategory==='client_preference'||factCategory==='client_need') add(fact,'other_requirement',fact.normalized_value??fact.value,fact.normalized_value??fact.value);
+    if(factCategory==='client_finance'&&explicitClientMoneyContext(fact)&&Number.isFinite(Number(fact.normalized_value))) add(fact,'price_limit',Number(fact.normalized_value),Number(fact.normalized_value));
     const locations=Array.isArray(fact.normalized_value)?fact.normalized_value:Array.isArray(fact.value)?fact.value:[fact.normalized_value??fact.value].filter(Boolean);
-    if(fact.category==='search_location'&&explicitSearchLocationContext(fact)&&locations.length) add(fact,'search_location',locations.length===1?locations[0]:locations,locations.length===1?locations[0]:locations);
-    if(fact.category==='search_criteria'&&/ижс/.test(text)) add(fact,'property_type','ИЖС','ИЖС');
+    if(factCategory==='search_location'&&explicitSearchLocationContext(fact)&&locations.length) add(fact,'search_location',locations.length===1?locations[0]:locations,locations.length===1?locations[0]:locations);
+    if(factCategory==='search_criteria'&&/ижс/.test(text)) add(fact,'property_type','ИЖС','ИЖС');
   });
   return recovered;
 }
@@ -5078,11 +5153,15 @@ function buildConversationStoreV1(ctx){
   if(funding_source==='не определено'&&/(?:деньг[иа][^.!?\n]{0,40}(?:на|лежат на)\s+сч[её]т|на\s+сч[её]т[еу][^.!?\n]{0,30}деньг)/i.test(transcript)) funding_source='наличные / депозит';
   const rawTerm=unwrap(rawAttributes.purchase_term);
   const purchase_term=NEED_TERM_VALUES.has(rawTerm)?rawTerm:'не определено';
+  const facts=dedupe(factsSource&&factsSource.facts).map(item=>item&&item.type==='open_question'?{...item,...conversationStoreQuestionDetails(item,ctx)}:item);
+  const extractedRequirements=dedupe(needsSource&&needsSource.requirements).map(normalizeNeedRequirementFields);
+  const recoveredRequirements=extractedRequirements.length?[]:conversationStoreRecoveredRequirements(facts,extractedRequirements);
+  const requirements=dedupe([...extractedRequirements,...recoveredRequirements]);
   const conversation={
-    facts:dedupe(factsSource&&factsSource.facts).map(item=>item&&item.type==='open_question'?{...item,...conversationStoreQuestionDetails(item,ctx)}:item),
+    facts,
     quotes:dedupe(factsSource&&factsSource.quotes),
     attributes:{interest:[...new Set(interest)],funding_source,purchase_term},
-    requirements:dedupe(needsSource&&needsSource.requirements),
+    requirements,
     call_result:String(outcomeSource&&outcomeSource.call_result||''),
     agreements:dedupe(outcomeSource&&outcomeSource.agreements),
     primary_next_step:scrub(outcomeSource&&outcomeSource.primary_next_step&&typeof outcomeSource.primary_next_step==='object'?outcomeSource.primary_next_step:emptyNext),
@@ -5095,13 +5174,21 @@ function buildConversationStoreV1(ctx){
     partial:source_errors.length>0,
     source_errors
   };
+  const needs_recovery={
+    used:recoveredRequirements.length>0,
+    recovered_requirements:recoveredRequirements.length,
+    source:'facts'
+  };
   const provenance={run_id,transcript_hash,pipeline_configuration_hash,source_stage_ids:{}};
   const business_context=conversationStoreBusinessContext(conversation);
   const quality={overall_confidence:null,decision:source_errors.length?'READY_WITH_WARNINGS':'READY'};
-  const hashPayload={conversation,business_context,quality,provenance,schema_version:'conversation_store_v2'};
+  const hashPayload={conversation,business_context,needs_recovery,quality,provenance,schema_version:'conversation_store_v2'};
   const conversation_store_hash=stableHash(conversationStoreCanonicalJson(hashPayload));
   return conversationStoreDeepFreeze({
-    conversation,business_context,quality,store_issues:source_errors.map(source=>({code:'EXTRACTOR_TECHNICAL_ERROR',stage:source,severity:'warning',blocks_publish:false,message:'Store собран без результата '+source+'.'})),
+    conversation,business_context,needs_recovery,quality,store_issues:[
+      ...source_errors.map(source=>({code:'EXTRACTOR_TECHNICAL_ERROR',stage:source,severity:'warning',blocks_publish:false,message:'Store собран без результата '+source+'.'})),
+      ...recoveredRequirements.map(item=>({code:'NEED_RECOVERED_FROM_FACT',stage:'conversation_store',entity_id:item.id,severity:'info',blocks_publish:false,message:'Потребность восстановлена из прямого client-fact.'}))
+    ],
     provenance,
     store_meta:{schema_version:'conversation_store_v2',created_at:new Date().toISOString(),status:source_errors.length?'READY_WITH_WARNINGS':'READY',conversation_store_hash,partial:source_errors.length>0,source_errors}
   });
@@ -5413,7 +5500,7 @@ function crmExpectedQualityGateHash(ctx,gate){
   const criterionValues=Object.values(gate.criteria||{}),storeHash=summaryQualityGateStoreHash(ctx);
   return stableHash({criteria:criterionValues.map(item=>[item.score,item.status,item.raw_score,item.source_status]),hardStops:gate.hard_stops,summary:stableHash(ctx.summary),storeHash,version:gate.metadata.quality_gate_version,thresholds:gate.thresholds});
 }
-function crmComputedStoreHash(store){return stableHash(conversationStoreCanonicalJson({conversation:store.conversation,...(store.business_context?{business_context:store.business_context}:{}),quality:store.quality,store_issues:toList(store.store_issues),provenance:store.provenance,schema_version:store.store_meta.schema_version}));}
+function crmComputedStoreHash(store){return stableHash(conversationStoreCanonicalJson({conversation:store.conversation,...(store.business_context?{business_context:store.business_context}:{}),...(store.needs_recovery?{needs_recovery:store.needs_recovery}:{}),quality:store.quality,...(store.store_meta.schema_version==='conversation_store_v1'?{store_issues:toList(store.store_issues)}:{}),provenance:store.provenance,schema_version:store.store_meta.schema_version}));}
 function crmValidateInputs(ctx){
   const gate=ctx&&ctx.summary_quality_gate;
   if(!gate) return {error:crmIssue('MISSING_QUALITY_GATE','summary_quality_gate','Summary Quality Gate отсутствует.')};
@@ -5514,21 +5601,36 @@ function crmReviewItem(ctx,gate,recordId,requestId,summaryHash,idempotencyKey){
   return {crm_record_id:recordId,run_id:String(ctx.__run_id),summary:crmStructuredSummary(ctx.summary),attributes:crmAttributeValues(ctx),summary_quality_score:Number(gate.summary_quality_score)||0,hard_stops:crmClone(gate.hard_stops),warnings:crmClone(gate.warnings),checker_results:crmClone(gate.criteria),created_at:audit.saved_at,audit};
 }
 function crmCacheResult(idempotencyKey,runKey,output){const clone=crmClone(output);CRM_IDEMPOTENCY_RESULTS.set(idempotencyKey,clone);if(runKey)CRM_IDEMPOTENCY_RESULTS.set(runKey,clone);}
+function buildSummaryDiagnostics(ctx){
+  const summary=ctx&&ctx.summary&&typeof ctx.summary==='object'?ctx.summary:{conversation_result:'',key_facts:[],quotes:[],next_step:''};
+  const plan=moduleSummaryPreparedContext(moduleSummaryStoreView(ctx&&ctx.conversation_store));
+  const visible=moduleSummaryNorm([summary.conversation_result,...toList(summary.key_facts).flatMap(item=>[item&&item.label,item&&item.value]),summary.next_step].join(' '));
+  const present=value=>{const tokens=moduleSummaryTokens(value);return Boolean(tokens.length&&tokens.filter(token=>visible.includes(token)).length/tokens.length>=.5);};
+  const deterministic=analyzeSummaryDiagnostics(ctx,summary,{deduplication_applied:Boolean(ctx&&ctx.__summary_diagnostics_after),removed_items:ctx&&ctx.__summary_diagnostics_after&&ctx.__summary_diagnostics_after.removed_items});
+  return {
+    primary_need_present:present(plan.primary_need),
+    critical_requirement_count:toList(plan.top_requirements).filter(item=>item&&item.priority==='required').length,
+    main_obstacle_present:plan.main_obstacle?present(plan.main_obstacle):null,
+    call_result_present:plan.call_result?present(plan.call_result):null,
+    ...deterministic
+  };
+}
 function moduleCrmV1(ctx){
   if(IS_TRANSCRIPTION_SUMMARY_MODULE&&ctx&&ctx.summary){
     const gate=ctx.summary_quality_gate||{},score=typeof gate.summary_quality_score==='number'?gate.summary_quality_score:null,status=String(gate.quality_status||'NOT_EVALUATED');
     const extractorErrors=toList(gate.extractor_errors||ctx&&ctx.conversation_store&&ctx.conversation_store.conversation&&ctx.conversation_store.conversation.source_errors);
-    const partial=String(gate.evaluation_status||'technical_error')!=='complete'||Boolean(gate.partial_evaluation)||extractorErrors.length>0;
+    const gateDecision=String(gate.decision||'TECHNICAL_ERROR'),manualReview=gateDecision==='REVIEW_REQUIRED'||gate.crm_status==='MANUAL_REVIEW',technical=gateDecision==='TECHNICAL_ERROR'||extractorErrors.length>0;
+    const partial=String(gate.evaluation_status||'technical_error')!=='complete'||Boolean(gate.partial_evaluation)||extractorErrors.length>0||Boolean(gate.fallback_used);
     const attributes=crmAttributeValues(ctx);
     const errors=toList(gate.technical_errors).map(item=>({
       stage:String(item&&item.stage||'summary_quality_gate'),
       type:'technical_error'
     }));
     return {
-      status:extractorErrors.length?'REVIEW_REQUIRED':'SAVED',
-      decision:extractorErrors.length?'REVIEW_REQUIRED':partial?'SAVED_WITH_WARNING':'SAVED',
+      status:technical?'TECHNICAL_ERROR':manualReview?'MANUAL_REVIEW':gateDecision==='SAVE_WITH_WARNING'?'SAVED_WITH_WARNING':'SAVED',
+      decision:technical?'TECHNICAL_ERROR':manualReview?'REVIEW_REQUIRED':gateDecision,
       crm_record_id:crmRecordId(ctx),
-      summary_saved:true,
+      summary_saved:!technical&&!manualReview,
       attributes_included_in_payload:true,
       attributes_saved_to_crm_fields:false,
       attributes_saved:false,
@@ -5542,13 +5644,17 @@ function moduleCrmV1(ctx){
           funding_source:attributes.funding_source,
           purchase_term:attributes.purchase_term
         },
-        quality:{score,status}
+        quality:{score,status},
+        summary_diagnostics:crmClone(ctx.summary_diagnostics||buildSummaryDiagnostics(ctx)),
+        diagnostics_before_deduplication:crmClone(ctx.__summary_diagnostics_before||{}),
+        removed_duplicates:crmClone(ctx.__summary_diagnostics_after&&ctx.__summary_diagnostics_after.removed_items||[]),
+        fallback_used:Boolean(gate.fallback_used),fallback_source:gate.fallback_source||null
       },
-      summary_write:{attempted:!extractorErrors.length,saved:!extractorErrors.length,mode:extractorErrors.length?'REVIEW_REQUIRED':'ALWAYS_SAVE',warning_flag:partial,summary_version:CRM_SUMMARY_VERSION},
+      summary_write:{attempted:!technical&&!manualReview,saved:!technical&&!manualReview,mode:technical?'TECHNICAL_ERROR':manualReview?'MANUAL_REVIEW':gateDecision,warning_flag:partial||gateDecision==='SAVE_WITH_WARNING',summary_version:CRM_SUMMARY_VERSION},
       attribute_writes:crmEmptyAttributeWrites(ctx,{interest:'DO_NOT_SAVE',funding_source:'DO_NOT_SAVE',purchase_term:'DO_NOT_SAVE'}),
-      quality:{summary_quality_score:score,summary_quality_status:status,quality_gate_decision:'QUALITY_RECORDED',quality_issues:toList(gate.issues),quality_evaluation_partial:partial,warning_count:toList(gate.issues).length,hard_stop_count:0},
+      quality:{summary_quality_score:score,summary_quality_status:status,quality_gate_decision:gateDecision,quality_issues:toList(gate.issues),quality_evaluation_partial:partial,warning_count:toList(gate.issues).length,hard_stop_count:manualReview?1:0,raw_scores:gate.raw_scores||{},effective_scores:gate.effective_scores||{},score_caps:gate.score_caps||{}},
       audit:{idempotency_key:stableHash({run_id:ctx.__run_id,summary:ctx.summary}),crm_request_id:'crmreq_'+stableHash(ctx.__run_id).slice(0,16),saved_at:crmNow(ctx)},
-      errors,warnings:[]
+      errors,warnings:manualReview?[{code:'MANUAL_REVIEW_REQUIRED',field:'summary_quality_gate',message:(gate.decision_reasons||[]).join('; ')||'Quality Gate требует ручной проверки.'}]:[]
     };
   }
   const checked=crmValidateInputs(ctx),gate=checked.gate||ctx&&ctx.summary_quality_gate||null;
@@ -6238,8 +6344,20 @@ const CODE_FUNCS = {
         presentation_check:'format'
       };
       const available=keys.filter(key=>ctx[key]&&typeof ctx[key].score==='number'&&!['technical_error','error','unavailable'].includes(String(ctx[key].status||'')));
-      const scores=Object.fromEntries(keys.map(key=>[key,available.includes(key)?Number(ctx[key].score):null]));
-      const summary_quality_score=available.length?+(available.reduce((sum,key)=>sum+scores[key],0)/available.length).toFixed(1):null;
+      const diagnostics=ctx.summary_diagnostics||buildSummaryDiagnostics(ctx),fallbackUsed=Boolean(ctx.__summary_fallback_used),fallbackSource=ctx.__summary_fallback_source||null,fallbackReason=ctx.__summary_fallback_reason||null;
+      const rawScores=Object.fromEntries(keys.map(key=>[key,available.includes(key)?Number(ctx[key].raw_score??ctx[key].score):null]));
+      const capReasons=Object.fromEntries(keys.map(key=>[key,[]]));
+      const effectiveScores={...rawScores};
+      const cap=(key,value,reason)=>{if(effectiveScores[key]!=null&&effectiveScores[key]>value){effectiveScores[key]=value;capReasons[key].push(reason);}};
+      cap('presentation_check',diagnostics.semantic_repetition_count>=4?50:diagnostics.semantic_repetition_count>=2?75:diagnostics.semantic_repetition_count>=1?85:100,'semantic_repetition_count='+diagnostics.semantic_repetition_count);
+      cap('presentation_check',diagnostics.crm_duplication_count>=2?75:diagnostics.crm_duplication_count>=1?85:100,'crm_duplication_count='+diagnostics.crm_duplication_count);
+      if(diagnostics.address_duplication_count>=1)cap('presentation_check',75,'address_duplication_count='+diagnostics.address_duplication_count);
+      if(diagnostics.next_step_duplicate_count>=1)cap('presentation_check',75,'next_step_duplicate_count='+diagnostics.next_step_duplicate_count);
+      if(diagnostics.unfinished_quote_count>=1)cap('presentation_check',75,'unfinished_quote_count='+diagnostics.unfinished_quote_count);
+      if(diagnostics.unclear_phrase_count>=1)cap('presentation_check',75,'unclear_phrase_count='+diagnostics.unclear_phrase_count);
+      const primary=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation&&ctx.conversation_store.conversation.primary_next_step||{};
+      if(String(primary.action||'').trim()&&String(primary.status||'')!=='not_defined'&&!diagnostics.next_step_present)cap('action_check',50,'next_step_present=false_with_confirmed_action');
+      const summary_quality_score=available.length===keys.length?+(keys.reduce((sum,key)=>sum+effectiveScores[key]*.20,0)).toFixed(1):null;
       const technical_errors=keys.filter(key=>!available.includes(key)).map(stage=>({status:'technical_error',score:null,evaluated:false,stage}));
       const rawIssues=available.flatMap(key=>[
         ...toList(ctx[key].issues),
@@ -6253,10 +6371,18 @@ const CODE_FUNCS = {
       const pipelineConversation=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation||{};
       const pipeline_context_complete=extractor_errors.length===0&&pipelineConversation.partial!==true;
       const evaluation_status=available.length===0?'technical_error':available.length<keys.length?'partial':pipeline_context_complete?'complete':'complete_on_partial_context';
+      const criticalFormat=diagnostics.semantic_repetition_count>=2||diagnostics.address_duplication_count>=1||diagnostics.next_step_duplicate_count>=1||diagnostics.unfinished_quote_count>=1||diagnostics.unclear_phrase_count>=1;
+      let decision='TECHNICAL_ERROR',pipeline_status='TECHNICAL_ERROR',crm_status='SKIPPED';
+      if(!technical_errors.length){
+        const anyBelow80=keys.some(key=>effectiveScores[key]<80),allAtLeast90=keys.every(key=>effectiveScores[key]>=90),storePartial=pipelineConversation.partial===true||!pipeline_context_complete;
+        if(fallbackUsed||anyBelow80||criticalFormat||storePartial||critical_issues.length){decision='REVIEW_REQUIRED';pipeline_status='REVIEW_REQUIRED';crm_status='MANUAL_REVIEW';}
+        else if(allAtLeast90&&summary_quality_score>=90&&!critical_issues.length){decision='AUTO_SAVE';pipeline_status='SUCCESS';crm_status='SAVED';}
+        else{decision='SAVE_WITH_WARNING';pipeline_status='SUCCESS_WITH_WARNINGS';crm_status='SAVED_WITH_WARNING';}
+      }
       const criteria=Object.fromEntries(keys.map(key=>[criterionNames[key],{
-        score:scores[key],
-        status:scores[key]==null?'technical_error':String(ctx[key].status||'evaluated'),
-        evaluated:scores[key]!=null
+        score:effectiveScores[key],raw_judge_score:rawScores[key],effective_judge_score:effectiveScores[key],score_cap_reason:capReasons[key],
+        status:effectiveScores[key]==null?'technical_error':effectiveScores[key]>=90?'pass':effectiveScores[key]>=50?'warning':'fail',
+        evaluated:effectiveScores[key]!=null
       }]));
       const output={
         summary_quality_score,
@@ -6269,16 +6395,22 @@ const CODE_FUNCS = {
         extractor_errors,
         criteria,
         score:summary_quality_score,
-        decision:'QUALITY_RECORDED',
-        blocking:false,
+        decision,quality_decision:decision,pipeline_status,crm_status,
+        blocking:['REVIEW_REQUIRED','TECHNICAL_ERROR'].includes(decision),
         evaluated_checks:available.length,
         failed_checks:available.filter(key=>String(ctx[key].status)==='fail').length,
         technical_errors,
         partial_evaluation:available.length<keys.length,
         issues:rawIssues,
-        scores
+        scores:effectiveScores,raw_scores:rawScores,effective_scores:effectiveScores,score_caps:capReasons,
+        diagnostics_before_deduplication:ctx.__summary_diagnostics_before||null,
+        removed_duplicates:toList(ctx.__summary_diagnostics_after&&ctx.__summary_diagnostics_after.removed_items),
+        diagnostics_after_deduplication:diagnostics,
+        fallback_used:fallbackUsed,fallback_source:fallbackSource,fallback_reason:fallbackReason,
+        conversation_store_partial:pipelineConversation.partial===true,
+        decision_reasons:[...technical_errors.map(item=>item.stage),...(fallbackUsed?['fallback_used='+String(fallbackSource||'unknown')]:[]),...Object.entries(capReasons).flatMap(([key,reasons])=>reasons.map(reason=>key+': '+reason)),...(criticalFormat?['critical_format_diagnostics']:[])]
       };
-      return {output,metrics:[['Summary Quality Score',summary_quality_score==null?'—':summary_quality_score],['Decision','QUALITY_RECORDED'],['Context complete',pipeline_context_complete?'да':'нет'],['Evaluated',available.length+'/5'],['Technical errors',technical_errors.length]],status:evaluation_status==='complete'&&quality_status==='PASS'?'ok':quality_status==='FAIL'?'bad':'warn',confidenceBreakdown:available.map(key=>({k:key,label:criterionNames[key],val:scores[key]/100,w:.2})),checks:keys.map(key=>({label:criterionNames[key]+': '+(scores[key]==null?'technical_error':scores[key]),pass:scores[key]!=null&&scores[key]>=90,warn:scores[key]!=null&&scores[key]>=75&&scores[key]<90})),isSummaryQualityGate:true};
+      return {output,metrics:[['Summary Quality Score',summary_quality_score==null?'—':summary_quality_score],['Decision',decision],['Pipeline status',pipeline_status],['CRM status',crm_status],['Fallback',fallbackUsed?'да':'нет'],['Context complete',pipeline_context_complete?'да':'нет'],['Evaluated',available.length+'/5'],['Technical errors',technical_errors.length]],status:decision==='AUTO_SAVE'?'ok':decision==='SAVE_WITH_WARNING'?'warn':decision==='REVIEW_REQUIRED'?'attn':'bad',confidenceBreakdown:available.map(key=>({k:key,label:criterionNames[key],val:effectiveScores[key]/100,w:.2})),checks:keys.map(key=>({label:criterionNames[key]+': raw '+(rawScores[key]==null?'technical_error':rawScores[key])+' → effective '+(effectiveScores[key]==null?'technical_error':effectiveScores[key]),pass:effectiveScores[key]!=null&&effectiveScores[key]>=90,warn:effectiveScores[key]!=null&&effectiveScores[key]>=75&&effectiveScores[key]<90})),isSummaryQualityGate:true};
     }
     if(shouldUseSummaryQualityGateV1(ctx)){
       const output=moduleSummaryQualityGateV1(ctx),criterionValues=Object.values(output.criteria);
@@ -7235,7 +7367,7 @@ function moduleSummaryStoreView(store){
   const source=store&&typeof store==='object'?store:{};
   const conversation=source.conversation&&typeof source.conversation==='object'?source.conversation:{};
   const facts=Array.isArray(conversation.facts)?conversation.facts:[];
-  const allowedFacts=facts.filter(fact=>!moduleSummaryIsCardMetadataFact(fact));
+  const allowedFacts=facts.filter(fact=>!moduleSummaryIsCardMetadataFact(fact)&&['critical','important'].includes(factBusinessPriority(fact)));
   const allowedFactIds=new Set(allowedFacts.map(fact=>fact&&fact.id).filter(Boolean));
   const quotePriority={client_offer:110,client_finance:100,budget:100,client_constraint:95,search_criteria:90,client_objection:85,search_location:80,communication_result:70,agent_commitment:65,communication_channel:60,client_question:60,client_intent:10};
   const factById=new Map(allowedFacts.map(fact=>[fact&&fact.id,fact]));
@@ -7255,7 +7387,6 @@ function moduleSummaryStoreView(store){
     return {quote,score:Math.max(semanticScore,0,...semanticLinked.map(fact=>quotePriority[fact.category]??40))};
   }).filter(item=>item.score>=60).sort((left,right)=>right.score-left.score).slice(0,4).map(item=>item.quote);
   return {
-    business_context:source.business_context&&typeof source.business_context==='object'?source.business_context:conversationStoreBusinessContext(conversation),
     conversation:{
       facts:allowedFacts,
       quotes,
@@ -7270,23 +7401,24 @@ function moduleSummaryStoreView(store){
   };
 }
 function moduleSummaryPreparedContext(safeStore){
-  const business=safeStore&&safeStore.business_context||{},conversation=safeStore&&safeStore.conversation||{};
-  const openQuestions=toList(business.important_questions).filter(item=>item&&['unanswered','partially_answered'].includes(item.status));
-  const objections=businessContextSemanticDedupe([...(business.objections||[]),...(business.constraints||[])]);
+  const conversation=safeStore&&safeStore.conversation||{},facts=toList(conversation.facts),requirements=toList(conversation.requirements);
+  const factValue=fact=>String(fact&&(fact.normalized_value??fact.value??fact.evidence)||'').trim();
+  const rankedRequirements=[...requirements].filter(item=>item&&String(item.evidence||'').trim()).sort((left,right)=>(left.priority==='required'?0:1)-(right.priority==='required'?0:1));
+  const goalFact=facts.find(item=>item&&['client_goal','client_need'].includes(item.type)&&factBusinessPriority(item)==='critical')||facts.find(item=>item&&['client_goal','client_need'].includes(item.type));
+  const needFact=facts.find(item=>item&&['client_need','client_requirement','client_preference','client_constraint'].includes(item.type));
+  const obstacle=facts.find(item=>item&&['client_objection','client_constraint'].includes(item.type)&&!/(?:как (?:добраться|доехать)|пешком|на метро|от метро|до метро|маршрут)/.test(moduleSummaryNorm([item.value,item.evidence].join(' '))));
+  const openQuestions=facts.filter(item=>item&&item.type==='open_question'&&['unanswered','partially_answered'].includes(String(item.question_status||'unanswered')));
+  const result=String(conversation.call_result||'').trim(),primary=conversation.primary_next_step&&typeof conversation.primary_next_step==='object'?conversation.primary_next_step:{};
+  const viewingNeed=/(?:просмотр|показ|посмотреть)/.test(moduleSummaryNorm(result+' '+String(primary.action||'')))?'Посмотреть конкретный объект':'';
   return {
-    client_identity:String(business.client_identity||''),
-    client_goal:[business.client_goal,business.purchase_purpose].filter(Boolean).join('; '),
-    client_offer:String(business.client_offer||''),
-    funding_source:String(business.financing||''),
-    purchase_term:String(business.purchase_term||''),
-    critical_requirements:businessContextSemanticDedupe(business.critical_requirements)
-      .filter(value=>!/(?:мебел|техник|барн|холодильник|диван|шкаф)/.test(normalizedSemanticText(value)))
-      .slice(0,3),
-    main_objection:String(objections[0]||''),
-    important_open_questions:openQuestions,
-    call_result:String(business.call_result||''),
-    primary_next_step:conversation.primary_next_step&&conversation.primary_next_step.status!=='not_defined'
-      ? {action:String(conversation.primary_next_step.action||''),owner:String(conversation.primary_next_step.owner||''),deadline:String(conversation.primary_next_step.deadline||''),channel:String(conversation.primary_next_step.channel||''),status:String(conversation.primary_next_step.status||''),agreement_ids:toList(conversation.primary_next_step.agreement_ids)}
+    main_goal:factValue(goalFact),
+    primary_need:String(rankedRequirements[0]&&(rankedRequirements[0].normalized_value??rankedRequirements[0].value)||factValue(needFact)||viewingNeed),
+    top_requirements:rankedRequirements.slice(0,3).map(item=>({value:item.normalized_value??item.value,priority:item.priority,reason:item.reason,evidence:item.evidence})),
+    main_obstacle:factValue(obstacle),
+    open_questions:openQuestions.map(item=>({question:factValue(item),status:item.question_status||'unanswered',evidence:item.evidence})),
+    call_result:result,
+    next_action:primary&&primary.status!=='not_defined'
+      ? {action:String(primary.action||''),owner:String(primary.owner||''),deadline:String(primary.deadline||''),channel:String(primary.channel||''),status:String(primary.status||''),agreement_ids:toList(primary.agreement_ids)}
       : {},
     best_quote_candidates:toList(conversation.quotes).map(item=>String(item&&typeof item==='object'?item.text:item||'').trim()).filter(Boolean).slice(0,3)
   };
@@ -7299,8 +7431,8 @@ function moduleSummaryPrompt(stage,ctx){
   const prompt=(stage.prompt||MODULE_SUMMARY_PROMPT)
     +(retryFeedback?'\n\nПРЕТЕНЗИИ ПРОВЕРЩИКОВ К ПРЕДЫДУЩЕЙ ВЕРСИИ SUMMARY (устрани каждую; новых фактов вне Conversation Store не добавляй):\n'+retryFeedback:'')
     +'\n\nCONVERSATION STORE (структурированный источник):\n'+JSON.stringify(safeStore)
-    +'\n\nFULL TRANSCRIPT (равноправный источник контекста и смысла):\n'+transcript
-    +'\n\nPREPARED SUMMARY CONTEXT:\n'+JSON.stringify(summaryContext);
+    +'\n\nFULL TRANSCRIPT (только вспомогательный контекст и дословные цитаты):\n'+transcript
+    +'\n\nINTERNAL SUMMARY PLAN (используй внутренне, не выводи отдельным блоком):\n'+JSON.stringify(summaryContext);
   return {prompt,transcriptPresent:Boolean(transcript),transcriptInjected:Boolean(transcript),resolvedPromptContainsTranscript:Boolean(transcript&&prompt.includes(transcript)),transcript,safeStore,summaryContext,cardMetadataOmitted:factsOmittedCount(ctx&&ctx.conversation_store,safeStore),verifiedQuoteCount:summaryContext.best_quote_candidates.length};
 }
 function factsOmittedCount(source,safeStore){
@@ -7314,6 +7446,127 @@ function moduleSummaryNorm(value){
 function moduleSummaryTokens(value){
   const stop=new Set(['для','или','это','как','что','при','без','есть','был','была','будет','клиент','агент','итог','разговор','следующий','шаг']);
   return moduleSummaryNorm(value).split(' ').filter(token=>token.length>2&&!stop.has(token));
+}
+function summarySemanticConcepts(value){
+  const text=moduleSummaryNorm(value),concepts=new Set(),tokens=moduleSummaryTokens(text);
+  if(/(?:для себя|собственн[а-яё]* проживан)/.test(text)) concepts.add('goal:self_residence');
+  if(/(?:наличн|депозит|деньг\w* на счет)/.test(text)) concepts.add('funding:cash');
+  if(/(?:ипотек\w* одобрен)/.test(text)) concepts.add('funding:mortgage_approved');
+  else if(/ипотек/.test(text)) concepts.add('funding:mortgage');
+  if(/(?:продаж\w* сво\w* квартир|сначала продать)/.test(text)) concepts.add('funding:sale');
+  if(/(?:просмотр|показ|встреч)/.test(text)) concepts.add('action:viewing');
+  if(/(?:перезвон|позвон|контрольн\w* звон)/.test(text)) concepts.add('action:call');
+  if(/(?:отправ|присл)/.test(text)) concepts.add('action:send');
+  if(/(?:завтра|следующ\w* день)/.test(text)) concepts.add('date:tomorrow');
+  const times=[...text.matchAll(/(?:^|\s)([0-2]?\d)[ :.](\d{2})(?:\s|$)/g)];
+  times.forEach(match=>concepts.add('time:'+String(match[1]).padStart(2,'0')+match[2]));
+  if(tokens.length>=3) concepts.add('tokens:'+tokens.slice().sort().join('|'));
+  return concepts;
+}
+function summarySemanticSimilarity(left,right){
+  const a=summarySemanticConcepts(left),b=summarySemanticConcepts(right),business=[...a].filter(item=>!item.startsWith('tokens:'));
+  const shared=business.filter(item=>b.has(item));
+  if(shared.some(item=>item.startsWith('goal:')||item.startsWith('funding:'))) return .94;
+  const actionShared=shared.some(item=>item.startsWith('action:')),temporalShared=shared.some(item=>item.startsWith('date:')||item.startsWith('time:'));
+  if(actionShared&&temporalShared) return .95;
+  const leftTokens=moduleSummaryTokens(left),rightTokens=new Set(moduleSummaryTokens(right));
+  const overlap=leftTokens.length?leftTokens.filter(token=>rightTokens.has(token)).length/leftTokens.length:0;
+  if(actionShared&&overlap>=.35) return Math.max(.88,overlap);
+  return overlap;
+}
+function summaryAddressMatches(value){
+  const text=String(value||''),matches=[];
+  const patterns=[/(?:ул(?:ица)?\.?\s*)?[А-ЯЁA-Z][а-яёa-z-]+(?:а|ой|ий|ый)?\s*,?\s*\d+[а-яёa-z]?(?:\s*,?\s*(?:корп(?:ус)?|к)\.?\s*\d+)?/giu,/\b(?:проспект|проезд|переулок|шоссе|наб\.?|улица|ул\.?)\s+[А-ЯЁA-ZА-Яа-яё-]+\s*,?\s*\d+[а-яёa-z]?(?:\s*,?\s*(?:корп(?:ус)?|к)\.?\s*\d+)?/giu];
+  patterns.forEach(pattern=>{for(const match of text.matchAll(pattern)){const found=String(match[0]||'').trim();if(/\d/.test(found)&&found.length>=8)matches.push(found);}});
+  return [...new Set(matches)];
+}
+function summaryOrganizationalNoise(value){return /(?:трет[а-яё]*\s+(?:по сч[её]ту|в очереди)|доед[а-яё]* на метро|маршрут|друг[а-яё]* замк[а-яё]* двер|закрыл[а-яё]* на друг[а-яё]* замок|ключ(?:и|а)?\s+(?:у меня|от двер)|подтверждени[а-яё]* номер[а-яё]* телефон|с которого вы сейчас набираете)/i.test(String(value||''));}
+function summaryUnclearPhrase(value){return /(?:друг[а-яё]* замков[а-яё]* двер|друг[а-яё]* двер[а-яё]* замк|(?:из-за|потому что)\s+(?:друг[а-яё]* )?замк)|(?:^|[.!?]\s*)[^.!?]{0,25}(?:который|которая|которые)\s*[.!?]*$/i.test(String(value||''));}
+function summaryUselessQuote(value){
+  const text=moduleSummaryQuoteText(value).trim(),tokens=moduleSummaryTokens(text);
+  return !text||tokens.length<3||/^(?:да|нет|хорошо|договорились|понятно|себе рассматриваю)[.!?]*$/i.test(text)||summaryAddressMatches(text).length>0||/(?:\+?7|8)[\s(.-]*\d{3}/.test(text)||/[—–-]\s*$|…\s*$|\.\.\.\s*$/.test(text)||summaryUnclearPhrase(text);
+}
+function summaryBlockEntries(summary){
+  return [
+    {block:'conversation_result',text:String(summary&&summary.conversation_result||'')},
+    ...toList(summary&&summary.key_facts).map((item,index)=>({block:'key_facts['+index+']',text:[item&&item.label,item&&item.value].filter(Boolean).join(': ')})),
+    ...toList(summary&&summary.quotes).map((item,index)=>({block:'quotes['+index+']',text:moduleSummaryQuoteText(item)})),
+    {block:'next_step',text:String(summary&&summary.next_step||'')}
+  ].filter(item=>item.text.trim());
+}
+function analyzeSummaryDiagnostics(ctx,summary,options={}){
+  const entries=summaryBlockEntries(summary),semantic_repetitions=[],crm_duplications=[],attributes=customerNeedsValues(ctx||{}),removedItems=toList(options.removed_items);
+  for(let left=0;left<entries.length;left++) for(let right=left+1;right<entries.length;right++){
+    const source=entries[left],target=entries[right],similarity=summarySemanticSimilarity(source.text,target.text);
+    if(similarity>=.84) semantic_repetitions.push({type:'semantic_repetition',source_block:source.block,target_block:target.block,source_text:source.text,target_text:target.text,similarity:+Math.min(.99,similarity).toFixed(2),action:'detected'});
+  }
+  const attributeEntries=[...toList(attributes.interest).map(value=>['interest',value]),['funding_source',attributes.funding_source],['purchase_term',attributes.purchase_term]].filter(([,value])=>value&&value!=='не определено');
+  entries.forEach(entry=>attributeEntries.forEach(([name,value])=>{
+    const similarity=summarySemanticSimilarity(entry.text,value);
+    if(similarity>=.84||moduleSummaryNorm(entry.text).includes(moduleSummaryNorm(value))) crm_duplications.push({type:'crm_duplication',source_block:'crm_attributes.'+name,target_block:entry.block,source_text:String(value),target_text:entry.text,similarity:+Math.max(.9,similarity).toFixed(2),action:'detected'});
+  }));
+  const addressDuplicationCount=entries.reduce((sum,item)=>sum+summaryAddressMatches(item.text).length,0);
+  const next=String(summary&&summary.next_step||''),nextStepDuplicateCount=entries.filter(item=>item.block!=='next_step'&&summarySemanticSimilarity(item.text,next)>=.88).length;
+  const uselessQuoteCount=toList(summary&&summary.quotes).filter(summaryUselessQuote).length;
+  const unfinishedQuoteCount=toList(summary&&summary.quotes).filter(item=>/[—–-]\s*$|…\s*$|\.\.\.\s*$/.test(moduleSummaryQuoteText(item).trim())).length;
+  const unclearPhraseCount=entries.filter(item=>summaryUnclearPhrase(item.text)).length;
+  const organizationalNoiseCount=entries.filter(item=>summaryOrganizationalNoise(item.text)).length;
+  return {
+    semantic_repetition_count:semantic_repetitions.length,semantic_repetitions,
+    crm_duplication_count:crm_duplications.length,crm_duplications,
+    address_duplication_count:addressDuplicationCount,
+    next_step_present:Boolean(next.trim()),next_step_duplicate_count:nextStepDuplicateCount,
+    useless_quote_count:uselessQuoteCount,unfinished_quote_count:unfinishedQuoteCount,
+    unclear_phrase_count:unclearPhraseCount,organizational_noise_count:organizationalNoiseCount,
+    deduplication_applied:Boolean(options.deduplication_applied),removed_items:removedItems
+  };
+}
+function summaryRemoveAddresses(value){
+  let text=String(value||'');
+  summaryAddressMatches(text).forEach(address=>{text=text.replace(address,'объект');});
+  return text.replace(/\b(?:квартира|объект)\s+(?:по адресу|на)\s+объект\b/gi,'объект').replace(/\s+,/g,',').replace(/\s{2,}/g,' ').trim();
+}
+function deduplicateFinalSummary(ctx,value){
+  const summary=JSON.parse(JSON.stringify(value)),before=analyzeSummaryDiagnostics(ctx,summary),removed=[];
+  const remove=(type,sourceBlock,targetBlock,sourceText,targetText,similarity,action='removed_target')=>removed.push({type,source_block:sourceBlock,target_block:targetBlock,source_text:String(sourceText||''),target_text:String(targetText||''),similarity:+Number(similarity||1).toFixed(2),action});
+  for(const block of ['conversation_result','next_step']){
+    const original=summary[block],cleaned=summaryRemoveAddresses(original);
+    if(cleaned!==original){remove('address_duplication','card_metadata',block,summaryAddressMatches(original).join(', '),original,1,'removed_address');summary[block]=cleaned;}
+  }
+  const attributes=customerNeedsValues(ctx||{}),attributeValues=[...attributes.interest,attributes.funding_source,attributes.purchase_term].filter(value=>value&&value!=='не определено');
+  summary.key_facts=toList(summary.key_facts).filter((item,index)=>{
+    const text=[item&&item.label,item&&item.value].filter(Boolean).join(': '),block='key_facts['+index+']';
+    if(summaryAddressMatches(text).length||summaryOrganizationalNoise(text)||summaryUnclearPhrase(text)){remove(summaryAddressMatches(text).length?'address_duplication':summaryUnclearPhrase(text)?'unclear_phrase':'organizational_noise',block,block,text,text,1,'removed_item');return false;}
+    const attribute=attributeValues.find(value=>summarySemanticSimilarity(text,value)>=.84||moduleSummaryNorm(text).includes(moduleSummaryNorm(value)));
+    if(attribute){remove('crm_duplication','crm_attributes',block,attribute,text,.94);return false;}
+    if(summarySemanticSimilarity(text,summary.next_step)>=.88){remove('next_step_duplicate','next_step',block,summary.next_step,text,.95);return false;}
+    const concepts=summarySemanticConcepts(text),resultConcepts=summarySemanticConcepts(summary.conversation_result);
+    if(summarySemanticSimilarity(text,summary.conversation_result)>=.84||[...concepts].some(concept=>(concept.startsWith('goal:')||concept.startsWith('funding:'))&&resultConcepts.has(concept))){remove('semantic_repetition','conversation_result',block,summary.conversation_result,text,.94);return false;}
+    return true;
+  });
+  summary.quotes=toList(summary.quotes).filter((quote,index)=>{
+    const text=moduleSummaryQuoteText(quote),block='quotes['+index+']';
+    if(summaryUselessQuote(text)||summaryOrganizationalNoise(text)){remove(summaryUnclearPhrase(text)?'unclear_phrase':'useless_quote',block,block,text,text,1,'removed_item');return false;}
+    const duplicate=[{block:'conversation_result',text:summary.conversation_result},{block:'next_step',text:summary.next_step},...summary.key_facts.map((item,i)=>({block:'key_facts['+i+']',text:[item.label,item.value].join(': ')}))].find(item=>summarySemanticSimilarity(text,item.text)>=.84);
+    if(duplicate){remove('semantic_repetition',duplicate.block,block,duplicate.text,text,.94);return false;}
+    const attribute=attributeValues.find(value=>summarySemanticSimilarity(text,value)>=.84);
+    if(attribute){remove('crm_duplication','crm_attributes',block,attribute,text,.94);return false;}
+    return true;
+  });
+  if(summarySemanticSimilarity(summary.conversation_result,summary.next_step)>=.88&&/(?:просмотр|показ|встреч)/i.test(summary.conversation_result)){
+    const original=summary.conversation_result;
+    const sentences=original.split(/(?<=[.!?])\s+/).filter(sentence=>summarySemanticSimilarity(sentence,summary.next_step)<.88);
+    summary.conversation_result=sentences.join(' ').trim()||'Просмотр согласован.';
+    remove('next_step_duplicate','next_step','conversation_result',summary.next_step,original,.95,'shortened_target');
+  }
+  if(attributeValues.length){
+    const original=summary.conversation_result,sentences=original.split(/(?<=[.!?])\s+/),filtered=sentences.filter(sentence=>!attributeValues.some(attribute=>summarySemanticSimilarity(sentence,attribute)>=.84));
+    if(filtered.length&&filtered.length<sentences.length){summary.conversation_result=filtered.join(' ').trim();remove('crm_duplication','crm_attributes','conversation_result',attributeValues.join(', '),original,.94,'removed_sentence');}
+  }
+  summary.conversation_result=summary.conversation_result.replace(/\s{2,}/g,' ').replace(/\s+([,.!?])/g,'$1').trim();
+  summary.next_step=summary.next_step.replace(/\s{2,}/g,' ').replace(/\s+([,.!?])/g,'$1').trim();
+  const after=analyzeSummaryDiagnostics(ctx,summary,{deduplication_applied:true,removed_items:removed});
+  return {value:summary,before,after,removed_items:removed};
 }
 function verifiedClientBudgetFact(facts){
   return toList(facts).find(fact=>{
@@ -7434,10 +7687,80 @@ function moduleSummaryGrounding(value,store,transcript=''){
 }
 
 function moduleSummaryApplyStorePolicy(value,store,transcript=''){
-  // Бизнес-валидатор прозрачен и не переписывает корректный LLM-ответ.
-  // Фактические ошибки оценивают независимые Judges; grounding лишь
-  // диагностирует отсутствие опоры и не удаляет поля.
-  return {value,count:0,changes:[]};
+  const changes=[];
+  if(!value||value.status==='ERROR') return {value,count:0,changes};
+  const stripJsonResidue=input=>String(input||'').replace(/\s*"?,\s*"error"\s*:\s*"[^"]*"\s*\}\s*$/i,'').trim();
+  const cleanText=(input,code)=>{
+    const cleaned=stripJsonResidue(input);
+    if(cleaned!==String(input||'')) changes.push(code);
+    return cleaned;
+  };
+  value.conversation_result=cleanText(value.conversation_result,'conversation_result_json_residue_removed');
+  value.next_step=cleanText(value.next_step,'next_step_json_residue_removed');
+  value.key_facts=toList(value.key_facts).map(item=>({...item,label:cleanText(item&&item.label,'key_fact_json_residue_removed'),value:cleanText(item&&item.value,'key_fact_json_residue_removed')}));
+  value.quotes=toList(value.quotes).map(item=>typeof item==='string'?cleanText(item,'quote_json_residue_removed'):{...item,text:cleanText(item&&item.text,'quote_json_residue_removed')});
+  const overlap=(left,right)=>{
+    const tokens=moduleSummaryTokens(left),source=new Set(moduleSummaryTokens(right));
+    return tokens.length>=2&&tokens.filter(token=>source.has(token)).length/tokens.length>=.75;
+  };
+  const canonicalRequirements=toList(store&&store.conversation&&store.conversation.requirements);
+  const canonicalFacts=toList(store&&store.conversation&&store.conversation.facts);
+  const undecidedViewing=canonicalFacts.some(fact=>/(?:пока не решил|не решил).*(?:готов|просмотр)/i.test(String(fact&&((fact.normalized_value??fact.value))||'')));
+  if(undecidedViewing&&/пока не готов к просмотру/i.test(value.conversation_result)){
+    value.conversation_result=value.conversation_result.replace(/пока не готов к просмотру/i,'пока не решил, готов ли к просмотру');
+    changes.push('viewing_readiness_corrected');
+  }
+  const requirementCovered=(requirementValue,visible)=>{
+    if(overlap(requirementValue,visible)) return true;
+    const expected=moduleSummaryNorm(requirementValue),actual=moduleSummaryNorm(visible);
+    return ['лифт','этаж','ремонт','двор','метро','обремен','площад','комнат'].some(anchor=>expected.includes(anchor)&&actual.includes(anchor));
+  };
+  const resultSentences=String(value.conversation_result||'').split(/(?<=[.!?])\s+/).map(item=>item.trim()).filter(Boolean);
+  const factsBefore=toList(value.key_facts);
+  value.key_facts=factsBefore.filter(item=>{
+    const label=String(item&&item.label||''),factValue=String(item&&item.value||''),joined=label+' '+factValue;
+    const backedByRequirement=canonicalRequirements.some(requirement=>requirementCovered(requirement&&((requirement.normalized_value??requirement.value)),factValue));
+    if(/(?:адрес|цена объекта|стоимость объекта|этаж|площадь объекта|маршрут до объекта|от метро|до метро|код объекта|номер объявления)/i.test(joined)&&!backedByRequirement){changes.push('card_fact_removed');return false;}
+    const duplicateSentenceIndex=resultSentences.findIndex(sentence=>overlap(factValue,sentence));
+    if(duplicateSentenceIndex>=0&&resultSentences.length>2&&duplicateSentenceIndex>0&&duplicateSentenceIndex<resultSentences.length-1){
+      resultSentences.splice(duplicateSentenceIndex,1);changes.push('semantic_duplicate_moved_to_key_fact');return true;
+    }
+    if(overlap(factValue,[...resultSentences,String(value.next_step||'')].join(' '))){changes.push('semantic_duplicate_removed');return false;}
+    return true;
+  }).slice(0,4);
+  value.conversation_result=resultSentences.join(' ');
+  const cleanedNextStep=String(value.next_step||'').replace(/\.\s*,\s*$/,'.').replace(/,\s*\.\s*$/,'.').replace(/,{2,}/g,',');
+  if(cleanedNextStep!==value.next_step){value.next_step=cleanedNextStep;changes.push('next_step_punctuation_repaired');}
+  const primary=store&&store.conversation&&store.conversation.primary_next_step||{};
+  if(value.next_step.length>180&&String(primary.action||'').trim()){
+    const action=String(primary.action).trim(),owner=String(primary.owner||'').trim();
+    const ownerPrefix=owner&&!moduleSummaryNorm(action).startsWith(moduleSummaryNorm(owner))?owner+' ':'';
+    const deadline=String(primary.deadline||'').trim();
+    value.next_step=(ownerPrefix+action+(deadline?' '+deadline:'')).replace(/\s+/g,' ').replace(/[.。]+$/,'')+'.';
+    value.next_step=value.next_step.charAt(0).toUpperCase()+value.next_step.slice(1);
+    changes.push('next_step_shortened_from_store');
+  }
+  const requirementLabel=requirement=>requirement&&requirement.type==='floor_preference'?'Этаж':requirement&&requirement.priority==='preferred'?'Предпочтение':'Требование';
+  canonicalRequirements
+    .slice()
+    .sort((left,right)=>(left&&left.priority==='required'?0:1)-(right&&right.priority==='required'?0:1))
+    .forEach(requirement=>{
+      if(value.key_facts.length>=4) return;
+      const requirementValue=String(requirement&&((requirement.normalized_value??requirement.value))||'').trim();
+      const visible=[value.conversation_result,value.next_step,...value.key_facts.map(item=>item&&item.value)].join(' ');
+      if(!requirementValue||requirementCovered(requirementValue,visible)) return;
+      value.key_facts.push({label:requirementLabel(requirement),value:requirementValue});
+      changes.push('missing_requirement_added');
+    });
+  const visibleCore=[String(value.conversation_result||''),String(value.next_step||'')].join(' ');
+  const quotesBefore=toList(value.quotes);
+  value.quotes=quotesBefore.filter(quote=>{
+    const text=moduleSummaryQuoteText(quote).trim();
+    if(!text||/[—–-]\s*$|…\s*$|\.\.\.\s*$/.test(text)){changes.push('unfinished_quote_removed');return false;}
+    if(overlap(text,visibleCore)||value.key_facts.some(item=>overlap(text,item.value))){changes.push('semantic_duplicate_removed');return false;}
+    return true;
+  }).slice(0,2);
+  return {value,count:changes.length,changes};
   if(false){
   const conversation=store&&store.conversation||{},primary=conversation.primary_next_step;
   let count=0;
@@ -7783,22 +8106,25 @@ async function runModuleSummaryStage(stage,ctx,t0){
   }
   let audit=moduleSummaryPrompt(stage,ctx),prompt=audit.prompt,promptHash=await hashPrompt(prompt);
   let raw='',tokens=0,actualModel=null,actualProvider=null,fallbackNote=null,finishReason=null,networkRetryCount=0,networkRetryReason=null;
-  let parsed=null,parseErr=null,retryable=false,retryCount=0,policyRepairCount=0,recoveryMode='',fallbackReason='';
+  let parsed=null,parseErr=null,retryable=false,retryCount=0,policyRepairCount=0,recoveryMode='',fallbackReason='',policyRepairChanges=[];
+  let dedupAudit={before:null,after:null,removed_items:[]};
   let repairAudit={repair_attempted:false,removed_fields:[],removed_items:[],contract_status:'VALID'};
-  const call=async(retryFeedback='')=>{
+  const call=async(retryFeedback='',maxTokens=stage.maxTokens)=>{
     if(retryFeedback){
       audit=moduleSummaryPrompt(stage,{...ctx,__summary_retry_feedback:retryFeedback});
       prompt=audit.prompt;
       promptHash=await hashPrompt(prompt);
     }
     const responseFormat={type:'json_schema',json_schema:{name:MODULE_SUMMARY_SCHEMA_ID,strict:true,schema:MODULE_SUMMARY_JSON_SCHEMA}};
-    const response=await callModelWithTransientRetry(prompt,stage.model,stage.provider,stage.temperature,stage.maxTokens,responseFormat,stageAllowsVendorFallback(stage));
+    const response=await callModelWithTransientRetry(prompt,stage.model,stage.provider,stage.temperature,maxTokens,responseFormat,stageAllowsVendorFallback(stage));
     raw=response.text; tokens+=response.tokens||0; actualModel=response.actualModel; actualProvider=response.actualProvider; fallbackNote=response.fallbackNote; finishReason=response.finishReason; networkRetryCount+=response.networkRetryCount||0; networkRetryReason=networkRetryReason||response.networkRetryReason;
     try{
       if(finishReason==='length') throw new Error('TRUNCATED_JSON');
       repairAudit=moduleSummaryDeterministicRepair(parseJSON(raw));
       parsed=validateModuleSummaryOutput(repairAudit.value);
-      const policy=moduleSummaryApplyStorePolicy(parsed,audit.safeStore,transcriptText(ctx));parsed=validateModuleSummaryOutput(policy.value);policyRepairCount=policy.count;
+      const policy=moduleSummaryApplyStorePolicy(parsed,audit.safeStore,transcriptText(ctx));parsed=validateModuleSummaryOutput(policy.value);policyRepairCount=policy.count;policyRepairChanges=policy.changes;
+      dedupAudit=deduplicateFinalSummary(ctx,parsed);parsed=validateModuleSummaryOutput(dedupAudit.value);
+      policyRepairCount+=dedupAudit.removed_items.length;
       policyRepairCount+=repairAudit.removed_fields.length+repairAudit.removed_items.length;
       parseErr=null; retryable=false;
     }catch(error){ parsed=null; parseErr=error.message; retryable=error instanceof ModuleSummarySchemaError?error.retryable:true; }
@@ -7809,12 +8135,25 @@ async function runModuleSummaryStage(stage,ctx,t0){
     retryCount=1;
     try{await call();}catch(error){fallbackReason=String(error&&error.message||error);parsed=moduleSummaryDeterministicFallback(audit.safeStore);parseErr=null;recoveryMode='provider_fallback';}
   }
+  if(parseErr==='TRUNCATED_JSON'){
+    retryCount=2;
+    const compactFeedback='Предыдущие ответы были оборваны. Верни полный JSON не длиннее 900 символов: 2–4 коротких предложения, до 4 key_facts, до 2 коротких quotes и один next_step. Не добавляй рассуждения.';
+    try{await call(compactFeedback,Math.max(12000,Number(stage.maxTokens)||0));}
+    catch(error){fallbackReason=String(error&&error.message||error);}
+  }
   if(parseErr){
     fallbackReason=parseErr;
     parsed=moduleSummaryDeterministicFallback(audit.safeStore);
     parseErr=null;
     recoveryMode='invalid_output_fallback';
   }
+  if(parsed&&!dedupAudit.after){dedupAudit=deduplicateFinalSummary(ctx,parsed);parsed=validateModuleSummaryOutput(dedupAudit.value);}
+  ctx.__summary_diagnostics_before=dedupAudit.before||analyzeSummaryDiagnostics(ctx,parsed||{});
+  ctx.__summary_diagnostics_after=dedupAudit.after||analyzeSummaryDiagnostics(ctx,parsed||{},{deduplication_applied:true,removed_items:dedupAudit.removed_items});
+  ctx.summary_diagnostics=ctx.__summary_diagnostics_after;
+  ctx.__summary_fallback_used=Boolean(recoveryMode);
+  ctx.__summary_fallback_source=recoveryMode||null;
+  ctx.__summary_fallback_reason=fallbackReason||null;
   let groundingErrors=[];
   if(parsed) groundingErrors=moduleSummaryGrounding(parsed,audit.safeStore,transcriptText(ctx));
   if(parsed&&groundingErrors.length&&retryCount<1){
@@ -7841,7 +8180,7 @@ async function runModuleSummaryStage(stage,ctx,t0){
   const groundedQuotes=parsed?parsed.quotes.filter((_,index)=>!groundingErrors.some(error=>error.path==='quotes['+index+']')).length:0;
   const summaryMetrics={json_valid:Boolean(parsed),grounded_key_facts:groundedFacts+'/'+(parsed?parsed.key_facts.length:0),grounded_quotes:groundedQuotes+'/'+(parsed?parsed.quotes.length:0),next_step_match:Boolean(parsed&&!groundingErrors.some(error=>error.path==='next_step')),character_count:outputLength,pii_absent:Boolean(parsed),generation_status:technical?'TECHNICAL_ERROR':status,generation_mode:recoveryMode||'llm',fallback_used:Boolean(recoveryMode)||outcomeSourceError,fallback_source:outcomeSourceError?'transcript_manual_review':recoveryMode||null,fallback_reason:outcomeSourceError?'Outcome Extractor technical error; результат требует ручной проверки.':fallbackReason,latency:ms,tokens,cost,retry_count:retryCount,store_status:storeStatus,next_step_source:nextSource,model:actualModel};
   const contractAudit={...repairAudit,prompt_schema_id:MODULE_SUMMARY_SCHEMA_ID,response_schema_id:MODULE_SUMMARY_SCHEMA_ID,parser_schema_id:MODULE_SUMMARY_SCHEMA_ID,runtime_schema_id:MODULE_SUMMARY_SCHEMA_ID,business_validation_applied:Boolean(parsed),fallback_used:summaryMetrics.fallback_used,fallback_source:summaryMetrics.fallback_source,fallback_reason:summaryMetrics.fallback_reason};
-  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,resolved_prompt_contains_transcript:audit.resolvedPromptContainsTranscript,prompt_chars:prompt.length,card_metadata_omitted:audit.cardMetadataOmitted,verified_quote_count:audit.verifiedQuoteCount},contract_audit:contractAudit,grounding_issues:groundingErrors,network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,policy_repair_count:policyRepairCount,policy_repair_changes:[],model:actualModel,timestamp:new Date().toISOString(),finish_reason:finishReason||null,status:technical||status==='ERROR'?'bad':status==='MANUAL_REVIEW'?'attn':recoveryMode||repairAudit.repair_attempted?'warn':'ok',summary_metrics:summaryMetrics,metrics:Object.entries(summaryMetrics).map(([key,val])=>[key,typeof val==='number'&&key==='cost'?'$'+val.toFixed(4):val])};
+  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,resolved_prompt_contains_transcript:audit.resolvedPromptContainsTranscript,prompt_chars:prompt.length,card_metadata_omitted:audit.cardMetadataOmitted,verified_quote_count:audit.verifiedQuoteCount},contract_audit:contractAudit,grounding_issues:groundingErrors,network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,policy_repair_count:policyRepairCount,policy_repair_changes:policyRepairChanges,diagnostics_before_deduplication:ctx.__summary_diagnostics_before,removed_duplicates:dedupAudit.removed_items,diagnostics_after_deduplication:ctx.__summary_diagnostics_after,model:actualModel,timestamp:new Date().toISOString(),finish_reason:finishReason||null,status:technical||status==='ERROR'?'bad':status==='MANUAL_REVIEW'?'attn':recoveryMode||repairAudit.repair_attempted?'warn':'ok',summary_metrics:summaryMetrics,metrics:Object.entries(summaryMetrics).map(([key,val])=>[key,typeof val==='number'&&key==='cost'?'$'+val.toFixed(4):val])};
   rep.meta=buildStageMeta(stage,rep); return rep;
 }
 
@@ -8044,8 +8383,8 @@ function isModuleCriticalCompletenessStage(stage){
   return IS_TRANSCRIPTION_SUMMARY_MODULE&&stage&&stage.type==='check'&&stage.outKey==='critical_completeness_check';
 }
 
-const CRITICAL_COMPLETENESS_CATEGORIES=new Set(['client_goal','budget','required_criteria','funding_source','purchase_term','main_objection','hard_constraint','refusal_reason','decision_participant','critical_question','critical_context']);
-const CRITICAL_COMPLETENESS_WEIGHTS={client_goal:20,budget:20,required_criteria:15,funding_source:10,purchase_term:10,main_objection:20,hard_constraint:15,refusal_reason:25,decision_participant:10,critical_question:10,critical_context:10};
+const CRITICAL_COMPLETENESS_CATEGORIES=new Set(['client_goal','primary_need','budget','required_criteria','funding_source','purchase_term','main_objection','main_obstacle','hard_constraint','refusal_reason','decision_participant','critical_question','open_question','call_result','next_step','critical_context']);
+const CRITICAL_COMPLETENESS_WEIGHTS={client_goal:20,primary_need:20,budget:15,required_criteria:15,funding_source:10,purchase_term:10,main_objection:20,main_obstacle:20,hard_constraint:15,refusal_reason:25,decision_participant:10,critical_question:10,open_question:10,call_result:15,next_step:15,critical_context:10};
 const CRITICAL_COMPLETENESS_WARNING_TYPES=new Set(['ambiguous_coverage','non_critical_omission','duplicate_item']);
 
 function criticalCompletenessError(explanation){return {...judgeTechnicalFields(explanation),critical_items_total:0,critical_items_present:0,critical_items_missing:0,critical_items:[],missing_items:[],warnings:[]};}
@@ -8056,8 +8395,7 @@ function criticalCompletenessDependency(ctx){
 }
 function criticalCompletenessStore(ctx){
   const conversation=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation||{};
-  const business_context=ctx&&ctx.conversation_store&&ctx.conversation_store.business_context||{};
-  return {business_context,facts:Array.isArray(conversation.facts)?conversation.facts:[],requirements:Array.isArray(conversation.requirements)?conversation.requirements:[],attributes:conversation.attributes&&typeof conversation.attributes==='object'&&!Array.isArray(conversation.attributes)?conversation.attributes:{},call_result:String(conversation.call_result||''),primary_next_step:conversation.primary_next_step&&typeof conversation.primary_next_step==='object'?conversation.primary_next_step:{}};
+  return {facts:Array.isArray(conversation.facts)?conversation.facts:[],requirements:Array.isArray(conversation.requirements)?conversation.requirements:[],attributes:conversation.attributes&&typeof conversation.attributes==='object'&&!Array.isArray(conversation.attributes)?conversation.attributes:{},call_result:String(conversation.call_result||''),primary_next_step:conversation.primary_next_step&&typeof conversation.primary_next_step==='object'?conversation.primary_next_step:{}};
 }
 function criticalCompletenessSourceText(ctx){return moduleSummaryNorm(JSON.stringify(criticalCompletenessStore(ctx)));}
 function criticalCompletenessSummaryField(summary,field){
@@ -8181,44 +8519,24 @@ function buildCriticalSummaryItems(ctx){
     if(!criticalCompletenessKnownValue(expected)||seen.has(id)) return;
     seen.add(id);items.push({id,category,expected:String(expected),evidence:String(evidence||expected)});
   };
-  const business=store.business_context&&typeof store.business_context==='object'?store.business_context:null;
-  if(business&&Object.keys(business).length){
-    const goal=businessContextSemanticDedupe([business.client_goal,business.purchase_purpose]).join('; ');
-    add('critical-client-goal','client_goal',goal,goal);
-    add('critical-client-offer','budget',business.client_offer,business.client_offer);
-    if(criticalCompletenessKnownValue(business.financing)&&business.financing!=='не определено') add('critical-funding','funding_source',business.financing,business.financing);
-    if(criticalCompletenessKnownValue(business.purchase_term)&&business.purchase_term!=='не определено') add('critical-purchase-term','purchase_term',business.purchase_term,business.purchase_term);
-    businessContextSemanticDedupe(business.critical_requirements).slice(0,3).forEach((value,index)=>add('critical-requirement-'+index,'required_criteria',value,value));
-    const mainRisk=businessContextSemanticDedupe([...(business.objections||[]),...(business.constraints||[])])[0];
-    if(mainRisk) add('critical-main-risk',toList(business.objections).includes(mainRisk)?'main_objection':'hard_constraint',mainRisk,mainRisk);
-    toList(business.important_questions).filter(item=>item&&['unanswered','partially_answered'].includes(item.status)).forEach((item,index)=>add('critical-question-'+index,'critical_question',item.question,item.question));
-    add('critical-call-result','critical_context',business.call_result,business.call_result);
-    if(store.primary_next_step&&store.primary_next_step.status!=='not_defined') add('critical-next-step','critical_context',store.primary_next_step.action,store.primary_next_step.action);
-    return items;
-  }
-  const facts=store.facts.filter(item=>item&&['verified','corrected'].includes(String(item.verification_status||'verified')));
-  const requirements=store.requirements.filter(item=>item&&['verified','corrected'].includes(String(item.verification_status||'verified')));
-  const firstFact=category=>facts.find(item=>item.category===category);
-  const goal=firstFact('client_intent');
-  const genericLandGoal=goal&&requirements.length>0&&/(?:по поводу|узнать про|интересует)\s+(?:земельн\w*\s+)?участ\w*/.test(moduleSummaryNorm([goal.normalized_value??goal.value,goal.evidence].join(' ')));
-  if(goal&&!genericLandGoal) add('critical-client-goal','client_goal',goal.normalized_value??goal.value,goal.evidence);
+  const facts=store.facts.filter(item=>item&&String(item.evidence||'').trim()&&!moduleSummaryIsCardMetadataFact(item));
+  const requirements=store.requirements.filter(item=>item&&String(item.evidence||'').trim());
+  const factValue=item=>item&&(item.normalized_value??item.value);
+  const goal=facts.find(item=>['client_goal','client_need'].includes(item.type)&&factBusinessPriority(item)==='critical')||facts.find(item=>['client_goal','client_need'].includes(item.type));
+  if(goal) add('critical-client-goal','client_goal',factValue(goal),goal.evidence);
+  const ranked=[...requirements].sort((left,right)=>(left.priority==='required'?0:1)-(right.priority==='required'?0:1));
+  const needFact=facts.find(item=>['client_need','client_requirement','client_preference'].includes(item.type));
+  const viewingNeed=/(?:просмотр|показ|посмотреть)/.test(moduleSummaryNorm(store.call_result+' '+String(store.primary_next_step.action||'')))?'Посмотреть конкретный объект':'';
+  const primaryRequirement=ranked[0];
+  add('critical-primary-need','primary_need',primaryRequirement&&(primaryRequirement.normalized_value??primaryRequirement.value)||factValue(needFact)||viewingNeed,primaryRequirement&&primaryRequirement.evidence||needFact&&needFact.evidence||store.call_result||store.primary_next_step.action);
+  ranked.slice(0,3).forEach((item,index)=>add('critical-requirement-'+index,'required_criteria',item.normalized_value??item.value,item.evidence));
   const budget=requirements.find(item=>item.type==='price_limit')||verifiedClientBudgetFact(facts);
   if(budget) add('critical-budget','budget',budget.normalized_value??budget.value,budget.evidence);
-  const requiredTypes=new Set(['property_type','minimum_land_area','minimum_area','rooms','search_location','legal_requirement']);
-  requirements.filter(item=>requiredTypes.has(item.type)).forEach(item=>{
-    const raw=item.normalized_value??item.value;
-    const expected=item.type==='search_location'?toList(raw).map(canonicalSearchLocation).filter(Boolean).join(', '):raw;
-    add('critical-'+String(item.type).replace(/_/g,'-'),'required_criteria',expected,item.evidence);
-  });
-  const objection=firstFact('client_objection');
-  if(objection) add('critical-objection','main_objection',objection.normalized_value??objection.value,objection.evidence);
-  facts.filter(item=>['hard_constraint','client_constraint'].includes(item.category)).forEach(item=>{
-    const text=moduleSummaryNorm([item.name,item.value,item.evidence].join(' '));
-    if(/миним|площад|сот/.test(text)&&requirements.some(req=>['minimum_land_area','minimum_area'].includes(req.type))) return;
-    add('critical-hard-constraint-'+String(item.id||'item').replace(/_/g,'-'),'hard_constraint',item.normalized_value??item.value,item.evidence);
-  });
-  facts.filter(item=>item.category==='client_question'&&item.question_status==='unanswered'&&/(блокир|критич)/.test(moduleSummaryNorm(JSON.stringify(item)))).forEach(item=>add('critical-question-'+String(item.id).replace(/_/g,'-'),'critical_question',item.value,item.evidence));
-  facts.filter(item=>/(decision_participant|лицо.*решен|согласу.*(?:муж|жен|родствен|партнер|партнёр))/.test(moduleSummaryNorm([item.category,item.name,item.value].join(' ')))).forEach(item=>add('critical-decision-participant-'+String(item.id).replace(/_/g,'-'),'decision_participant',item.value,item.evidence));
+  const obstacle=facts.find(item=>['client_objection','client_constraint'].includes(item.type)&&!/(?:как (?:добраться|доехать)|пешком|на метро|от метро|до метро|маршрут)/.test(moduleSummaryNorm([item.value,item.evidence].join(' '))));
+  if(obstacle) add('critical-main-obstacle','main_obstacle',factValue(obstacle),obstacle.evidence);
+  facts.filter(item=>item.type==='open_question'&&item.speaker==='Клиент'&&['unanswered','partially_answered'].includes(String(item.question_status||'unanswered'))).forEach((item,index)=>add('critical-open-question-'+index,'open_question',factValue(item),item.evidence));
+  add('critical-call-result','call_result',store.call_result,store.call_result);
+  if(store.primary_next_step&&store.primary_next_step.status!=='not_defined') add('critical-next-step','next_step',store.primary_next_step.action,store.primary_next_step.action);
   return items;
 }
 function criticalCompletenessExpectedItems(ctx){
@@ -8521,7 +8839,7 @@ async function runModuleActionCheckStage(stage,ctx,t0){
 
 function isModulePresentationCheckStage(stage){return IS_TRANSCRIPTION_SUMMARY_MODULE&&stage&&stage.type==='check'&&stage.outKey==='presentation_check';}
 
-const PRESENTATION_ISSUE_TYPES=new Set(['invalid_structure','missing_required_field','empty_required_field','too_many_key_facts','too_many_quotes','excessive_length','excessive_detail','semantic_repetition','duplicate_key_fact','fragmented_text','difficult_to_scan','long_sentence','unclear_wording','formal_intro','markdown_inside_value','heading_inside_value','forbidden_value','recommendation_in_next_step','empty_optional_item','mixed_meanings_in_key_fact','next_step_not_concise']);
+const PRESENTATION_ISSUE_TYPES=new Set(['invalid_structure','missing_required_field','empty_required_field','too_many_key_facts','too_many_quotes','excessive_length','excessive_detail','semantic_repetition','duplicate_key_fact','fragmented_text','difficult_to_scan','long_sentence','unfinished_quote','unclear_wording','formal_intro','markdown_inside_value','heading_inside_value','forbidden_value','recommendation_in_next_step','empty_optional_item','mixed_meanings_in_key_fact','next_step_not_concise']);
 const PRESENTATION_CHECK_KEYS=['required_fields_present','conversation_result_valid','key_facts_valid','quotes_valid','next_step_valid','character_limit_valid','no_excessive_repetition','easy_to_scan'];
 const PRESENTATION_METRIC_KEYS=['total_characters','conversation_result_characters','key_facts_count','quotes_count','next_step_characters','sentence_count'];
 const PRESENTATION_CRITICAL_TYPES=new Set(['invalid_structure','missing_required_field','empty_required_field','too_many_key_facts','too_many_quotes','excessive_length','fragmented_text','difficult_to_scan','recommendation_in_next_step','forbidden_value','mixed_meanings_in_key_fact']);
@@ -8619,13 +8937,15 @@ function presentationCodeIssues(summary){
     if(summary.quotes.some(quote=>moduleSummaryNorm(item.value).includes(moduleSummaryNorm(moduleSummaryQuoteText(quote))))) issues.push(presentationIssue('semantic_repetition','key_facts['+index+']',item.value,'Цитата повторена внутри key_facts и отдельного блока quotes.'));
     if(/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(item.value)) issues.push(presentationIssue('unclear_wording','key_facts['+index+']',item.value,'Разговорную формулировку вне цитаты нужно заменить нейтральной.'));
   });
-  summary.quotes.forEach((quote,index)=>{if(!moduleSummaryQuoteText(quote).trim()) issues.push(presentationIssue('empty_optional_item','quotes['+index+']',fallback,'Пустой optional item нужно удалить.'));});
+  summary.quotes.forEach((quote,index)=>{const text=moduleSummaryQuoteText(quote).trim();if(!text) issues.push(presentationIssue('empty_optional_item','quotes['+index+']',fallback,'Пустой optional item нужно удалить.'));else if(/[—–-]\s*$|…\s*$|\.\.\.\s*$/.test(text)) issues.push(presentationIssue('unfinished_quote','quotes['+index+']',text,'Цитата обрывается и не является законченным фрагментом речи.'));});
   const duplicateFacts=new Map();summary.key_facts.forEach((item,index)=>{const key=moduleSummaryNorm(item.label+' '+item.value);if(key&&duplicateFacts.has(key)) issues.push(presentationIssue('duplicate_key_fact','key_facts['+index+']',item.value||item.label,'Одинаковый key_fact указан повторно.'));else duplicateFacts.set(key,index);});
+  summary.key_facts.forEach((item,index)=>{const factTokens=moduleSummaryTokens(item.value),resultTokens=new Set(moduleSummaryTokens(summary.conversation_result));if(factTokens.length>=2&&factTokens.filter(token=>resultTokens.has(token)).length/factTokens.length>=.8) issues.push(presentationIssue('semantic_repetition','key_facts['+index+']',item.value,'Key fact семантически повторяет conversation_result.'));});
   const sentences=summary.conversation_result.split(/(?<=[.!?])\s+/).map(item=>item.trim()).filter(Boolean),seenSentences=new Set();sentences.forEach(sentence=>{const key=moduleSummaryNorm(sentence);if(key.length>20&&seenSentences.has(key)) issues.push(presentationIssue('semantic_repetition','conversation_result',sentence,'Один и тот же факт повторён несколькими предложениями.'));seenSentences.add(key);if(sentence.length>220) issues.push(presentationIssue('long_sentence','conversation_result',sentence,'Предложение слишком длинное и сложное для быстрого чтения.'));});
   allValues.forEach(value=>{if(/(^|\s)#{1,6}\s|\*\*|__|`{1,3}/m.test(value)) issues.push(presentationIssue('markdown_inside_value','value',value,'Markdown внутри значений запрещён.'));if(/(?:^|\n)\s*(?:итог разговора|ключевые факты|цитаты|следующий шаг)\s*:/i.test(value)) issues.push(presentationIssue('heading_inside_value','value',value,'Внутри значения обнаружен заголовок блока.'));if(/не определено/i.test(value)) issues.push(presentationIssue('forbidden_value','value',value,'Значение «не определено» нужно исключить.'));});
   if(/^(?:по итогам|в ходе|в рамках)\s+(?:разговора|звонка)/i.test(summary.conversation_result.trim())) issues.push(presentationIssue('formal_intro','conversation_result',summary.conversation_result,'Формальное вступление не добавляет рабочего смысла.'));
   [summary.conversation_result,summary.next_step].forEach((text,index)=>{if(/(?:^|[^а-яё])(?:побор|скин(?:у|уть|ет)|че)(?:[^а-яё]|$)/i.test(text)) issues.push(presentationIssue('unclear_wording',index?'next_step':'conversation_result',text,'Разговорную формулировку вне цитаты нужно заменить нейтральной.'));});
   if(/(?:рекомендуется|следует|стоит|необходимо)/i.test(summary.next_step)) issues.push(presentationIssue('recommendation_in_next_step','next_step',summary.next_step,'next_step не должен содержать рекомендацию AI.'));
+  if(/(?:\.\s*,|,\s*\.|,{2,})\s*$/.test(summary.next_step)) issues.push(presentationIssue('unclear_wording','next_step',summary.next_step,'В next_step обнаружена ошибочная завершающая пунктуация.'));
   if(summary.next_step.length>200||summary.next_step.split(/[.!?]+/).filter(item=>item.trim()).length>2) issues.push(presentationIssue('next_step_not_concise','next_step',summary.next_step,'next_step должен быть кратким и быстро считываться.'));
   if(/(?:\+7|8)[\s(.-]*\d{3}[\s).-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}/.test(presentationSummaryText(summary))) issues.push(presentationIssue('forbidden_value','root',fallback,'Телефонные номера запрещены.'));
   return issues;
@@ -8641,7 +8961,11 @@ function presentationCheckRecalculate(judge,ctx,prevalidationIssues){
   if(types.has('excessive_length')) brevityScore=Math.min(brevityScore,50);else if(['excessive_detail','next_step_not_concise','long_sentence'].some(type=>types.has(type))) brevityScore=Math.min(brevityScore,80);
   if(types.has('difficult_to_scan')||types.has('fragmented_text')) readabilityScore=Math.min(readabilityScore,60);else if(['long_sentence','unclear_wording','formal_intro','markdown_inside_value','heading_inside_value'].some(type=>types.has(type))) readabilityScore=Math.min(readabilityScore,85);
   if(!noRepetition) repetitionScore=Math.min(repetitionScore,70);
-  const score=Math.round(structureScore*.25+brevityScore*.25+readabilityScore*.20+repetitionScore*.20+limitsScore*.10),mandatoryValid=requiredFieldsPresent&&conversationValid&&keyFactsValid&&quotesValid&&nextStepValid;
+  let score=Math.round(structureScore*.25+brevityScore*.25+readabilityScore*.20+repetitionScore*.20+limitsScore*.10);const mandatoryValid=requiredFieldsPresent&&conversationValid&&keyFactsValid&&quotesValid&&nextStepValid;
+  if(types.has('excessive_detail')) score=Math.min(score,80);
+  else if(types.has('semantic_repetition')) score=Math.min(score,89);
+  else if(unique.length===1) score=Math.min(score,95);
+  else if(unique.length===2) score=Math.min(score,90);
   let status='pass';if(score<85||metrics.total_characters>1200||!mandatoryValid||!easyToScan||errors.length||!characterLimitValid) status='fail';else if(score<95||warnings.length) status='warning';
   const explanation=status==='pass'?'Summary соответствует требованиям формата, структуры и краткости.':status==='warning'?'Структура сохранена, но есть некритичные проблемы краткости или читаемости.':'Summary нарушает обязательные требования формата, структуры или быстрого чтения.';
   return {status,score,structure_score:structureScore,brevity_score:brevityScore,readability_score:readabilityScore,repetition_score:repetitionScore,limits_score:limitsScore,checks:{required_fields_present:requiredFieldsPresent,conversation_result_valid:conversationValid,key_facts_valid:keyFactsValid,quotes_valid:quotesValid,next_step_valid:nextStepValid,character_limit_valid:characterLimitValid,no_excessive_repetition:noRepetition,easy_to_scan:easyToScan},metrics,errors,warnings,explanation};
@@ -8692,7 +9016,7 @@ function validateFactExtractionRoot(value){
   value.facts.forEach((fact,index)=>{
     const path='facts['+index+']';
     factSchemaExpect(fact&&typeof fact==='object'&&!Array.isArray(fact),path,'object',fact);
-    factSchemaExactKeys(fact,path,['id','type','value','speaker','evidence','source_turn_ids','confidence']);
+    factSchemaExactKeys(fact,path,['id','type','value','speaker','evidence','source_turn_ids','confidence','business_priority']);
     factSchemaExpect(typeof fact.id==='string'&&fact.id.trim().length>0,path+'.id','non-empty string',fact.id);
     if(factIds.has(fact.id)) throw new FactSchemaError(path+'.id: duplicate id "'+fact.id+'"');
     factIds.add(fact.id);
@@ -8702,6 +9026,7 @@ function validateFactExtractionRoot(value){
     factSchemaExpect(FACT_SPEAKERS.has(fact.speaker),path+'.speaker','Клиент | Агент | Оператор | Третье лицо',fact.speaker);
     factSchemaExpect(typeof fact.evidence==='string'&&fact.evidence.trim().length>0,path+'.evidence','non-empty string',fact.evidence);
     factSchemaExpect(typeof fact.confidence==='number'&&Number.isFinite(fact.confidence)&&fact.confidence>=0&&fact.confidence<=1,path+'.confidence','number from 0 to 1',fact.confidence);
+    factSchemaExpect(FACT_BUSINESS_PRIORITIES.has(fact.business_priority),path+'.business_priority','critical | important | secondary',fact.business_priority);
     factSchemaExpect(Array.isArray(fact.source_turn_ids)&&fact.source_turn_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_turn_ids','string[]',fact.source_turn_ids);
   });
   const quoteIds=new Set();
@@ -8736,6 +9061,7 @@ function recoverLegacyFactRootArray(value){
     evidence:typeof item.evidence==='string'&&item.evidence.trim()?item.evidence:String(item.value||item.category||'fact'),
     source_turn_ids:Array.isArray(item.source_turn_ids)?item.source_turn_ids:[],
     confidence:typeof item.confidence==='number'&&Number.isFinite(item.confidence)?Math.max(0,Math.min(1,item.confidence)):0.5,
+    business_priority:FACT_BUSINESS_PRIORITIES.has(item.business_priority)?item.business_priority:'secondary',
   }));
   return {value:{facts,quotes:[]},warnings:['ROOT_ARRAY_AUTO_WRAPPED']};
 }
@@ -8798,6 +9124,33 @@ function factQuoteIsWeak(text){
   const words=normalized.split(/\s+/).filter(Boolean);
   if(words.length>=4) return false;
   return !/(?:не\s+подход|не\s+устра|смуща|дорог|бюджет|ипотек|наличн|куп|ищ|нуж|хочу|показ|просмотр|позвон|связ|ждать|срок|район|метро|комнат|миллион|тысяч)/.test(normalized);
+}
+
+function factBusinessPriority(item){
+  const type=String(item&&item.type||''),text=normalizedSemanticText([item&&item.value,item&&item.evidence].join(' '));
+  if(/(?:на метро|добер[её]тся|доеду|пешком|на машине|недалеко жив)/.test(text)) return 'secondary';
+  if(['client_goal','client_need','client_requirement','client_constraint','client_objection','open_question','communication_result','agreement'].includes(type)) return 'critical';
+  if(['client_finance','client_timing','client_preference','agent_commitment'].includes(type)) return 'important';
+  if(type==='client_context'&&/(?:для себя|собственн.*прожив|продаж.*сво.*квартир|решени|пауза|согласован)/.test(text)) return 'important';
+  if(type==='agent_information'&&/(?:юрид|риск|обремен|долг|завещ|наслед|страхов|документ|просмотр|показ|доступ|ключ|замок|изменен.*цен|состояни.*объект|авари|дефект)/.test(text)) return 'important';
+  return 'secondary';
+}
+
+function factNormalizeBusinessPolicy(item){
+  const normalized={...item},text=normalizedSemanticText([item&&item.type,item&&item.value,item&&item.evidence].join(' '));
+  if(item&&item.type==='client_constraint'&&/(?:на метро|добер[её]тся|доеду|пешком|на машине|недалеко жив)/.test(text)) normalized.type='client_context';
+  normalized.business_priority=factBusinessPriority(normalized);
+  return normalized;
+}
+
+function factIsServiceNoise(item){
+  const text=normalizedSemanticText([item&&item.type,item&&item.value,item&&item.evidence].join(' '));
+  const evidence=normalizedSemanticText(item&&item.evidence);
+  if(/^(?:да|угу|ага|хорошо|понятно|конечно|верно|спасибо)$/.test(evidence)) return true;
+  if(/(?:клиент.*зовут|имя клиент|подтвердил.*номер|номер.*для связи|разговор заверш[её]н|попрощал)/.test(text)) return true;
+  const cardFields=/(?:адрес|улиц|корпус|номер объект|код объект|артикул|этаж|площад|однокомнат|двухкомнат|трехкомнат|трёхкомнат|цена объект|стоимость объект|цена указан)/.test(text);
+  const workingImpact=/(?:не подходит|важно|требован|возраж|сомнен|огранич|риск|обремен|долг|завещ|наслед|документ|просмотр|показ|доступ|изменен.*цен|дефект|состояни)/.test(text);
+  return cardFields&&!workingImpact&&['Оператор','Агент'].includes(String(item&&item.speaker||''));
 }
 
 function factRecoverCriticalBusinessFacts(value,ctx){
@@ -8875,7 +9228,7 @@ function applyFactExtractionPolicies(value,ctx){
   // delete a valid fact such as "деньги на счёте".
   const transcriptNorm=normalizedSemanticText(transcriptText(ctx));
   const seenFacts=new Set(),removedIds=new Set(),warnings=[];
-  const facts=value.facts.filter(item=>{
+  const facts=value.facts.map(factNormalizeBusinessPolicy).filter(item=>{
     if(factContainsPii(item)){removedIds.add(item&&item.id);warnings.push('PII_FACT_REMOVED');return false;}
     const evidenceNorm=normalizedSemanticText(item&&item.evidence);
     if(evidenceNorm&&transcriptNorm&&!transcriptNorm.includes(evidenceNorm)){
@@ -8884,7 +9237,7 @@ function applyFactExtractionPolicies(value,ctx){
       if(overlap<.7){removedIds.add(item&&item.id);warnings.push('UNSUPPORTED_EVIDENCE_REMOVED');return false;}
     }
     const text=normalizedSemanticText([item&&item.type,item&&item.value,item&&item.evidence].join(' '));
-    if(item&&item.type==='object_fact'&&/(?:код объект|артикул|этаж|адрес|улиц)/.test(text)&&!/(?:собственник|дду|ипотек|зарегистрирован|прописан|просмотр|показ)/.test(text)){
+    if(factIsServiceNoise(item)||item&&item.type==='object_fact'&&/(?:код объект|артикул|этаж|адрес|улиц)/.test(text)&&!/(?:собственник|дду|ипотек|зарегистрирован|прописан|просмотр|показ)/.test(text)){
       removedIds.add(item.id);warnings.push('LOW_VALUE_CARD_FACT_REMOVED');return false;
     }
     const key=normalizedSemanticText([item&&item.type,JSON.stringify(item&&item.value),item&&item.speaker,item&&item.evidence].join(' '));
@@ -8897,7 +9250,7 @@ function applyFactExtractionPolicies(value,ctx){
   const recoveredFacts=[];
   const addRecoveredFact=(type,factValue,speaker,turn)=>{
     if(!turn) return;
-    const fact={id:nextRecoveredFactId(),type,value:factValue,speaker,evidence:turn.cleanText,source_turn_ids:[turn.sourceId],confidence:.99};
+    const fact=factNormalizeBusinessPolicy({id:nextRecoveredFactId(),type,value:factValue,speaker,evidence:turn.cleanText,source_turn_ids:[turn.sourceId],confidence:.99,business_priority:'critical'});
     facts.push(fact);recoveredFacts.push(fact);
   };
   const clientTranscriptTurns=transcriptTurns.filter(turn=>/клиент/.test(normalizedSemanticText(turn.role)));
@@ -9660,7 +10013,7 @@ function mergeFactCheck(codeResult,llmParsed,parseErr,input,ctx){
 }
 
 const NEED_ITEM_KEYS=['value','confidence','evidence','source_fact_ids','verification_status'];
-const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE','RECOVER_FUNDING_SOURCE','RECOVER_LEGACY_INTEREST_STRING','REJECTED_AREA_TO_MINIMUM_AREA']);
+const NEED_TRANSFORMATION_TYPES=new Set(['MERGE_OVERLAPPING_SEARCH_LOCATIONS','RECOVER_SEARCH_LOCATION_RANGE','RECOVER_FUNDING_SOURCE','RECOVER_LEGACY_INTEREST_STRING','REJECTED_AREA_TO_MINIMUM_AREA','PROVENANCE_AUTO_LINKED','PROVENANCE_WARNING']);
 
 class NeedSchemaError extends Error{
   constructor(message){super(message);this.name='NeedSchemaError';}
@@ -9761,11 +10114,30 @@ function outcomeContractConfigurationError(overrides={}){
 }
 
 function needSchemaRepairPrompt(prompt,value,error){
-  return prompt+'\n\n---\nSCHEMA REPAIR (ОДНА ПОПЫТКА):\nПредыдущий ответ нарушил контракт needs_v2: '+String(error||'unknown schema error')+'.\nИсправь весь JSON по АКТИВНОМУ КОНТРАКТУ. attributes.interest должен быть массивом объектов; каждый requirement обязан иметь уникальный id requirement_1, requirement_2, ... . Не создавай интерес или requirement из карточки текущего объекта, одиночного вопроса либо готовности к просмотру. Верни только исправленный JSON без markdown.\n\nПРЕДЫДУЩИЙ JSON:\n'+JSON.stringify(value);
+  return prompt+'\n\n---\nSCHEMA REPAIR (ОДНА ПОПЫТКА):\nПредыдущий ответ нарушил контракт needs_v2.2: '+String(error||'unknown schema error')+'.\nИсправь весь JSON по АКТИВНОМУ КОНТРАКТУ. attributes.interest должен быть массивом объектов; каждый requirement обязан иметь уникальный id requirement_1, requirement_2, поля type, category, priority и reason. Не создавай интерес или requirement из карточки текущего объекта, одиночного вопроса, маршрута до объекта либо готовности к просмотру. Верни только исправленный JSON без markdown.\n\nПРЕДЫДУЩИЙ JSON:\n'+JSON.stringify(value);
+}
+
+function needRequirementCategory(type){
+  if(type==='search_location'||type==='transport_accessibility'||type==='infrastructure') return 'location';
+  if(['property_type','market_type','residential_complex','rooms','minimum_area','preferred_area','maximum_area','minimum_land_area','maximum_land_area','repair','floor_preference'].includes(type)) return 'property';
+  if(type==='price_limit') return 'finance';
+  if(type==='legal_requirement') return 'legal';
+  return 'other';
+}
+
+function needRequirementPriority(item){
+  const text=normalizedSemanticText([item&&item.value,item&&item.evidence,item&&item.reason].join(' '));
+  if(/(?:хотелось бы|желательно|лучше|предпочтительно|было бы удобно|идеально)/.test(text)) return 'preferred';
+  return 'required';
+}
+
+function normalizeNeedRequirementFields(item){
+  return {...item,category:NEED_REQUIREMENT_CATEGORY_LIST.includes(item&&item.category)?item.category:needRequirementCategory(item&&item.type),priority:NEED_REQUIREMENT_PRIORITY_LIST.includes(item&&item.priority)?item.priority:needRequirementPriority(item),reason:String(item&&item.reason||((needRequirementPriority(item)==='required')?'Без выполнения условия клиент не готов двигаться дальше.':'Условие повышает привлекательность варианта для клиента.'))};
 }
 
 function normalizeNeedExtractionSemantics(value,ctx){
   const out=JSON.parse(JSON.stringify(value));
+  out.requirements=toList(out.requirements).map(normalizeNeedRequirementFields);
   const semanticTransformations=toList(out.need_meta&&out.need_meta.transformations);
   const originalFunding=String(out.attributes&&out.attributes.funding_source&&out.attributes.funding_source.value||'не определено');
   const facts=verifiedNeedFacts(ctx).map(fact=>({...fact,category:fact.category||fact.type||'',name:fact.name||fact.type||'',normalized_value:fact.normalized_value??fact.value}));
@@ -9867,6 +10239,9 @@ function normalizeNeedExtractionSemantics(value,ctx){
   out.requirements=out.requirements.filter(req=>{
     const sourceFacts=req.source_fact_ids.map(id=>byId.get(id)).filter(Boolean);
     const source=normalizedSemanticText([req.evidence,...sourceFacts.map(factText)].join(' '));
+    const routeOnly=/(?:на метро|добер[её]тся|доеду|пешком|на машине|недалеко жив)/.test(source)
+      &&!/(?:важно|обязательно|только|не подходит|транспортн.*доступ|рядом с метро|шагов до метро)/.test(source);
+    if(routeOnly) return false;
     const currentObjectCard=sourceFacts.some(fact=>['object_context','object_information','client_intent'].includes(fact.category))
       &&/(?:жк|жилой комплекс|апартамент|адрес|улиц|проспект|этаж|площад|стоимост|цен[аы] объект)/.test(source);
     if(currentObjectCard) return false;
@@ -9886,12 +10261,13 @@ function normalizeNeedExtractionSemantics(value,ctx){
     if(req.type==='price_limit') return sourceFacts.some(explicitClientMoneyContext);
     return clientConfirmed||questionFacts.length>0;
   });
-  const addRequirement=(type,fact)=>{
+  const addRequirement=(type,fact,priority)=>{
     if(out.requirements.some(item=>item.type===type&&item.source_fact_ids.includes(fact.id))) return;
     const used=new Set(out.requirements.map(item=>item.id));
     let index=1;while(used.has('requirement_'+index)) index++;
     const normalizedValue=fact.normalized_value??fact.value;
-    out.requirements.push({id:'requirement_'+index,type,value:normalizedValue,normalized_value:normalizedValue,confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'extracted'});
+    const requirementPriority=priority||needRequirementPriority({value:normalizedValue,evidence:fact.evidence});
+    out.requirements.push({id:'requirement_'+index,type,category:needRequirementCategory(type),value:normalizedValue,normalized_value:normalizedValue,priority:requirementPriority,reason:requirementPriority==='required'?'Без выполнения условия клиент не готов двигаться дальше.':'Условие предпочтительно для клиента.',confidence:fact.confidence,evidence:String(fact.evidence||''),source_fact_ids:[fact.id],verification_status:'extracted'});
   };
   clientFacts.forEach(fact=>{
     const text=factText(fact),identity=normalizedSemanticText([fact.category,fact.name].join(' '));
@@ -9921,6 +10297,18 @@ function normalizeNeedExtractionSemantics(value,ctx){
     const explicitWantedLocation=/саварьев/.test(text)&&/(?:где\s+я\s+хочу\s+купить|хочу\s+купить)/.test(text);
     if(explicitWantedLocation||(verifiedSearchLocation||/location|локац|район|местополож/.test(identity))&&explicitSearchLocationContext(fact)) addRequirement('search_location',fact);
     if(/search criteria|search_criteria|критерий поиска|назначение участка/.test(identity)&&/ижс/.test(text)) addRequirement('property_type',fact);
+    const directRequirementFact=['client_need','client_requirement','client_constraint','client_preference'].includes(fact.category);
+    const directClientCriterion=/(?:важ|обязател|не подходит|не рассматрива|нужн|хочу|предпочита|требован)/.test(text);
+    const routeOnly=/(?:как (?:добраться|доехать)|на метро|пешком|на машине)/.test(text)&&!/(?:рядом с метро|транспортн.*доступ|важн|обязател)/.test(text);
+    if(directRequirementFact&&directClientCriterion&&!routeOnly&&!out.requirements.some(item=>toList(item.source_fact_ids).includes(fact.id))){
+      const type=/этаж/.test(text)?'floor_preference'
+        :/(?:лифт|двор|инфраструкт)/.test(text)?'infrastructure'
+        :/(?:комнат|двушк|тр[её]шк|однокомнат|двухкомнат|тр[её]хкомнат)/.test(text)?'rooms'
+        :/ремонт/.test(text)?'repair'
+        :/(?:обремен|выписк|юрид)/.test(text)?'legal_requirement'
+        :fact.category==='client_constraint'?'hard_constraint':'other_requirement';
+      addRequirement(type,fact,fact.category==='client_preference'?'preferred':'required');
+    }
   });
   out.requirements.forEach(req=>{
     if(req.type==='minimum_land_area'&&typeof (req.normalized_value??req.value)==='string'){
@@ -9938,7 +10326,7 @@ function normalizeNeedExtractionSemantics(value,ctx){
     semanticTransformations.push({type:'RECOVER_SEARCH_LOCATION_RANGE',output_requirement_id:req.id,source_requirement_ids:[req.id]});
   });
   const locationDeduplication=deduplicateSearchLocationRequirements(out.requirements);
-  out.requirements=locationDeduplication.requirements;
+  out.requirements=locationDeduplication.requirements.map(item=>normalizeNeedRequirementFields({...item,category:needRequirementCategory(item.type)}));
   out.need_meta.transformations=[...semanticTransformations,...locationDeduplication.transformations];
   out.need_meta.interest_count=out.attributes.interest.length;
   out.need_meta.requirements_count=out.requirements.length;
@@ -9970,7 +10358,7 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
   const requirementIds=new Set();
   value.requirements.forEach((item,index)=>{
     const path='requirements['+index+']';
-    const requirementKeys=['id','type','value',...(Object.prototype.hasOwnProperty.call(item,'normalized_value')?['normalized_value']:[]),'confidence','evidence','source_fact_ids','verification_status'];
+    const requirementKeys=['id','type','category','value',...(Object.prototype.hasOwnProperty.call(item,'normalized_value')?['normalized_value']:[]),'priority','reason','confidence','evidence','source_fact_ids','verification_status'];
     needExactKeys(item,path,requirementKeys);
     // Structured Output требует новые canonical requirement_N. Parser также
     // принимает непустые legacy req_* ID из уже сохранённых запусков, чтобы
@@ -9979,6 +10367,9 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
     if(requirementIds.has(item.id)) throw new NeedSchemaError(path+'.id: duplicate id "'+item.id+'"');
     requirementIds.add(item.id);
     if(!NEED_REQUIREMENT_TYPES.has(item.type)) throw new NeedSchemaError(path+'.type: expected canonical enum, received '+needReceived(item.type));
+    if(!NEED_REQUIREMENT_CATEGORY_LIST.includes(item.category)) throw new NeedSchemaError(path+'.category: expected canonical category, received '+needReceived(item.category));
+    if(!NEED_REQUIREMENT_PRIORITY_LIST.includes(item.priority)) throw new NeedSchemaError(path+'.priority: expected required | preferred, received '+needReceived(item.priority));
+    needExpect(typeof item.reason==='string'&&item.reason.trim().length>0,path+'.reason','non-empty string',item.reason);
     const valueType=factSchemaType(item.value);
     needExpect(['string','number','boolean','string[]','number[]','empty[]'].includes(valueType),path+'.value','string | number | boolean | string[] | number[]',item.value);
     if(Object.prototype.hasOwnProperty.call(item,'normalized_value')){
@@ -10009,6 +10400,10 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
         ? ['type','output_interest_id']
         : item&&item.type==='REJECTED_AREA_TO_MINIMUM_AREA'
         ? ['type','output_requirement_id','source_fact_ids']
+        : item&&item.type==='PROVENANCE_AUTO_LINKED'
+        ? ['type','from','to','evidence']
+        : item&&item.type==='PROVENANCE_WARNING'
+        ? ['type','source_fact_ids','evidence']
         : ['type','output_requirement_id','source_requirement_ids'];
       needExactKeys(item,path,keys);
       needExpect(NEED_TRANSFORMATION_TYPES.has(item.type),path+'.type','canonical transformation type',item.type);
@@ -10020,6 +10415,17 @@ function validateNeedExtractionRoot(value,ctx,normalizeSemantics=true){
       }
       if(item.type==='RECOVER_LEGACY_INTEREST_STRING'){
         needExpect(typeof item.output_interest_id==='string'&&/^interest:\d+$/.test(item.output_interest_id),path+'.output_interest_id','interest:<index>',item.output_interest_id);
+        return;
+      }
+      if(item.type==='PROVENANCE_AUTO_LINKED'){
+        needExpect(Array.isArray(item.from)&&item.from.every(id=>typeof id==='string'&&id.trim()),path+'.from','string[]',item.from);
+        needExpect(Array.isArray(item.to)&&item.to.length>0&&item.to.every(id=>typeof id==='string'&&id.trim()),path+'.to','non-empty string[]',item.to);
+        needExpect(typeof item.evidence==='string',path+'.evidence','string',item.evidence);
+        return;
+      }
+      if(item.type==='PROVENANCE_WARNING'){
+        needExpect(Array.isArray(item.source_fact_ids)&&item.source_fact_ids.every(id=>typeof id==='string'&&id.trim()),path+'.source_fact_ids','string[]',item.source_fact_ids);
+        needExpect(typeof item.evidence==='string',path+'.evidence','string',item.evidence);
         return;
       }
       needExpect(typeof item.output_requirement_id==='string'&&item.output_requirement_id.trim().length>0,path+'.output_requirement_id','non-empty string',item.output_requirement_id);
@@ -11583,10 +11989,10 @@ async function runV3StructuredStage(stage,ctx,t0,role){
 
 const MODULE_GENERIC_JUDGE_DEFINITIONS=Object.freeze({
   truth_check:{criterion:'faithfulness',label:'Достоверность',transcript:true,instructions:'Проверяй факты, роли и следующий шаг. Финальная фраза клиента «буду ждать звонка» означает: звонит агент.'},
-  critical_completeness_check:{criterion:'completeness',label:'Полнота',transcript:true,instructions:'Требуй цель, потребность, ограничение, открытый вопрос, результат и следующий шаг. Не требуй телефон, код объекта, полный адрес, этаж, цену или другие поля CRM-карточки.'},
+  critical_completeness_check:{criterion:'completeness',label:'Полнота',transcript:true,instructions:'Проверяй только элементы из CLOSED EXPECTED ITEMS, сформированные кодом из canonical Store. Не добавляй отсутствующие категории. open_question существует только при явном нерешённом вопросе клиента в CLOSED EXPECTED ITEMS; время, которое агент уже обязался уточнить в primary_next_step, не является отдельным пропуском. Не требуй телефон, код объекта, полный адрес, этаж, цену или другие поля CRM-карточки. Шкала: все ожидаемые элементы отражены — 100; одна небольшая некритичная деталь — 95; одна заметная некритичная — 90; пропущен важный существующий элемент — 75–89.'},
   agent_utility_check:{criterion:'usefulness',label:'Полезность',transcript:true,instructions:'Оцени возможность продолжить работу. Не требуй и не поощряй телефон, код объекта и дубли карточки CRM.'},
-  action_check:{criterion:'agreements_next_step',label:'Договорённости и следующий шаг',transcript:true,instructions:'Проверь action, owner и срок. Естественная фраза с явным владельцем считается достаточной. Не требуй точного времени, если подтверждено «сегодня вечером».'},
-  presentation_check:{criterion:'format',label:'Формат',transcript:false,instructions:'Оцени читаемость, краткость, повторы, дубли CRM, длину цитат, сложность следующего шага и отсутствие технических полей. Не оценивай JSON-схему.'}
+  action_check:{criterion:'agreements_next_step',label:'Договорённости и следующий шаг',transcript:true,instructions:'Проверь action, owner и только явно согласованные срок/канал. Естественная фраза с явным владельцем считается достаточной. Не штрафуй за отсутствие срока или канала, если их нет в canonical primary_next_step; не предлагай модели или агенту придумывать их.'},
+  presentation_check:{criterion:'format',label:'Формат',transcript:false,instructions:'Оцени читаемость, краткость, повторы, дубли CRM, длину цитат, пунктуацию, сложность следующего шага и отсутствие технических полей. Не оценивай JSON-схему. Не требуй искусственно заполнять key_facts, если весь уникальный рабочий контекст уже кратко отражён в conversation_result. Шкала: нет проблем — 100; одна косметическая — 95; две косметические — 90; смысловой повтор — максимум 89; явная перегруженность — максимум 80. Любая проблема из explanation обязана быть в issues.'}
 });
 const MODULE_GENERIC_JUDGE_JSON_SCHEMA={
   type:'object',additionalProperties:false,required:['score','status','issues','explanation'],properties:{
@@ -11598,6 +12004,22 @@ const MODULE_GENERIC_JUDGE_JSON_SCHEMA={
     explanation:{type:'string',minLength:1}
   }
 };
+const MODULE_FORMAT_JUDGE_JSON_SCHEMA={type:'object',additionalProperties:false,required:['score','decision','summary','violations','criteria'],properties:{
+  score:{type:'number',enum:[100,95,90,85,75,50,25,0]},
+  decision:{type:'string',enum:['PASS','NEEDS_REWORK','FAIL','TECHNICAL_ERROR']},
+  summary:{type:'string',minLength:1},
+  violations:{type:'array',items:{type:'object',additionalProperties:false,required:['code','severity','blocks','description'],properties:{code:{type:'string',minLength:1},severity:{type:'string',enum:['minor','major','critical']},blocks:{type:'array',items:{type:'string'}},description:{type:'string',minLength:1}}}},
+  criteria:{type:'array',items:{type:'object',additionalProperties:false,required:['name','status','comment'],properties:{name:{type:'string',minLength:1},status:{type:'string',enum:['pass','fail']},comment:{type:'string',minLength:1}}}}
+}};
+function validateModuleFormatJudge(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error('root: expected object');
+  for(const key of ['score','decision','summary','violations','criteria']) if(!Object.prototype.hasOwnProperty.call(value,key)) throw new Error(key+': required field is missing');
+  if(![100,95,90,85,75,50,25,0].includes(value.score)) throw new Error('score: invalid format scale');
+  if(!['PASS','NEEDS_REWORK','FAIL','TECHNICAL_ERROR'].includes(value.decision)) throw new Error('decision: invalid');
+  if(typeof value.summary!=='string'||!value.summary.trim()||!Array.isArray(value.violations)||!Array.isArray(value.criteria)) throw new Error('format judge: invalid arrays or summary');
+  const issues=value.violations.map(item=>({severity:item.severity==='critical'?'critical':item.severity==='major'?'medium':'low',message:item.description,code:item.code,blocks:item.blocks}));
+  return {score:value.score,status:value.decision==='PASS'?'pass':value.decision==='NEEDS_REWORK'?'warning':value.decision==='FAIL'?'fail':'technical_error',issues,explanation:value.summary,decision:value.decision,violations:value.violations,criteria:value.criteria};
+}
 function validateModuleGenericJudge(value){
   if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error('root: expected object');
   const keys=['score','status','issues','explanation'];
@@ -11612,6 +12034,58 @@ function validateModuleGenericJudge(value){
   if(typeof value.explanation!=='string'||!value.explanation.trim()) throw new Error('explanation: expected non-empty string');
   return value;
 }
+function normalizeModuleGenericJudgeResult(definition,parsed,ctx){
+  if(definition.criterion==='completeness'){
+    const expected=buildCriticalSummaryItems(ctx),hasOpenQuestion=expected.some(item=>item.category==='open_question');
+    const issues=parsed.issues.filter(issue=>hasOpenQuestion||!/(?:открыт|нереш[её]н|нужно уточнить|оста[её]тся неизвестн)/i.test(issue.message));
+    if(issues.length===parsed.issues.length) return parsed;
+    const score=issues.length?Math.min(parsed.score,issues.some(item=>['high','critical'].includes(item.severity))?85:issues.length===1?95:90):100;
+    return {...parsed,score,status:score>=95?'pass':score>=90?'warning':'fail',issues,explanation:issues.length?parsed.explanation:'Все реально существующие элементы CLOSED EXPECTED ITEMS отражены; ложное требование отсутствующего open_question удалено детерминированной проверкой.'};
+  }
+  if(definition.criterion==='usefulness'){
+    const conversation=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation||{};
+    const explicitNoTimeline=toList(conversation.facts).some(fact=>/(?:конкретн[а-яё]* срок|сроков).*(?:нет|не определ|пока)/i.test(String(fact&&((fact.normalized_value??fact.value))||'')));
+    const issues=parsed.issues.filter(issue=>!explicitNoTimeline||!/(?:срок|дедлайн|врем)/i.test(String(issue&&issue.message||'')));
+    if(issues.length===parsed.issues.length) return parsed;
+    const score=issues.length?Math.min(parsed.score,issues.length===1?95:90):100;
+    return {...parsed,score,status:score>=95?'pass':score>=90?'warning':'fail',issues,explanation:issues.length?parsed.explanation:'Summary достаточно для продолжения работы; отсутствие срока прямо подтверждено клиентом и не является пропуском.'};
+  }
+  if(definition.criterion==='agreements_next_step'){
+    const primary=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation&&ctx.conversation_store.conversation.primary_next_step||{};
+    const noDeadline=!String(primary.deadline||'').trim(),noChannel=!String(primary.channel||'').trim();
+    const issues=parsed.issues.filter(issue=>{
+      const message=String(issue&&issue.message||'');
+      if(noDeadline&&/(?:срок|дедлайн|врем|неограничен)/i.test(message)) return false;
+      if(noChannel&&/(?:канал|способ связи|как клиент.*(?:ответ|свяж)|когда\/как)/i.test(message)) return false;
+      return true;
+    });
+    if(issues.length===parsed.issues.length) return parsed;
+    const score=issues.length?Math.min(parsed.score,issues.some(item=>['high','critical'].includes(item.severity))?85:issues.length===1?95:90):100;
+    return {...parsed,score,status:score>=95?'pass':score>=90?'warning':'fail',issues,explanation:issues.length?parsed.explanation:'Action и owner подтверждены Outcome; отсутствующие в canonical primary_next_step срок и канал не были выдуманы и не являются пропуском.'};
+  }
+  if(definition.criterion==='format'){
+    const diagnostics=ctx.summary_diagnostics||buildSummaryDiagnostics(ctx),issues=[...toList(parsed.issues)],capReasons=[];
+    const addIssues=(items,type)=>toList(items).forEach(item=>issues.push({severity:type==='address_duplication'||type==='unclear_phrase'?'high':'medium',message:item.description||item.target_text||type,code:type}));
+    addIssues(diagnostics.semantic_repetitions,'semantic_repetition');addIssues(diagnostics.crm_duplications,'crm_duplication');
+    let cap=100;
+    const apply=(condition,value,reason)=>{if(condition){cap=Math.min(cap,value);capReasons.push(reason);}};
+    apply(diagnostics.semantic_repetition_count>=1,85,'semantic_repetition_count='+diagnostics.semantic_repetition_count);
+    apply(diagnostics.semantic_repetition_count>=2,75,'semantic_repetition_count='+diagnostics.semantic_repetition_count);
+    apply(diagnostics.semantic_repetition_count>=4,50,'semantic_repetition_count='+diagnostics.semantic_repetition_count);
+    apply(diagnostics.crm_duplication_count>=1,85,'crm_duplication_count='+diagnostics.crm_duplication_count);
+    apply(diagnostics.address_duplication_count>=1,75,'address_duplication_count='+diagnostics.address_duplication_count);
+    apply(diagnostics.next_step_duplicate_count>=1,75,'next_step_duplicate_count='+diagnostics.next_step_duplicate_count);
+    apply(diagnostics.useless_quote_count>=1,85,'useless_quote_count='+diagnostics.useless_quote_count);
+    apply(diagnostics.unfinished_quote_count>=1,75,'unfinished_quote_count='+diagnostics.unfinished_quote_count);
+    apply(diagnostics.unclear_phrase_count>=1,75,'unclear_phrase_count='+diagnostics.unclear_phrase_count);
+    apply(diagnostics.organizational_noise_count>=2,75,'organizational_noise_count='+diagnostics.organizational_noise_count);
+    const primary=ctx&&ctx.conversation_store&&ctx.conversation_store.conversation&&ctx.conversation_store.conversation.primary_next_step||{},confirmed=Boolean(String(primary.action||'').trim())&&String(primary.status||'')!=='not_defined';
+    apply(confirmed&&!diagnostics.next_step_present,50,'next_step_present=false');
+    const rawScore=Number(parsed.score),score=Math.min(rawScore,cap),uniqueIssues=issues.filter((item,index,array)=>array.findIndex(candidate=>candidate.message===item.message&&candidate.code===item.code)===index);
+    return {...parsed,raw_score:rawScore,score,status:score>=90&&cap>=90?'pass':score>=50?'warning':'fail',issues:uniqueIssues,score_cap_reason:capReasons,diagnostics,explanation:uniqueIssues.length?uniqueIssues.map(item=>item.message).join(' '):parsed.explanation||'Summary соответствует требованиям формата, структуры и краткости; детерминированные проверки проблем не обнаружили.'};
+  }
+  return parsed;
+}
 async function runModuleGenericSummaryJudgeStage(stage,ctx,t0){
   const definition=MODULE_GENERIC_JUDGE_DEFINITIONS[stage.outKey];
   let dependencyError='';
@@ -11624,7 +12098,8 @@ async function runModuleGenericSummaryJudgeStage(stage,ctx,t0){
     const rep={output,raw:null,parseErr:dependencyError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,status:'bad',resolved_prompt:null,prompt_audit:{transcript_present:Boolean(transcript),transcript_injected:false,transcript_chars:transcript.length,prompt_chars:0},metrics:[['Критерий',definition.label],['Статус','technical_error'],['Причина',dependencyError]]};
     rep.meta=buildStageMeta(stage,rep);return rep;
   }
-  const prompt=`Ты — независимый Summary Judge. Оцени только критерий "${definition.label}".
+  const closedExpectedItems=definition.criterion==='completeness'?buildCriticalSummaryItems(ctx):[];
+  const genericPrompt=`Ты — независимый Summary Judge. Оцени только критерий "${definition.label}".
 Conversation Store и транскрипция — равноправные источники фактической опоры. Не переписывай Summary и не требуй legacy-поля.
 Правила этого критерия: ${definition.instructions}
 Верни строго JSON: {"score":90,"status":"pass","issues":[],"explanation":"..."}.
@@ -11634,17 +12109,20 @@ SUMMARY:
 ${JSON.stringify(ctx.summary)}
 
 CONVERSATION STORE:
-${JSON.stringify(ctx.conversation_store)}${definition.transcript?'\n\nТРАНСКРИПЦИЯ:\n'+transcript:''}`;
-  const responseFormat={type:'json_schema',json_schema:{name:'summary_judge_'+definition.criterion,strict:true,schema:MODULE_GENERIC_JUDGE_JSON_SCHEMA}};
+${JSON.stringify(ctx.conversation_store)}${definition.criterion==='completeness'?'\n\nCLOSED EXPECTED ITEMS:\n'+JSON.stringify(closedExpectedItems):''}${definition.transcript?'\n\nТРАНСКРИПЦИЯ:\n'+transcript:''}`;
+  const formatInput={conversation_result:ctx.summary.conversation_result,key_facts:ctx.summary.key_facts,quotes:ctx.summary.quotes,next_step:ctx.summary.next_step,crm_attributes:customerNeedsValues(ctx),card_metadata:ctx.card_metadata||ctx.__card_metadata||{},diagnostics:ctx.summary_diagnostics||buildSummaryDiagnostics(ctx)};
+  const prompt=definition.criterion==='format'?MODULE_PRESENTATION_CHECK_PROMPT+'\n\nВХОДНЫЕ ДАННЫЕ:\n'+JSON.stringify(formatInput):genericPrompt;
+  const responseFormat={type:'json_schema',json_schema:{name:'summary_judge_'+definition.criterion,strict:true,schema:definition.criterion==='format'?MODULE_FORMAT_JUDGE_JSON_SCHEMA:MODULE_GENERIC_JUDGE_JSON_SCHEMA}};
   const promptHash=await hashPrompt(prompt);
   let raw='',tokens=0,actualModel=null,actualProvider=null,fallbackNote=null,networkRetryCount=0,networkRetryReason=null,parsed=null,parseErr=null,retryCount=0;
   const call=async(repair=false)=>{
     const requestPrompt=repair?summaryJudgeRepairPrompt(prompt,raw,parseErr):prompt;
     const result=await callModelWithTransientRetry(requestPrompt,stage.model,stage.provider,stage.temperature,stage.maxTokens,responseFormat,stageAllowsVendorFallback(stage));
     raw=result.text;tokens+=result.tokens||0;actualModel=result.actualModel;actualProvider=result.actualProvider;fallbackNote=result.fallbackNote;networkRetryCount+=result.networkRetryCount||0;networkRetryReason=networkRetryReason||result.networkRetryReason;
-    try{parsed=validateModuleGenericJudge(parseJSON(raw));parseErr=null;}catch(error){parsed=null;parseErr=error.message;}
+    try{parsed=definition.criterion==='format'?validateModuleFormatJudge(parseJSON(raw)):validateModuleGenericJudge(parseJSON(raw));parseErr=null;}catch(error){parsed=null;parseErr=error.message;}
   };
   try{await call();if(parseErr){retryCount=1;await call(true);}}catch(error){parseErr='Judge unavailable: '+String(error&&error.message||error);}
+  if(!parseErr) parsed=normalizeModuleGenericJudgeResult(definition,parsed,ctx);
   const output=parseErr
     ?{criterion:definition.criterion,score:null,status:'technical_error',issues:[],explanation:parseErr,evaluated:false}
     :{criterion:definition.criterion,...parsed,evaluated:true};
@@ -12371,7 +12849,10 @@ async function runPipeline(){
 
   for(let i=0;i<active.length;i++){
     const stage=active[i];
-    if(stage.codeFn==='crm') ctx.__crm_stage_execution_id=runId+':'+String(i+1).padStart(2,'0')+':'+stableHash({stage:stage.outKey,startedAt,model:stage.vendor||'code'});
+    if(stage.codeFn==='crm'){
+      ctx.summary_diagnostics=buildSummaryDiagnostics(ctx);
+      ctx.__crm_stage_execution_id=runId+':'+String(i+1).padStart(2,'0')+':'+stableHash({stage:stage.outKey,startedAt,model:stage.vendor||'code'});
+    }
     runStatus.textContent='шаг '+(i+1)+'/'+active.length+': '+stage.name;
     const card=renderRunning(stage);
     reportsEl.appendChild(card);
@@ -12833,7 +13314,12 @@ function renderReport(stage, rep, num){
   else if(moduleActionCheckStage&&rep.output){ body+=renderActionCheckPanel(rep.output); }
   else if(modulePresentationCheckStage&&rep.output){ body+=renderPresentationCheckPanel(rep.output); }
   else if(moduleCrmStage&&rep.output){ body+=renderModuleCrmPanel(rep.output); }
-  else if(moduleSummaryStage&&rep.output&&['GENERATED','MANUAL_REVIEW'].includes(rep.summary_metrics?.generation_status)){ body+=renderModuleSummaryResult(rep.output); }
+  else if(moduleSummaryStage&&rep.output&&['GENERATED','MANUAL_REVIEW'].includes(rep.summary_metrics?.generation_status)){
+    body+=renderModuleSummaryResult(rep.output)
+      +'<details class="help"><summary>Diagnostics до дедупликации</summary><div class="out">'+escapeHtml(JSON.stringify(rep.diagnostics_before_deduplication||{},null,2))+'</div></details>'
+      +'<details class="help"><summary>Удалённые дубли</summary><div class="out">'+escapeHtml(JSON.stringify(rep.removed_duplicates||[],null,2))+'</div></details>'
+      +'<details class="help"><summary>Diagnostics после дедупликации</summary><div class="out">'+escapeHtml(JSON.stringify(rep.diagnostics_after_deduplication||{},null,2))+'</div></details>';
+  }
   else if(moduleSummaryStage&&rep.output){ body+='<div class="out" style="color:var(--bad)">'+escapeHtml(JSON.stringify(rep.output,null,2))+'</div>'; }
   else if(summaryNewStage&&isSummaryNewTechnicalError(rep.output)){ body+='<div class="out" style="color:var(--bad)">Техническая ошибка: '+escapeHtml(meta.explanation)+'</div>'; }
   else if(rep.error){ body+='<div class="out" style="color:var(--bad)">Ошибка: '+escapeHtml(rep.error)+'</div>'; }
