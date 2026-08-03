@@ -57,7 +57,7 @@ function scenario(id: string) {
     primary_next_step: primary("приехать на просмотр к точке встречи у входа; связаться только при изменениях", "завтра в 19:00", "телефон", { owner: "оба", status: "confirmed" }),
   });
   if (id === "granddaughter") return store({
-    facts: [fact("goal", "client_goal", "Покупка квартиры для 17-летней внучки", undefined, { business_priority: "critical" }), fact("travel", "client_requirement", "Удобные поездки к вузу"), fact("legal", "client_requirement", "Юридическая чистота"), fact("bargain", "client_objection", "Нужна возможность торга")],
+    facts: [fact("goal", "client_goal", "Покупка квартиры для 17-летней внучки", undefined, { business_priority: "critical" }), fact("travel", "client_requirement", "Удобные поездки к вузу"), fact("legal", "client_requirement", "Юридическая чистота"), fact("bargain", "client_requirement", "Нужна возможность торга")],
     requirements: [requirement("type", "property_type", "студия или квартира"), requirement("area", "minimum_area", "от 25–26 м²"), requirement("budget", "price_limit", "до 9 млн ₽")],
     attributes: { interest: [], funding_source: attribute("cash", "наличные / депозит", "Оплата наличными"), purchase_term: {} },
     call_result: "Агент предложит альтернативные варианты.",
@@ -140,7 +140,7 @@ test("структурированное объединённое требова
     fact("location_l", "client_requirement", "Лаврики"),
   );
   const combinedLocation = data.conversation.requirements.find((item: Item) => item.id === "location");
-  if (combinedLocation) combinedLocation.confidence = 0.9;
+  if (combinedLocation) { combinedLocation.confidence = 0.9; combinedLocation.priority = "preferred"; }
   const context = await build(page, data);
   const text = normalize(context.critical_requirements.map((item: Item) => item.value).join(" "));
   expect(text).toContain("мистолово, капитолово, лаврики");

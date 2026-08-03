@@ -7472,7 +7472,7 @@ function canonicalSummarySlot(sourceType,value,item={}){
   if(type==='primary next step') return 'primary_next_step';
   if(/client goal|client context|client need/.test(type)) return 'client_context';
   if(/client finance|client timing|price limit|budget|funding source|purchase term/.test(type)) return 'financial_context';
-  if(/client objection/.test(type)||/(?:смуща|возраж|не устраива|отказ|слишком дорог|сомнен)/.test(text)) return 'objections';
+  if(/client objection/.test(type)||/(?:смуща|возраж|не устраива|отказ|слишком дорог|сомнен|возможност[а-я]* торг|нужен торг|торг обязател)/.test(text)) return 'objections';
   if(/open question/.test(type)) return ['answered'].includes(String(item.question_status||''))?'important_agent_information':'open_questions';
   if(/agent information/.test(type)) return 'important_agent_information';
   if(/agent commitment|agreement/.test(type)) return 'important_agent_information';
@@ -7507,7 +7507,7 @@ function canonicalSummaryComponents(baseScore,slot,item,value){
   return {workValue,decisionImpact,criticality,confidenceScore,uniqueness};
 }
 function canonicalSummaryAdjustments(slot,item,value,evidence,quoteSupport=false){
-  const text=moduleSummaryNorm(value),adjustments=[];
+  const text=moduleSummaryNorm(value),sourceType=moduleSummaryNorm(item&&item.type||''),adjustments=[];
   const add=(code,delta,reason)=>adjustments.push({code,delta,reason});
   if(['objections','critical_requirements','financial_context'].includes(slot)) add('DECISION_IMPACT',20,'Напрямую влияет на решение клиента.');
   if(String(item&&item.priority||item&&item.business_priority||'')==='required'||/(?:обязател|не меньше|только если|не подходит)/.test(text)) add('REQUIRED_CONDITION',15,'Клиент обозначил обязательное условие.');
@@ -7516,6 +7516,7 @@ function canonicalSummaryAdjustments(slot,item,value,evidence,quoteSupport=false
   if(['primary_next_step','open_questions'].includes(slot)||/agent commitment|agreement/.test(moduleSummaryNorm(item&&item.type||''))) add('AGENT_ACTION_REQUIRED',10,'Требует действия агента.');
   if(evidence.length>1)add('MULTIPLE_EVIDENCE',10,'Подтверждено несколькими независимыми источниками.');
   if(quoteSupport)add('QUALITY_QUOTE',5,'Есть самостоятельная значимая цитата клиента.');
+  if(/property type/.test(sourceType))add('BROAD_PROPERTY_TYPE',-30,'Общий тип объекта уступает более конкретным ограничениям при заполнении лимитированного слота.');
   if(canonicalSummaryConfidence(item&&item.confidence)<.7)add('LOW_CONFIDENCE',-15,'Confidence ниже безопасного порога.');
   if(moduleSummaryTokens(value).length<2)add('TOO_GENERAL',-15,'Факт слишком общий или неконкретный.');
   return adjustments;
@@ -7610,7 +7611,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
     });
   }catch(error){technical_error=true;warnings.push({code:'CANDIDATE_COLLECTION_WARNING',message:String(error&&error.message||error)});}
   const merged=[];
-  candidates.slice().sort((a,b)=>b.base_score-a.base_score||canonicalSummarySelectionPriority(b)-canonicalSummarySelectionPriority(a)||b.confidence-a.confidence||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
+  candidates.slice().sort((a,b)=>canonicalSummarySelectionPriority(b)-canonicalSummarySelectionPriority(a)||b.base_score-a.base_score||b.confidence-a.confidence||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
     const existing=merged.find(item=>item.target_slot===candidate.target_slot&&canonicalSummaryDuplicate(item,candidate));
     if(!existing){merged.push(candidate);return;}
     existing.source_ids=[...new Set([...existing.source_ids,...candidate.source_ids])];existing.evidence=[...new Set([...existing.evidence,...candidate.evidence])];existing.confidence=Math.max(existing.confidence,candidate.confidence);existing.canonical_attribute=existing.canonical_attribute||candidate.canonical_attribute;
