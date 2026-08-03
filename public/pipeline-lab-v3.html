@@ -7547,6 +7547,7 @@ function canonicalSummaryMeaningCovered(item,selected){
     const kept=moduleSummaryNorm(candidate&&candidate.value);if(!kept)return false;
     const itemNumbers=value.match(/\b\d+(?:[.,]\d+)?\b/g)||[],keptNumbers=kept.match(/\b\d+(?:[.,]\d+)?\b/g)||[];
     if(itemNumbers.length&&itemNumbers.some(number=>!keptNumbers.includes(number)))return false;
+    if(itemNumbers.length&&itemNumbers.every(number=>keptNumbers.includes(number)))return true;
     return kept===value||kept.includes(value)&&value.length>=minimumLength;
   });
 }
@@ -7609,7 +7610,7 @@ function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
     });
   }catch(error){technical_error=true;warnings.push({code:'CANDIDATE_COLLECTION_WARNING',message:String(error&&error.message||error)});}
   const merged=[];
-  candidates.slice().sort((a,b)=>b.base_score-a.base_score||b.confidence-a.confidence||canonicalSummarySelectionPriority(b)-canonicalSummarySelectionPriority(a)||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
+  candidates.slice().sort((a,b)=>b.base_score-a.base_score||canonicalSummarySelectionPriority(b)-canonicalSummarySelectionPriority(a)||b.confidence-a.confidence||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
     const existing=merged.find(item=>item.target_slot===candidate.target_slot&&canonicalSummaryDuplicate(item,candidate));
     if(!existing){merged.push(candidate);return;}
     existing.source_ids=[...new Set([...existing.source_ids,...candidate.source_ids])];existing.evidence=[...new Set([...existing.evidence,...candidate.evidence])];existing.confidence=Math.max(existing.confidence,candidate.confidence);existing.canonical_attribute=existing.canonical_attribute||candidate.canonical_attribute;

@@ -139,6 +139,8 @@ test("структурированное объединённое требова
     fact("location_k", "client_requirement", "Капитолово"),
     fact("location_l", "client_requirement", "Лаврики"),
   );
+  const combinedLocation = data.conversation.requirements.find((item: Item) => item.id === "location");
+  if (combinedLocation) combinedLocation.confidence = 0.9;
   const context = await build(page, data);
   const text = normalize(context.critical_requirements.map((item: Item) => item.value).join(" "));
   expect(text).toContain("мистолово, капитолово, лаврики");
