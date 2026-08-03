@@ -111,6 +111,22 @@ function exactNextStepDuplicated(conversationResult: string, nextStep: string): 
   return details.length > 0 && details.every((item) => result.includes(item)) && overlap(result, nextStep) >= 0.75;
 }
 
+function compactConversationResult(nextStep: string): string {
+  const value = normalized(nextStep);
+  if (/(?:просмотр|встрет)/u.test(value)) return "Просмотр согласован.";
+  if (/(?:документ)/u.test(value)) return "Отправка документов согласована.";
+  if (/(?:перезвон|повторн\S* звон|позвон)/u.test(value)) return "Договорились о повторном звонке.";
+  if (/(?:подбор|вариант)/u.test(value)) return "Отправка подборки согласована.";
+  if (/(?:видео|материал)/u.test(value)) return "Отправка материалов согласована.";
+  return "Следующий шаг согласован.";
+}
+
+function meaningDuplicatesNextStep(meaning: SummaryPlanMeaning, nextMeaning: SummaryPlanMeaning | undefined): boolean {
+  if (!nextMeaning || meaning.meaningId === nextMeaning.meaningId) return false;
+  return exactNextStepDuplicated(meaning.text, nextMeaning.text)
+    || overlap(meaning.text, nextMeaning.text) >= 0.8;
+}
+
 export function applySummaryPlanAndValidate(
   generated: SummaryV3,
   plan: SummaryPlanV3,
@@ -139,7 +155,7 @@ export function applySummaryPlanAndValidate(
         && protectedTokens(nextMeaning.text).every((item) => current.includes(item))
         && overlap(current, nextMeaning.text) >= 0.75);
     });
-    conversationResult = kept.join(" ").trim() || renderConversationResult(requiredResult);
+    conversationResult = kept.join(" ").trim() || compactConversationResult(nextMeaning.text);
     transformations.push({
       ruleId: "summary.exclusive-next-step.v1",
       fieldPath: "conversation_result",
@@ -172,6 +188,7 @@ export function applySummaryPlanAndValidate(
   }
 
   for (const meaning of requiredResult) {
+    if (meaningDuplicatesNextStep(meaning, nextMeaning)) continue;
     if (meaningCovered(candidate, meaning)) continue;
     const suffix = meaning.text.replace(/[.!?\s]+$/u, "");
     candidate = { ...candidate, conversation_result: `${candidate.conversation_result.replace(/\s+$/u, "")} ${suffix}.`.trim() };
@@ -179,7 +196,9 @@ export function applySummaryPlanAndValidate(
   }
 
   const required = plan.meanings.filter((item) => item.required);
-  const missingMeaningIds = required.filter((item) => !meaningCovered(candidate, item)).map((item) => item.meaningId);
+  const missingMeaningIds = required
+    .filter((item) => !meaningCovered(candidate, item) && !meaningDuplicatesNextStep(item, nextMeaning))
+    .map((item) => item.meaningId);
   const duplicatedMeaningIds = plan.meanings.filter((meaning) => meaning.exclusive && (() => {
     const blocks = (["conversation_result", "key_facts", "next_step", "quotes"] as const).filter((block) => {
       if (block === meaning.block) return false;

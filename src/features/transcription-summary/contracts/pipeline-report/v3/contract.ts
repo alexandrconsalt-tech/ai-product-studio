@@ -22,6 +22,8 @@ const ValidationResultSchema = z.object({
 
 const ProviderDiagnosticSchema = z.object({
   request_dispatched: z.boolean(),
+  provider: z.enum(["AITUNNEL", "OPENAI_COMPATIBLE"]),
+  base_url: NonEmptyStringSchema,
   endpoint: NonEmptyStringSchema,
   model: NonEmptyStringSchema,
   schema_id: NonEmptyStringSchema,
@@ -109,6 +111,9 @@ export const PipelineStageReportV3Schema = z.object({
   }).strict(),
   provider_diagnostic: ProviderDiagnosticSchema.nullable(),
   attempts: z.number().int().nonnegative(),
+  repair_attempted: z.boolean(),
+  raw_provider_response: z.json().nullable(),
+  timeout_stage: NonEmptyStringSchema.nullable(),
   validation_result: ValidationResultSchema,
   transformations: z.array(TransformationSchema),
   agent_output: z.json().nullable(),
@@ -179,6 +184,9 @@ const validStage = {
   structured_output: { required: false, requested: false, applied: false },
   provider_diagnostic: null,
   attempts: 0,
+  repair_attempted: false,
+  raw_provider_response: null,
+  timeout_stage: null,
   validation_result: { status: "valid", issues: [] },
   transformations: [],
   agent_output: null,

@@ -71,6 +71,19 @@ export const SummaryJudgeFindingV3Schema = z.object({
   storeItemIds: z.array(IdentifierSchema).min(1).optional(),
 }).strict();
 
+export const SummaryJudgeProviderViolationV3Schema = z.object({
+  code: NonEmptyStringSchema,
+  severity: z.enum(["low", "medium", "high", "critical"]),
+  description: NonEmptyStringSchema,
+}).strict();
+
+export const SummaryJudgeProviderOutputV3Schema = z.object({
+  score: z.number().int().min(0).max(100),
+  decision: z.enum(["PASS", "NEEDS_REWORK", "FAIL", "TECHNICAL_ERROR"]),
+  summary: NonEmptyStringSchema,
+  violations: z.array(SummaryJudgeProviderViolationV3Schema),
+}).strict();
+
 const SummaryJudgeEvidenceV3Schema = z.object({
   statement: NonEmptyStringSchema,
   sourceTurnIds: z.array(IdentifierSchema).min(1).optional(),
@@ -310,7 +323,7 @@ export const SummaryJudgeV3Contract = defineContract({
   stageId: "summary_judges",
   description: "Five independent Summary Judges with a criterion-discriminated payload and source provenance.",
   validator: SummaryJudgeV3Schema,
-  transportValidator: SummaryJudgeV3TransportSchema,
+  transportValidator: SummaryJudgeProviderOutputV3Schema,
   canonicalEnums: [
     ...SUMMARY_CRITERIA,
     ...SUMMARY_JUDGE_VERDICTS,
@@ -521,5 +534,6 @@ export const DeprecatedSummaryJudgeV3_0Contract = defineContract({
 });
 
 export type SummaryJudgeFindingV3 = z.infer<typeof SummaryJudgeFindingV3Schema>;
+export type SummaryJudgeProviderOutputV3 = z.infer<typeof SummaryJudgeProviderOutputV3Schema>;
 export type SummaryJudgeV3 = z.infer<typeof SummaryJudgeV3Schema>;
 export type DeprecatedSummaryJudgeV3_0 = z.infer<typeof DeprecatedSummaryJudgeV3_0Schema>;

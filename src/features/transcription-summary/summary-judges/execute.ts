@@ -23,12 +23,13 @@ import {
   SUMMARY_JUDGE_PROMPTS,
   type SummaryJudgeResolvedPromptV3,
 } from "./prompt-builders";
-import { validateSummaryJudgeVerdict } from "./post-validation";
+import { adaptSummaryJudgeProviderOutput } from "./post-validation";
 
 export type SummaryJudgeExecutionErrorCode =
   | SummaryJudgeInputErrorCode
   | "STRUCTURED_OUTPUT_UNAVAILABLE"
-  | "SUMMARY_JUDGE_OUTPUT_INVALID"
+  | "SUMMARY_JUDGE_SCHEMA_MISMATCH"
+  | "SUMMARY_JUDGE_CONTRACT_INVARIANT_FAILED"
   | "SUMMARY_JUDGE_PROVIDER_ERROR"
   | "SUMMARY_JUDGE_TECHNICAL_ERROR"
   | StructuredOutputErrorCode;
@@ -52,12 +53,18 @@ export type SummaryJudgeDiagnosticV3 = Readonly<{
   structuredOutputApplied: boolean;
   attemptCount: number;
   repairAttempted: boolean;
-  rawScore: 0 | 25 | 50 | 75 | 100 | null;
+  rawScore: number | null;
   score: 0 | 25 | 50 | 75 | 100 | null;
   confidence: number | null;
   verdict: SummaryJudgeV3["verdict"] | null;
   validationStatus: "valid" | "invalid" | "not_run";
   providerDiagnostic: SafeProviderDiagnostic | null;
+  rawProviderResponse: unknown | null;
+  validationIssues: readonly Readonly<{
+    path: string;
+    code: string;
+    message: string;
+  }>[];
   errorType: "dependency_error" | "provider_error" | "validation_error" | "judge_technical_error" | null;
   errorCode: SummaryJudgeExecutionErrorCode | null;
   durationMs: number;
@@ -87,7 +94,7 @@ function structuredErrorCode(code: string): SummaryJudgeExecutionErrorCode {
     return "STRUCTURED_OUTPUT_UNAVAILABLE";
   }
   if (code === "SCHEMA_VALIDATION_ERROR" || code === "JSON_DECODE_ERROR") {
-    return "SUMMARY_JUDGE_OUTPUT_INVALID";
+    return "SUMMARY_JUDGE_SCHEMA_MISMATCH";
   }
   return code as StructuredOutputErrorCode;
 }
@@ -101,6 +108,7 @@ export async function executeSummaryJudgeV3(input: {
   provider: string;
   model: string;
   transport: StructuredProviderTransport;
+  timeoutMs?: number;
 }): Promise<ExecuteSummaryJudgeV3Result> {
   const startedAt = Date.now();
   const promptIdentity = SUMMARY_JUDGE_PROMPTS[input.criterion];
@@ -129,6 +137,8 @@ export async function executeSummaryJudgeV3(input: {
     verdict: null,
     validationStatus: "not_run" as const,
     providerDiagnostic: null,
+    rawProviderResponse: null,
+    validationIssues: [],
   };
   const built = buildSummaryJudgeInput({
     manifest: input.manifest,
@@ -164,6 +174,8 @@ export async function executeSummaryJudgeV3(input: {
       provider: input.provider,
       model: input.model,
       transport: input.transport,
+      timeoutMs: input.timeoutMs ?? 45_000,
+      transportOutputOnly: true,
     });
   } catch (error) {
     return {
@@ -211,7 +223,13 @@ export async function executeSummaryJudgeV3(input: {
         repairAttempted: completion.diagnostic.repairAttempted,
         validationStatus: completion.diagnostic.validationStatus,
         providerDiagnostic: completion.diagnostic.providerDiagnostic,
-        errorType: errorCode === "SUMMARY_JUDGE_OUTPUT_INVALID"
+        rawProviderResponse: completion.rawResponse ?? null,
+        validationIssues: completion.diagnostic.validationIssues.map((issue) => ({
+          path: issue.path,
+          code: issue.issueCode,
+          message: issue.message,
+        })),
+        errorType: errorCode === "SUMMARY_JUDGE_SCHEMA_MISMATCH"
           ? "validation_error"
           : "provider_error",
         errorCode,
@@ -220,7 +238,7 @@ export async function executeSummaryJudgeV3(input: {
     };
   }
 
-  const validated = validateSummaryJudgeVerdict(
+  const validated = adaptSummaryJudgeProviderOutput(
     built.value,
     input.criterion,
     completion.value,
@@ -243,6 +261,12 @@ export async function executeSummaryJudgeV3(input: {
         repairAttempted: completion.diagnostic.repairAttempted,
         validationStatus: "invalid",
         providerDiagnostic: completion.diagnostic.providerDiagnostic,
+        rawProviderResponse: completion.rawResponse,
+        validationIssues: [{
+          path: `summary_judge.${input.criterion}`,
+          code: validated.error.errorCode,
+          message: validated.error.message,
+        }],
         errorType: "validation_error",
         errorCode: validated.error.errorCode,
         durationMs: Date.now() - startedAt,
@@ -273,6 +297,8 @@ export async function executeSummaryJudgeV3(input: {
       verdict: validated.value.verdict,
       validationStatus: "valid",
       providerDiagnostic: completion.diagnostic.providerDiagnostic,
+      rawProviderResponse: null,
+      validationIssues: [],
       errorType: judgeTechnical ? "judge_technical_error" : null,
       errorCode: judgeTechnical ? "SUMMARY_JUDGE_TECHNICAL_ERROR" : null,
       durationMs: Date.now() - startedAt,
@@ -289,9 +315,8 @@ export async function executeFiveSummaryJudgesV3(input: {
   model: string;
   transports: Readonly<Record<SummaryCriterionV3, StructuredProviderTransport>>;
 }): Promise<Readonly<Record<SummaryCriterionV3, ExecuteSummaryJudgeV3Result>>> {
-  const results = {} as Record<SummaryCriterionV3, ExecuteSummaryJudgeV3Result>;
-  for (const criterion of SUMMARY_CRITERIA) {
-    results[criterion] = await executeSummaryJudgeV3({
+  const settled = await Promise.allSettled(SUMMARY_CRITERIA.map((criterion) =>
+    executeSummaryJudgeV3({
       manifest: input.manifest,
       conversationStore: input.conversationStore,
       summary: input.summary,
@@ -300,7 +325,57 @@ export async function executeFiveSummaryJudgesV3(input: {
       provider: input.provider,
       model: input.model,
       transport: input.transports[criterion],
-    });
-  }
+      timeoutMs: 45_000,
+    })
+  ));
+  const results = {} as Record<SummaryCriterionV3, ExecuteSummaryJudgeV3Result>;
+  settled.forEach((item, index) => {
+    const criterion = SUMMARY_CRITERIA[index];
+    if (item.status === "fulfilled") {
+      results[criterion] = item.value;
+      return;
+    }
+    const identity = SUMMARY_JUDGE_PROMPTS[criterion];
+    results[criterion] = {
+      ok: false,
+      disposition: "TECHNICAL_ERROR",
+      error: {
+        status: "TECHNICAL_ERROR",
+        errorCode: "SUMMARY_JUDGE_PROVIDER_ERROR",
+        message: item.reason instanceof Error ? item.reason.message : String(item.reason),
+      },
+      diagnostic: {
+        stageId: `summary_judge_${criterion}`,
+        criterion,
+        inputContractId: "summary.judge.input.v3",
+        inputContractVersion: "3.0.0",
+        outputContractId: "summary.judge.verdict.v3",
+        outputContractVersion: "3.1.0",
+        manifestHash: input.manifest.manifestHash,
+        storeId: null,
+        storeContentHash: null,
+        summaryHash: null,
+        promptId: identity.id,
+        promptVersion: identity.version,
+        promptHash: null,
+        schemaHash: SummaryJudgeV3Contract.schemaHash,
+        structuredOutputRequested: false,
+        structuredOutputApplied: false,
+        attemptCount: 0,
+        repairAttempted: false,
+        rawScore: null,
+        score: null,
+        confidence: null,
+        verdict: null,
+        validationStatus: "invalid",
+        providerDiagnostic: null,
+        rawProviderResponse: null,
+        validationIssues: [{ path: `summary_judge.${criterion}`, code: "UNHANDLED_JUDGE_ERROR", message: "Judge execution rejected unexpectedly." }],
+        errorType: "provider_error",
+        errorCode: "SUMMARY_JUDGE_PROVIDER_ERROR",
+        durationMs: 0,
+      },
+    };
+  });
   return Object.freeze(results);
 }

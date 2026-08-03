@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SUMMARY_JUDGE_PAYLOAD_FIXTURES } from "../contracts/summary-judges/v3/contract";
 import type { SummaryCriterionV3 } from "../contracts/summary-judge-input/v3/contract";
 import type { StructuredProviderTransport } from "../runtime/structured-output";
-import { calculateSummaryContentHash } from "../summary-judges/input-builder";
 import { InMemoryCrmPublicationRepositoryV3 } from "../crm-publication";
 import { executeTranscriptionSummaryV3Pipeline } from "./execute";
 import { RuntimeTranscriptionSummaryV3StageExecutor } from "./runtime-executor";
@@ -165,13 +163,6 @@ function extracted(item: Case) {
   };
 }
 
-function jsonBetween(prompt: string, start: string, end: string): unknown {
-  const from = prompt.indexOf(start);
-  const to = prompt.indexOf(end, from + start.length);
-  if (from < 0 || to < 0) throw new Error(`Prompt section missing: ${start}`);
-  return JSON.parse(prompt.slice(from + start.length, to).trim());
-}
-
 function transportFor(item: Case): StructuredProviderTransport {
   const values = extracted(item);
   return async (request) => {
@@ -188,27 +179,12 @@ function transportFor(item: Case): StructuredProviderTransport {
       };
     } else if (request.schemaId === "summary.judge.verdict.v3") {
       const criterion = request.prompt.match(/ONLY CRITERION: (\w+)/u)?.[1] as SummaryCriterionV3;
-      const store = jsonBetween(request.prompt, "INPUT STORE\n", "\n\nINPUT SUMMARY") as { meta: { store_id: string }; content_hash: string; attributes: Record<string, unknown> };
-      const summary = jsonBetween(request.prompt, "INPUT SUMMARY\n", "\n\nTRANSCRIPT CONTEXT");
       const rawFundingFalsePositive = criterion === "completeness" && item.funding;
-      const finding = { code: "missing_financial_context", severity: "medium", message: "В Summary отсутствует источник средств клиента." } as const;
       structuredValue = {
-        criterion,
-        verdict: rawFundingFalsePositive ? "fail" : "pass",
         score: rawFundingFalsePositive ? 50 : 100,
-        confidence: 1,
-        issues: rawFundingFalsePositive ? [finding] : [],
-        evidence: [],
-        payload: rawFundingFalsePositive
-          ? { ...SUMMARY_JUDGE_PAYLOAD_FIXTURES.completeness, missingFinancialContext: [finding] }
-          : SUMMARY_JUDGE_PAYLOAD_FIXTURES[criterion],
-        metadata: {
-          sourceStoreId: store.meta.store_id,
-          sourceStoreHash: store.content_hash,
-          sourceSummaryHash: calculateSummaryContentHash(summary),
-          contractVersion: "3.1.0",
-          promptVersion: `summary-judge-${criterion === "agreements_next_step" ? "agreements-next-step" : criterion}-v3.0.0`,
-        },
+        decision: rawFundingFalsePositive ? "FAIL" : "PASS",
+        summary: rawFundingFalsePositive ? "В Summary отсутствует источник средств клиента." : "Критерий выполнен.",
+        violations: rawFundingFalsePositive ? [{ code: "missing_financial_context", severity: "medium", description: "В Summary отсутствует источник средств клиента." }] : [],
       };
     } else throw new Error(`Unexpected Structured Output contract: ${request.schemaId}`);
     return {

@@ -4,15 +4,15 @@ import { AI_SUMMARY_V3_PIPELINE_VERSION } from "../contracts/constants";
 import { TranscriptV3Schema } from "../contracts/transcript/v3/contract";
 import { InMemoryCrmPublicationRepositoryV3 } from "../crm-publication";
 import { FactsV3Contract } from "../contracts/facts/v3/contract";
-import { NeedsV3Contract } from "../contracts/needs/v3/contract";
+import { NeedsV3Contract, NeedsV3Schema } from "../contracts/needs/v3/contract";
 import type { PipelineExecutionContext } from "./types";
 import { RuntimeTranscriptionSummaryV3StageExecutor } from "./runtime-executor";
 
-function context(outputs: PipelineExecutionContext["outputs"]): PipelineExecutionContext {
+function context(outputs: PipelineExecutionContext["outputs"], text = "Деньги на счету."): PipelineExecutionContext {
   const transcript = TranscriptV3Schema.parse({
     transcript_id: "transcript-runtime-executor-test",
     turns: [
-      { id: "turn-1", sequence: 1, speaker: "client", text: "Деньги на счету.", started_at_ms: null, ended_at_ms: null },
+      { id: "turn-1", sequence: 1, speaker: "client", text, started_at_ms: null, ended_at_ms: null },
     ],
     metadata: { run_id: "run-runtime-executor-test", sha256: "a".repeat(64) },
     validation_warnings: [],
@@ -23,6 +23,7 @@ function context(outputs: PipelineExecutionContext["outputs"]): PipelineExecutio
     transcriptHash: "a".repeat(64),
     manifest: createContractManifest(AI_SUMMARY_V3_PIPELINE_VERSION),
     outputs,
+    deadlineAtMs: Date.now() + 240_000,
   };
 }
 
@@ -82,5 +83,22 @@ describe("v3 runtime executor dependencies", () => {
     expect(prompts[0]).not.toContain("call_results всегда массив");
     expect(prompts[0]).not.toContain("facts_verified");
     expect(prompts[0]).not.toContain("needs_verified");
+  });
+
+  it("короткий callback-звонок получает валидный empty Needs вместо schema error", async () => {
+    const result = await executor([]).execute("needs_agent", context({
+      facts_agent: FactsV3Contract.validator.parse(FactsV3Contract.fixtures.valid),
+    }, "Сейчас неудобно, перезвоните сегодня после 18:00."));
+    expect(result.status).toBe("SUCCESS_WITH_WARNING");
+    expect(NeedsV3Schema.parse(result.value)).toMatchObject({
+      business_needs: [],
+      property_requirements: [],
+      structured_crm_attributes: {
+        interested_in: [],
+        funding_source: { value: "не определено" },
+        purchase_term: { value: "не определено" },
+      },
+    });
+    expect(result.audit.errorCode).toBeNull();
   });
 });

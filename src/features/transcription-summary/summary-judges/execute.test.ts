@@ -17,10 +17,22 @@ function successTransport(
   return async (request) => {
     attempt += 1;
     requests.push(request);
+    const raw = typeof value === "function" ? value(attempt) : value;
+    const candidate = raw && typeof raw === "object" && "criterion" in raw && "score" in raw
+      ? raw as { score: number | null; verdict: string; issues?: { code: string; severity: string; message: string }[] }
+      : null;
+    const structuredValue = candidate ? {
+      score: candidate.score ?? 0,
+      decision: candidate.verdict === "pass" ? "PASS"
+        : candidate.verdict === "warning" ? "NEEDS_REWORK"
+          : candidate.verdict === "technical_error" ? "TECHNICAL_ERROR" : "FAIL",
+      summary: "Controlled Judge result.",
+      violations: (candidate.issues ?? []).map((item) => ({ code: item.code, severity: item.severity, description: item.message })),
+    } : raw;
     return {
       ok: true,
       rawResponse: { request_id: `mock-${attempt}` },
-      structuredValue: typeof value === "function" ? value(attempt) : value,
+      structuredValue,
       attestation: {
         requested: true,
         forwarded: true,
@@ -74,7 +86,11 @@ describe("criterion-specific Structured Output execution", () => {
       expect(requests).toHaveLength(1);
       expect(requests[0].prompt).toContain(`ONLY CRITERION: ${criterion}`);
       expect(requests[0].responseFormat.type).toBe("json_schema");
-      expect(requests[0].responseFormat.json_schema.schema).toBeTruthy();
+      expect(requests[0].responseFormat.json_schema.schema).toMatchObject({
+        type: "object",
+        additionalProperties: false,
+        required: ["score", "decision", "summary", "violations"],
+      });
     }
   });
 
@@ -141,8 +157,12 @@ describe("criterion-specific Structured Output execution", () => {
     );
     expect(failed).toMatchObject({
       ok: false,
-      error: { errorCode: "SUMMARY_JUDGE_OUTPUT_INVALID" },
-      diagnostic: { attemptCount: 2, repairAttempted: true },
+      error: { errorCode: "SUMMARY_JUDGE_SCHEMA_MISMATCH" },
+      diagnostic: {
+        attemptCount: 2,
+        repairAttempted: true,
+        rawProviderResponse: { request_id: "mock-2" },
+      },
     });
     expect(failedRequests).toHaveLength(2);
   });
@@ -165,7 +185,7 @@ describe("criterion-specific Structured Output execution", () => {
     });
     expect(result).toMatchObject({
       ok: false,
-      error: { errorCode: "SUMMARY_JUDGE_OUTPUT_INVALID" },
+      error: { errorCode: "SUMMARY_JUDGE_SCHEMA_MISMATCH" },
     });
     expect(calls).toBe(2);
   });

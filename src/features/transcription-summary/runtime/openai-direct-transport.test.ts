@@ -119,6 +119,30 @@ describe("Direct OpenAI transport diagnostics", () => {
     });
   });
 
+  it("aborts an individual request at its stage timeout", async () => {
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      })
+    );
+    const startedAt = Date.now();
+    const result = await createOpenAiDirectTransport({
+      environment: { OPENAI_API_KEY: "test-secret" },
+      fetchImpl,
+      timeoutMs: 60_000,
+    })({ ...request, timeoutMs: 5 });
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "OPENAI_TIMEOUT",
+      providerDiagnostic: { errorCategory: "timeout" },
+    });
+  });
+
   it("dispatches Chat Completions Structured Output and records usage and duration", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       await new Promise((resolve) => setTimeout(resolve, 5));

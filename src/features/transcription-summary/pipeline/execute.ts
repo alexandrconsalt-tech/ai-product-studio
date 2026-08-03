@@ -48,6 +48,8 @@ const SUMMARY_JUDGES = new Set<TranscriptionSummaryV3StageId>([
   "summary_judge_format",
 ]);
 
+const PIPELINE_TIMEOUT_MS = 235_000;
+
 function stageReport(input: {
   stageId: TranscriptionSummaryV3StageId;
   status: PipelineStageStatus;
@@ -79,6 +81,11 @@ function stageReport(input: {
     },
     provider_diagnostic: input.audit.providerDiagnostic ?? null,
     attempts: input.audit.attempts ?? 0,
+    repair_attempted: input.audit.repairAttempted ?? false,
+    raw_provider_response: input.audit.rawProviderResponse === undefined
+      ? null
+      : JSON.parse(JSON.stringify(input.audit.rawProviderResponse)) as never,
+    timeout_stage: input.audit.timeoutStage ?? null,
     validation_result: {
       status: input.audit.validationStatus ?? (
         input.status === "NOT_RUN" ? "not_run" : input.status === "TECHNICAL_ERROR" ? "invalid" : "valid"
@@ -171,6 +178,7 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
 }): Promise<ExecuteTranscriptionSummaryV3PipelineResult> {
   const now = input.now ?? (() => new Date());
   const startedAt = now();
+  const deadlineAtMs = startedAt.getTime() + PIPELINE_TIMEOUT_MS;
   const runId = input.runId ?? `run-${randomUUID()}`;
   const manifest = createContractManifest(AI_SUMMARY_V3_PIPELINE_VERSION);
   const rawTranscript = input.transcript && typeof input.transcript === "object"
@@ -231,24 +239,22 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
     TranscriptionSummaryV3StageId,
     "transcript_validation"
   >[];
-  for (const stageId of executableStages) {
-    if (blockedBy) {
-      reports.push(notRunReport(stageId, manifest, blockedBy));
-      continue;
-    }
+  const executeStage = async (
+    stageId: Exclude<TranscriptionSummaryV3StageId, "transcript_validation">,
+  ): Promise<PipelineStageExecution> => {
     const context: PipelineExecutionContext = {
       runId,
       transcript: parsedTranscript.data,
       transcriptHash,
       manifest,
       outputs,
+      deadlineAtMs,
     };
-    let execution: PipelineStageExecution;
     try {
-      execution = await input.executor.execute(stageId, context);
-    } catch {
+      return await input.executor.execute(stageId, context);
+    } catch (error) {
       const reference = manifest.contracts[STAGE_ROLE[stageId]];
-      execution = {
+      return {
         status: "TECHNICAL_ERROR",
         value: null,
         audit: {
@@ -256,11 +262,53 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
           contractVersion: reference.version,
           schemaHash: reference.schemaHash,
           errorType: "provider",
-          errorCode: "UNHANDLED_STAGE_ERROR",
-          blocking: true,
+          errorCode: error instanceof Error && error.name === "AbortError"
+            ? "STAGE_TIMEOUT"
+            : "UNHANDLED_STAGE_ERROR",
+          blocking: !SUMMARY_JUDGES.has(stageId),
         },
       };
     }
+  };
+
+  for (let index = 0; index < executableStages.length; index += 1) {
+    const stageId = executableStages[index];
+    if (blockedBy) {
+      reports.push(notRunReport(stageId, manifest, blockedBy));
+      continue;
+    }
+    if (SUMMARY_JUDGES.has(stageId)) {
+      const judgeStages = executableStages.slice(index, index + SUMMARY_JUDGES.size);
+      const settled = await Promise.allSettled(judgeStages.map(executeStage));
+      settled.forEach((item, judgeIndex) => {
+        const judgeStageId = judgeStages[judgeIndex];
+        const reference = manifest.contracts[STAGE_ROLE[judgeStageId]];
+        const execution: PipelineStageExecution = item.status === "fulfilled" ? item.value : {
+          status: "TECHNICAL_ERROR",
+          value: null,
+          audit: {
+            contractId: reference.id,
+            contractVersion: reference.version,
+            schemaHash: reference.schemaHash,
+            validationStatus: "invalid",
+            errorType: "provider",
+            errorCode: "UNHANDLED_JUDGE_ERROR",
+            blocking: false,
+          },
+        };
+        outputs[judgeStageId] = execution.value;
+        reports.push(stageReport({
+          stageId: judgeStageId,
+          status: execution.status,
+          audit: execution.audit,
+          manifest,
+          value: execution.value,
+        }));
+      });
+      index += judgeStages.length - 1;
+      continue;
+    }
+    const execution = await executeStage(stageId);
     outputs[stageId] = execution.value;
     reports.push(stageReport({
       stageId,

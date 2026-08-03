@@ -117,7 +117,7 @@ describe("Summary Judge v3 discriminated output and formal post-validation", () 
       fixture.input,
       "faithfulness",
       { ...fixture.verdict, criterion: "format" },
-    )).toMatchObject({ ok: false, error: { errorCode: "SUMMARY_JUDGE_OUTPUT_INVALID" } });
+    )).toMatchObject({ ok: false, error: { errorCode: "SUMMARY_JUDGE_CONTRACT_INVARIANT_FAILED" } });
     expect(validateSummaryJudgeVerdict(
       fixture.input,
       "faithfulness",
@@ -170,7 +170,7 @@ describe("Summary Judge v3 discriminated output and formal post-validation", () 
         fixture.input,
         "agreements_next_step",
         candidate,
-      )).toMatchObject({ ok: false, error: { errorCode: "SUMMARY_JUDGE_OUTPUT_INVALID" } });
+      )).toMatchObject({ ok: false, error: { errorCode: "SUMMARY_JUDGE_CONTRACT_INVARIANT_FAILED" } });
     }
   });
 

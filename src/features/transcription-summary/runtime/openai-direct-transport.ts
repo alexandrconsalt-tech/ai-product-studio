@@ -37,6 +37,14 @@ function chatCompletionsEndpoint(environment: OpenAiEnvironment): string {
   return `${configuredBaseUrl(environment)}/chat/completions`;
 }
 
+function providerIdentity(endpoint: string): Pick<SafeProviderDiagnostic, "providerName" | "baseUrl"> {
+  const url = new URL(endpoint);
+  return {
+    providerName: url.hostname.toLowerCase() === "api.aitunnel.ru" ? "AITUNNEL" : "OPENAI_COMPATIBLE",
+    baseUrl: `${url.origin}${url.pathname.replace(/\/chat\/completions\/?$/u, "")}`.replace(/\/+$/u, ""),
+  };
+}
+
 function providerModel(model: string, endpoint: string): string {
   let hostname = "";
   try {
@@ -168,6 +176,7 @@ export function createOpenAiDirectTransport(input: {
   return async (request): Promise<ProviderStructuredResponse> => {
     const endpoint = chatCompletionsEndpoint(environment);
     const model = providerModel(request.model, endpoint);
+    const provider = providerIdentity(endpoint);
     const attemptStartedAt = now();
     const startedMs = attemptStartedAt.getTime();
     let requestDispatchedAt: Date | null = null;
@@ -190,6 +199,7 @@ export function createOpenAiDirectTransport(input: {
       const attemptFinishedAt = now();
       return {
         requestDispatched,
+        ...provider,
         endpoint,
         model,
         schemaId: request.schemaId,
@@ -270,7 +280,8 @@ export function createOpenAiDirectTransport(input: {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const requestTimeoutMs = Math.max(1, Math.min(request.timeoutMs ?? timeoutMs, timeoutMs));
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       requestDispatched = true;
       requestDispatchedAt = now();

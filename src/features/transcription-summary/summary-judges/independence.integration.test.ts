@@ -21,10 +21,21 @@ import { buildSummaryJudgeInput } from "./input-builder";
 import { SUMMARY_JUDGE_PROMPTS } from "./prompt-builders";
 
 function transport(value: unknown): StructuredProviderTransport {
+  const candidate = value && typeof value === "object" && "criterion" in value && "score" in value
+    ? value as unknown as { score: number | null; verdict: string; issues?: { code: string; severity: string; message: string }[] }
+    : null;
+  const providerValue = candidate ? {
+    score: candidate.score ?? 0,
+    decision: candidate.verdict === "pass" ? "PASS"
+      : candidate.verdict === "warning" ? "NEEDS_REWORK"
+        : candidate.verdict === "technical_error" ? "TECHNICAL_ERROR" : "FAIL",
+    summary: "Controlled Judge result.",
+    violations: (candidate.issues ?? []).map((item) => ({ code: item.code, severity: item.severity, description: item.message })),
+  } : value;
   return async () => ({
     ok: true,
     rawResponse: {},
-    structuredValue: value,
+    structuredValue: providerValue,
     attestation: {
       requested: true,
       forwarded: true,

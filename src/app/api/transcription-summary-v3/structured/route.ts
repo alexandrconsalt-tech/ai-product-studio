@@ -47,6 +47,8 @@ import {
 } from "@/features/transcription-summary/pipeline";
 import { resolveTranscriptionSummaryV3RuntimeConfig } from "../config/runtime-config";
 
+export const maxDuration = 300;
+
 const crmPublicationRepository = new InMemoryCrmPublicationRepositoryV3();
 const dryRunOnlyCrmClient: CrmClientV3 = {
   async publishSummary() {

@@ -5,8 +5,11 @@ import type {
 import {
   SUMMARY_JUDGE_ISSUE_CODES,
   SUMMARY_JUDGE_SCORE_VALUES,
+  SUMMARY_JUDGE_PAYLOAD_FIXTURES,
+  SummaryJudgeProviderOutputV3Schema,
   SummaryJudgeV3Schema,
   type SummaryJudgeFindingV3,
+  type SummaryJudgeProviderOutputV3,
   type SummaryJudgeV3,
 } from "../contracts/summary-judges/v3/contract";
 
@@ -16,7 +19,7 @@ export type SummaryJudgePostValidationResult =
       ok: false;
       error: {
         status: "TECHNICAL_ERROR";
-        errorCode: "SUMMARY_JUDGE_OUTPUT_INVALID";
+        errorCode: "SUMMARY_JUDGE_CONTRACT_INVARIANT_FAILED";
         message: string;
       };
     }>;
@@ -26,7 +29,7 @@ function fail(message: string): SummaryJudgePostValidationResult {
     ok: false,
     error: {
       status: "TECHNICAL_ERROR",
-      errorCode: "SUMMARY_JUDGE_OUTPUT_INVALID",
+      errorCode: "SUMMARY_JUDGE_CONTRACT_INVARIANT_FAILED",
       message,
     },
   };
@@ -110,6 +113,108 @@ function expectedVerdict(score: SummaryJudgeV3["score"]): SummaryJudgeV3["verdic
   if (score === 100) return "pass";
   if (score === 75) return "warning";
   return "fail";
+}
+
+function effectiveScore(value: SummaryJudgeProviderOutputV3): SummaryJudgeV3["score"] {
+  if (value.decision === "TECHNICAL_ERROR") return null;
+  if (value.decision === "PASS") return 100;
+  if (value.decision === "NEEDS_REWORK") return 75;
+  if (value.score === 0) return 0;
+  return value.score <= 25 ? 25 : 50;
+}
+
+function canonicalCode(
+  criterion: SummaryCriterionV3,
+  code: string,
+): string {
+  const allowed = SUMMARY_JUDGE_ISSUE_CODES[criterion] as readonly string[];
+  return allowed.includes(code) ? code : allowed[0];
+}
+
+function criterionPayload(
+  criterion: SummaryCriterionV3,
+  findings: readonly SummaryJudgeFindingV3[],
+): SummaryJudgeV3["payload"] {
+  const byCode = (code: string) => findings.filter((item) => item.code === code);
+  if (criterion === "faithfulness") return {
+    ...SUMMARY_JUDGE_PAYLOAD_FIXTURES.faithfulness,
+    unsupportedClaims: byCode("unsupported_claim"),
+    distortedFacts: byCode("distorted_fact"),
+    roleErrors: byCode("role_error"),
+    quoteErrors: byCode("quote_error"),
+    attributeMismatches: findings.filter((item) => ["attribute_mismatch", "invalid_outcome", "invented_detail"].includes(item.code)),
+  };
+  if (criterion === "completeness") return {
+    ...SUMMARY_JUDGE_PAYLOAD_FIXTURES.completeness,
+    missingGoal: byCode("missing_goal"),
+    missingRequirements: byCode("missing_requirement"),
+    missingConstraints: byCode("missing_constraint"),
+    missingFinancialContext: byCode("missing_financial_context"),
+    missingOutcome: byCode("missing_outcome"),
+    missingNextStep: byCode("missing_next_step"),
+    missingCriticalQuestions: byCode("missing_critical_question"),
+  };
+  if (criterion === "usefulness") return {
+    ...SUMMARY_JUDGE_PAYLOAD_FIXTURES.usefulness,
+    agentBlockingOmissions: byCode("agent_blocking_omission"),
+    unclearStatements: byCode("unclear_statement"),
+    missingOperationalContext: byCode("missing_operational_context"),
+    unnecessaryDetails: byCode("unnecessary_detail"),
+    usabilityAssessment: findings.length ? "partially_ready" : "ready",
+  };
+  if (criterion === "agreements_next_step") return {
+    ...SUMMARY_JUDGE_PAYLOAD_FIXTURES.agreements_next_step,
+    missingAction: byCode("missing_action"),
+    incorrectOwner: byCode("incorrect_owner"),
+    incorrectRecipient: byCode("incorrect_recipient"),
+    incorrectDeadline: byCode("incorrect_deadline"),
+    incorrectChannel: byCode("incorrect_channel"),
+    incorrectStatus: byCode("incorrect_status"),
+    missingNextStep: byCode("missing_next_step"),
+    inventedDetails: byCode("invented_detail"),
+  };
+  return {
+    ...SUMMARY_JUDGE_PAYLOAD_FIXTURES.format,
+    semanticRepetitions: byCode("semantic_repetition"),
+    crmCardDuplications: byCode("crm_card_duplication"),
+    verbosityIssues: byCode("verbosity"),
+    structureIssues: byCode("structure"),
+    readabilityIssues: byCode("readability"),
+    technicalFieldLeaks: byCode("technical_field_leak"),
+  };
+}
+
+export function adaptSummaryJudgeProviderOutput(
+  input: SummaryJudgeInputV3,
+  criterion: SummaryCriterionV3,
+  output: unknown,
+): SummaryJudgePostValidationResult {
+  const parsed = SummaryJudgeProviderOutputV3Schema.safeParse(output);
+  if (!parsed.success) return fail(`Provider Judge schema mismatch: ${parsed.error.message}`);
+  const score = effectiveScore(parsed.data);
+  const findings = parsed.data.violations.map((item) => ({
+    code: canonicalCode(criterion, item.code),
+    severity: item.severity,
+    message: item.description,
+  }));
+  const verdict = score === null ? "technical_error" : score === 100 ? "pass" : score === 75 ? "warning" : "fail";
+  const candidate = {
+    criterion,
+    verdict,
+    score,
+    confidence: score === null ? null : 1,
+    issues: findings,
+    evidence: [{ statement: parsed.data.summary }],
+    payload: criterionPayload(criterion, findings),
+    metadata: {
+      sourceStoreId: input.meta.storeId,
+      sourceStoreHash: input.meta.storeContentHash,
+      sourceSummaryHash: input.meta.summaryHash,
+      contractVersion: "3.1.0" as const,
+      promptVersion: input.meta.judgePromptVersion,
+    },
+  };
+  return validateSummaryJudgeVerdict(input, criterion, candidate);
 }
 
 function attributeValue(value: unknown): string {

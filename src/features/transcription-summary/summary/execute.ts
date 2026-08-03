@@ -52,6 +52,7 @@ export type SummaryAgentV3Diagnostic = Readonly<{
   finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
   validationStatus: "valid" | "invalid" | "not_run";
   providerDiagnostic: SafeProviderDiagnostic | null;
+  rawProviderResponse: unknown | null;
   errorType: "dependency_error" | "provider_error" | "validation_error" | "source_error" | null;
   errorCode: SummaryExecutionErrorCode | null;
   durationMs: number;
@@ -94,6 +95,7 @@ export async function executeSummaryAgentV3(input: {
   provider: string;
   model: string;
   transport: StructuredProviderTransport;
+  timeoutMs?: number;
 }): Promise<ExecuteSummaryAgentV3Result> {
   const startedAt = Date.now();
   const baseDiagnostic = {
@@ -119,6 +121,7 @@ export async function executeSummaryAgentV3(input: {
     finalDiagnostics: null,
     validationStatus: "not_run" as const,
     providerDiagnostic: null,
+    rawProviderResponse: null,
   };
   const builtInput = buildSummaryAgentInput(input);
   if (!builtInput.ok) {
@@ -151,6 +154,7 @@ export async function executeSummaryAgentV3(input: {
     provider: input.provider,
     model: input.model,
     transport: input.transport,
+    timeoutMs: input.timeoutMs ?? 60_000,
   });
   if (!completion.ok) {
     const errorCode = mapStructuredError(completion.error.errorCode);
@@ -175,6 +179,7 @@ export async function executeSummaryAgentV3(input: {
         repairAttempted: completion.diagnostic.repairAttempted,
         validationStatus: completion.diagnostic.validationStatus,
         providerDiagnostic: completion.diagnostic.providerDiagnostic,
+        rawProviderResponse: completion.rawResponse ?? null,
         errorType: errorCode === "SUMMARY_OUTPUT_SCHEMA_INVALID"
           ? "validation_error"
           : "provider_error",
@@ -205,6 +210,7 @@ export async function executeSummaryAgentV3(input: {
         sourceValidationStatus: "invalid",
         validationStatus: "invalid",
         providerDiagnostic: completion.diagnostic.providerDiagnostic,
+        rawProviderResponse: completion.rawResponse ?? null,
         errorType: "source_error",
         errorCode: processed.error.errorCode,
         durationMs: Date.now() - startedAt,

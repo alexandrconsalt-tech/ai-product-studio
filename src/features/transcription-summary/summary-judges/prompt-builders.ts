@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { SummaryJudgeV3Contract } from "../contracts/summary-judges/v3/contract";
+import {
+  SUMMARY_JUDGE_ISSUE_CODES,
+  SummaryJudgeV3Contract,
+} from "../contracts/summary-judges/v3/contract";
 import { stableStringify } from "../contracts/schema-utils";
 import type {
   SummaryCriterionV3,
@@ -50,12 +53,11 @@ type CriterionPromptConfig = Readonly<{
 
 const SCORE_SCALE = [
   "SCORE SCALE",
-  "100 = полностью соответствует → verdict pass.",
-  "75 = отдельные некритичные проблемы → verdict warning.",
-  "50 = существенные проблемы → verdict fail.",
-  "25 = критические проблемы → verdict fail.",
-  "0 = результат непригоден → verdict fail.",
-  "Произвольные score запрещены. technical_error требует score=null и confidence=null.",
+  "score — целое число от 0 до 100.",
+  "PASS = полностью соответствует критерию.",
+  "NEEDS_REWORK = есть исправимые некритичные проблемы.",
+  "FAIL = есть существенные или критические проблемы.",
+  "TECHNICAL_ERROR = оценка технически невозможна.",
   "Не рассчитывай общий weighted score.",
 ].join("\n");
 
@@ -99,7 +101,9 @@ function renderPrompt(
       `${SummaryJudgeV3Contract.id}@${SummaryJudgeV3Contract.version}`,
       `schema_hash=${SummaryJudgeV3Contract.schemaHash}`,
       `JSON_SCHEMA=${stableStringify(SummaryJudgeV3Contract.schema)}`,
-      `Верни payload только для criterion=${criterion}.`,
+      `Оцени только criterion=${criterion}, но не добавляй criterion в JSON.`,
+      `Допустимые violation.code: ${SUMMARY_JUDGE_ISSUE_CODES[criterion].join(", ")}.`,
+      "Верни только score, decision, summary и violations по JSON Schema.",
       "Не изменяй Summary и не возвращай chain-of-thought.",
     ].join("\n"),
   ].join("\n\n");

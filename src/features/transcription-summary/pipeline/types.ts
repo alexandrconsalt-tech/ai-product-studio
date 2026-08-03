@@ -41,6 +41,9 @@ export type PipelineStageAudit = Readonly<{
   structuredOutputApplied?: boolean;
   providerDiagnostic?: PipelineStageReportV3["provider_diagnostic"];
   attempts?: number;
+  repairAttempted?: boolean;
+  rawProviderResponse?: unknown | null;
+  timeoutStage?: string | null;
   transformations?: PipelineStageReportV3["transformations"];
   validationStatus?: "valid" | "invalid" | "not_run";
   validationIssues?: PipelineStageReportV3["validation_result"]["issues"];
@@ -64,6 +67,7 @@ export type PipelineExecutionContext = Readonly<{
   transcriptHash: string;
   manifest: PipelineContractManifest;
   outputs: Readonly<Partial<Record<TranscriptionSummaryV3StageId, unknown>>>;
+  deadlineAtMs: number;
 }>;
 
 export interface TranscriptionSummaryV3StageExecutor {

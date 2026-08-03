@@ -1,6 +1,7 @@
 import type { ContractDefinition, ContractRole } from "../contracts/contract-types";
 import { FactsV3Contract } from "../contracts/facts/v3/contract";
 import { NeedsV3Contract } from "../contracts/needs/v3/contract";
+import { NeedsV3Schema } from "../contracts/needs/v3/contract";
 import { OutcomeV3Contract } from "../contracts/outcome/v3/contract";
 import type { PipelineStageReportV3 } from "../contracts/pipeline-report/v3/contract";
 import { SUMMARY_CRITERIA } from "../contracts/canonical-enums";
@@ -61,6 +62,37 @@ const PROMPT_VERSION_BY_STAGE = {
   outcome_agent: "outcome_agent-v3.2.0",
 } as const;
 
+function remainingTimeout(context: PipelineExecutionContext, stageLimitMs: number): number {
+  return Math.max(1, Math.min(stageLimitMs, context.deadlineAtMs - Date.now() - 2_000));
+}
+
+function emptyNeedsResult(context: PipelineExecutionContext): unknown | null {
+  const text = context.transcript.turns.map((turn) => turn.text).join(" ");
+  if (/(?:бюджет|наличн|ипотек|квартир|дом|участ|студи|комнат|метр|м²|купить|покуп)/iu.test(text)) return null;
+  if (!/(?:неудобно|перезвон|повторн\S* звон|связаться|после \d{1,2}:\d{2})/iu.test(text)) return null;
+  const first = context.transcript.turns[0];
+  if (!first) return null;
+  const base = {
+    source_turn_ids: [first.id],
+    evidence: first.text,
+    confidence: 1,
+    verification_status: "extracted" as const,
+  };
+  const candidate = {
+    business_needs: [],
+    property_requirements: [],
+    structured_crm_attributes: {
+      interested_in: [],
+      funding_source: { id: "funding-source-not-defined", value: "не определено", ...base },
+      purchase_term: { id: "purchase-term-not-defined", value: "не определено", ...base },
+    },
+    communication_preferences: [],
+    client_questions: [],
+  };
+  const parsed = NeedsV3Schema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
 function sourceReferences(context: PipelineExecutionContext) {
   return context.transcript.turns.map((turn) => ({
     turn_id: turn.id,
@@ -74,6 +106,8 @@ function providerAudit(
 ): PipelineStageReportV3["provider_diagnostic"] {
   return providerDiagnostic ? {
     request_dispatched: providerDiagnostic.requestDispatched,
+    provider: providerDiagnostic.providerName,
+    base_url: providerDiagnostic.baseUrl,
     endpoint: providerDiagnostic.endpoint,
     model: providerDiagnostic.model,
     schema_id: providerDiagnostic.schemaId,
@@ -108,6 +142,7 @@ function structuredAudit(
   contract: ContractDefinition,
   prompt: ResolvedPrompt,
   diagnostic: StructuredDiagnostic,
+  stageId: string,
 ): PipelineStageAudit {
   const timestamp = new Date(0).toISOString();
   const transformations: PipelineStageReportV3["transformations"] =
@@ -138,6 +173,8 @@ function structuredAudit(
     structuredOutputApplied: diagnostic.structuredOutputApplied,
     providerDiagnostic: providerAudit(diagnostic.providerDiagnostic),
     attempts: diagnostic.attemptCount,
+    repairAttempted: diagnostic.repairAttempted,
+    timeoutStage: diagnostic.providerDiagnostic?.errorCategory === "timeout" ? stageId : null,
     durationMs: diagnostic.durationMs,
     transformations,
     validationStatus: diagnostic.validationStatus,
@@ -243,8 +280,31 @@ implements TranscriptionSummaryV3StageExecutor {
       provider: this.#provider,
       model: this.#model(stageId),
       transport: this.#transport,
+      timeoutMs: remainingTimeout(context, 60_000),
     });
-    const audit = structuredAudit(contract, prompt, completion.diagnostic);
+    const audit = {
+      ...structuredAudit(contract, prompt, completion.diagnostic, stageId),
+      rawProviderResponse: completion.ok ? null : completion.rawResponse ?? null,
+    };
+    if (!completion.ok && stageId === "needs_agent") {
+      const emptyNeeds = emptyNeedsResult(context);
+      if (emptyNeeds) return {
+        status: "SUCCESS_WITH_WARNING",
+        value: emptyNeeds,
+        audit: {
+          ...audit,
+          validationStatus: "valid",
+          validationIssues: [{
+            path: "needs_agent",
+            code: "EMPTY_NEEDS_NORMALIZED",
+            message: "No business needs were discussed; deterministic empty Needs v3 result applied.",
+          }],
+          errorType: null,
+          errorCode: null,
+          blocking: false,
+        },
+      };
+    }
     return completion.ok
       ? { status: "SUCCESS", value: completion.value, audit }
       : {
@@ -287,6 +347,7 @@ implements TranscriptionSummaryV3StageExecutor {
         provider: this.#provider,
         model: this.#model(stageId),
         transport: this.#transport,
+        timeoutMs: remainingTimeout(context, 60_000),
       });
       const audit = codeAudit(context, "summary", {
         promptId: "summary-agent-v3",
@@ -301,6 +362,9 @@ implements TranscriptionSummaryV3StageExecutor {
         structuredOutputApplied: result.diagnostic.structuredOutputApplied,
         providerDiagnostic: providerAudit(result.diagnostic.providerDiagnostic),
         attempts: result.diagnostic.attemptCount,
+        repairAttempted: result.diagnostic.repairAttempted,
+        rawProviderResponse: result.ok ? null : result.diagnostic.rawProviderResponse,
+        timeoutStage: result.diagnostic.providerDiagnostic?.errorCategory === "timeout" ? stageId : null,
         transformations: result.diagnostic.repetitionTransformations.map((item) => ({
           operation_id: item.ruleId,
           operation_type: "normalized" as const,
@@ -345,6 +409,7 @@ implements TranscriptionSummaryV3StageExecutor {
         provider: this.#provider,
         model: this.#model(stageId),
         transport: this.#transport,
+        timeoutMs: remainingTimeout(context, 45_000),
       });
       const audit = codeAudit(context, "summaryJudges", {
         promptId: result.prompt?.promptId ?? result.diagnostic.promptId,
@@ -359,6 +424,9 @@ implements TranscriptionSummaryV3StageExecutor {
         structuredOutputApplied: result.diagnostic.structuredOutputApplied,
         providerDiagnostic: providerAudit(result.diagnostic.providerDiagnostic),
         attempts: result.diagnostic.attemptCount,
+        repairAttempted: result.diagnostic.repairAttempted,
+        rawProviderResponse: result.ok ? null : result.diagnostic.rawProviderResponse,
+        timeoutStage: result.diagnostic.providerDiagnostic?.errorCategory === "timeout" ? stageId : null,
         validationStatus: result.diagnostic.validationStatus,
         validationIssues: [{
           path: `summary_judge.${criterion}`,
@@ -368,7 +436,7 @@ implements TranscriptionSummaryV3StageExecutor {
             raw_score: result.diagnostic.rawScore,
             effective_score: result.diagnostic.score,
           }),
-        }],
+        }, ...result.diagnostic.validationIssues],
         score: result.diagnostic.score,
         confidence: result.diagnostic.confidence,
         errorType: result.ok ? null : "provider",

@@ -154,7 +154,7 @@ describe("five isolated Summary Judge prompts", () => {
       expect(first.resolvedPrompt).toContain("INPUT SUMMARY");
       expect(first.resolvedPrompt).toContain("TRANSCRIPT CONTEXT");
       expect(first.resolvedPrompt).toContain("OUTPUT CONTRACT");
-      expect(first.resolvedPrompt).toContain("Произвольные score запрещены");
+      expect(first.resolvedPrompt).toContain("score — целое число от 0 до 100");
       expect(first.resolvedPrompt).not.toContain("otherJudgeScores");
       expect(first.resolvedPrompt).not.toContain("QUALITY GATE INPUT");
     }

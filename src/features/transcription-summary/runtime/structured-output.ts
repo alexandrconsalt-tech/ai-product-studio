@@ -49,6 +49,8 @@ export type ProviderErrorCategory =
 
 export type SafeProviderDiagnostic = Readonly<{
   requestDispatched: boolean;
+  providerName: "AITUNNEL" | "OPENAI_COMPATIBLE";
+  baseUrl: string;
   endpoint: string;
   model: string;
   schemaId: string;
@@ -92,6 +94,7 @@ export type ProviderStructuredRequest = Readonly<{
       schema: Readonly<Record<string, unknown>>;
     }>;
   }>;
+  timeoutMs?: number;
 }>;
 
 export type ProviderStructuredResponse =
@@ -204,8 +207,11 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
   provider: string;
   model: string;
   transport: StructuredProviderTransport;
+  timeoutMs?: number;
+  transportOutputOnly?: boolean;
 }): Promise<StructuredCompletionResult<z.infer<TContract["validator"]>>> {
   const startedAt = Date.now();
+  const completionDeadlineAt = input.timeoutMs ? startedAt + input.timeoutMs : null;
   const responseFormat = {
     type: "json_schema" as const,
     json_schema: {
@@ -284,6 +290,9 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
       schemaId: input.contract.id,
       schemaHash: input.contract.schemaHash,
       responseFormat,
+      timeoutMs: completionDeadlineAt === null
+        ? undefined
+        : Math.max(1, completionDeadlineAt - Date.now()),
     });
     providerDiagnostic = response.providerDiagnostic ?? null;
     structuredOutputRequested = response.attestation.requested
@@ -325,6 +334,15 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
     }
     const transportParsed = input.contract.transportValidator.safeParse(decoded.value);
     if (transportParsed.success) {
+      if (input.transportOutputOnly) {
+        normalizationStatus = "not_run";
+        return {
+          ok: true,
+          value: transportParsed.data as z.infer<TContract["validator"]>,
+          rawResponse: response.rawResponse,
+          diagnostic: diagnostic(true, "valid", null),
+        };
+      }
       const normalized = normalizeContractOutput(input.contract, transportParsed.data);
       normalizationTransformations = normalized.transformations;
       if (!normalized.ok) {
