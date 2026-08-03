@@ -6,8 +6,13 @@ import type {
   StructuredProviderTransport,
 } from "./structured-output";
 
+export const DEFAULT_AI_API_BASE_URL = "https://api.aitunnel.ru/v1";
 export const OPENAI_CHAT_COMPLETIONS_ENDPOINT =
-  "https://api.openai.com/v1/chat/completions";
+  `${DEFAULT_AI_API_BASE_URL}/chat/completions`;
+
+const AITUNNEL_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  "gpt-5-mini-2025-08-07": "gpt-5-mini",
+};
 
 type OpenAiFetch = (
   input: string | URL | Request,
@@ -22,6 +27,27 @@ type OpenAiProviderError = Readonly<{
   param: string | null;
   message: string | null;
 }>;
+
+function configuredBaseUrl(environment: OpenAiEnvironment): string {
+  const configured = environment.AI_API_BASE_URL ?? environment.OPENAI_BASE_URL;
+  return (configured?.trim() || DEFAULT_AI_API_BASE_URL).replace(/\/+$/, "");
+}
+
+function chatCompletionsEndpoint(environment: OpenAiEnvironment): string {
+  return `${configuredBaseUrl(environment)}/chat/completions`;
+}
+
+function providerModel(model: string, endpoint: string): string {
+  let hostname = "";
+  try {
+    hostname = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return model;
+  }
+  return hostname === "api.aitunnel.ru"
+    ? AITUNNEL_MODEL_ALIASES[model] ?? model
+    : model;
+}
 
 function environmentScope(
   environment: OpenAiEnvironment,
@@ -140,6 +166,8 @@ export function createOpenAiDirectTransport(input: {
   const now = input.now ?? (() => new Date());
 
   return async (request): Promise<ProviderStructuredResponse> => {
+    const endpoint = chatCompletionsEndpoint(environment);
+    const model = providerModel(request.model, endpoint);
     const attemptStartedAt = now();
     const startedMs = attemptStartedAt.getTime();
     let requestDispatchedAt: Date | null = null;
@@ -162,8 +190,8 @@ export function createOpenAiDirectTransport(input: {
       const attemptFinishedAt = now();
       return {
         requestDispatched,
-        endpoint: OPENAI_CHAT_COMPLETIONS_ENDPOINT,
-        model: request.model,
+        endpoint,
+        model,
         schemaId: request.schemaId,
         schemaHash: request.schemaHash,
         responseFormatType: "json_schema",
@@ -226,7 +254,7 @@ export function createOpenAiDirectTransport(input: {
     let body: string;
     try {
       body = JSON.stringify({
-        model: request.model,
+        model,
         messages: [{ role: "user", content: request.prompt }],
         response_format: request.responseFormat,
       });
@@ -246,7 +274,7 @@ export function createOpenAiDirectTransport(input: {
     try {
       requestDispatched = true;
       requestDispatchedAt = now();
-      response = await fetchImpl(OPENAI_CHAT_COMPLETIONS_ENDPOINT, {
+      response = await fetchImpl(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FactsV3Contract } from "../contracts/facts/v3/contract";
 import {
   createOpenAiDirectTransport,
+  DEFAULT_AI_API_BASE_URL,
   OPENAI_CHAT_COMPLETIONS_ENDPOINT,
   redactProviderDiagnosticText,
 } from "./openai-direct-transport";
@@ -122,6 +123,7 @@ describe("Direct OpenAI transport diagnostics", () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe("gpt-5-mini");
       expect(body.response_format).toEqual(request.responseFormat);
       expect(body.messages).toHaveLength(1);
       return response(200, {
@@ -149,12 +151,68 @@ describe("Direct OpenAI transport diagnostics", () => {
       },
       providerDiagnostic: {
         requestDispatched: true,
+        endpoint: `${DEFAULT_AI_API_BASE_URL}/chat/completions`,
+        model: "gpt-5-mini",
         httpStatus: 200,
         structuredOutputNotAppliedReason: null,
         usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
       },
     });
     expect(result.providerDiagnostic?.durationMs).toBeGreaterThan(0);
+  });
+
+  it("builds the endpoint from AI_API_BASE_URL and prefers it over OPENAI_BASE_URL", async () => {
+    const fetchImpl = vi.fn(async () => response(200, {
+      id: "chatcmpl-safe",
+      choices: [{ message: { content: JSON.stringify(FactsV3Contract.fixtures.valid) } }],
+    }));
+    const result = await createOpenAiDirectTransport({
+      environment: {
+        NODE_ENV: "test",
+        OPENAI_API_KEY: "test-secret",
+        AI_API_BASE_URL: "https://api.aitunnel.ru/v1/",
+        OPENAI_BASE_URL: "https://api.openai.com/v1",
+      },
+      fetchImpl,
+    })(request);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.aitunnel.ru/v1/chat/completions",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer test-secret" }),
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      providerDiagnostic: {
+        endpoint: "https://api.aitunnel.ru/v1/chat/completions",
+        model: "gpt-5-mini",
+      },
+    });
+  });
+
+  it("keeps the requested model for a non-AITUNNEL compatible endpoint", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe("gpt-5-mini-2025-08-07");
+      return response(200, {
+        id: "chatcmpl-safe",
+        choices: [{ message: { content: JSON.stringify(FactsV3Contract.fixtures.valid) } }],
+      });
+    });
+    await createOpenAiDirectTransport({
+      environment: {
+        NODE_ENV: "test",
+        OPENAI_API_KEY: "test-secret",
+        OPENAI_BASE_URL: "https://compatible.example/v1",
+      },
+      fetchImpl,
+    })(request);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://compatible.example/v1/chat/completions",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("redacts secrets and PII from provider messages", () => {
