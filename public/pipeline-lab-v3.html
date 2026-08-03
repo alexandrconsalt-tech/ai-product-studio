@@ -6372,10 +6372,20 @@ const CODE_FUNCS = {
       const pipeline_context_complete=extractor_errors.length===0&&pipelineConversation.partial!==true;
       const evaluation_status=available.length===0?'technical_error':available.length<keys.length?'partial':pipeline_context_complete?'complete':'complete_on_partial_context';
       const criticalFormat=diagnostics.semantic_repetition_count>=2||diagnostics.address_duplication_count>=1||diagnostics.next_step_duplicate_count>=1||diagnostics.unfinished_quote_count>=1||diagnostics.unclear_phrase_count>=1;
+      const builder=ctx.__canonical_summary_context&&ctx.__canonical_summary_context.ranking_diagnostics||null;
+      const builderHardStops=[];
+      if(!builder)builderHardStops.push('canonical_summary_context_missing');
+      else{
+        if(!builder.conversation_result_present)builderHardStops.push('confirmed_conversation_result_missing');
+        if(Number(builder.critical_meanings_lost||0)>0)builderHardStops.push('critical_meaning_lost='+builder.critical_meanings_lost);
+        if(builder.primary_next_step_consistent===false)builderHardStops.push('primary_next_step_contradicts_verified_outcome');
+        if(builder.unverified_data_used)builderHardStops.push('builder_used_unverified_data');
+        if(builder.technical_error)builderHardStops.push('builder_ranking_technical_error');
+      }
       let decision='TECHNICAL_ERROR',pipeline_status='TECHNICAL_ERROR',crm_status='SKIPPED';
       if(!technical_errors.length){
         const anyBelow80=keys.some(key=>effectiveScores[key]<80),allAtLeast90=keys.every(key=>effectiveScores[key]>=90),storePartial=pipelineConversation.partial===true||!pipeline_context_complete;
-        if(fallbackUsed||anyBelow80||criticalFormat||storePartial||critical_issues.length){decision='REVIEW_REQUIRED';pipeline_status='REVIEW_REQUIRED';crm_status='MANUAL_REVIEW';}
+        if(fallbackUsed||anyBelow80||criticalFormat||storePartial||critical_issues.length||builderHardStops.length){decision='REVIEW_REQUIRED';pipeline_status='REVIEW_REQUIRED';crm_status='MANUAL_REVIEW';}
         else if(allAtLeast90&&summary_quality_score>=90&&!critical_issues.length){decision='AUTO_SAVE';pipeline_status='SUCCESS';crm_status='SAVED';}
         else{decision='SAVE_WITH_WARNING';pipeline_status='SUCCESS_WITH_WARNINGS';crm_status='SAVED_WITH_WARNING';}
       }
@@ -6406,9 +6416,12 @@ const CODE_FUNCS = {
         diagnostics_before_deduplication:ctx.__summary_diagnostics_before||null,
         removed_duplicates:toList(ctx.__summary_diagnostics_after&&ctx.__summary_diagnostics_after.removed_items),
         diagnostics_after_deduplication:diagnostics,
+        summary_context_builder_version:CANONICAL_SUMMARY_CONTEXT_VERSION,
+        ranking_diagnostics:builder,
+        builder_hard_stops:builderHardStops,
         fallback_used:fallbackUsed,fallback_source:fallbackSource,fallback_reason:fallbackReason,
         conversation_store_partial:pipelineConversation.partial===true,
-        decision_reasons:[...technical_errors.map(item=>item.stage),...(fallbackUsed?['fallback_used='+String(fallbackSource||'unknown')]:[]),...Object.entries(capReasons).flatMap(([key,reasons])=>reasons.map(reason=>key+': '+reason)),...(criticalFormat?['critical_format_diagnostics']:[])]
+        decision_reasons:[...technical_errors.map(item=>item.stage),...(fallbackUsed?['fallback_used='+String(fallbackSource||'unknown')]:[]),...Object.entries(capReasons).flatMap(([key,reasons])=>reasons.map(reason=>key+': '+reason)),...(criticalFormat?['critical_format_diagnostics']:[]),...builderHardStops]
       };
       return {output,metrics:[['Summary Quality Score',summary_quality_score==null?'—':summary_quality_score],['Decision',decision],['Pipeline status',pipeline_status],['CRM status',crm_status],['Fallback',fallbackUsed?'да':'нет'],['Context complete',pipeline_context_complete?'да':'нет'],['Evaluated',available.length+'/5'],['Technical errors',technical_errors.length]],status:decision==='AUTO_SAVE'?'ok':decision==='SAVE_WITH_WARNING'?'warn':decision==='REVIEW_REQUIRED'?'attn':'bad',confidenceBreakdown:available.map(key=>({k:key,label:criterionNames[key],val:effectiveScores[key]/100,w:.2})),checks:keys.map(key=>({label:criterionNames[key]+': raw '+(rawScores[key]==null?'technical_error':rawScores[key])+' → effective '+(effectiveScores[key]==null?'technical_error':effectiveScores[key]),pass:effectiveScores[key]!=null&&effectiveScores[key]>=90,warn:effectiveScores[key]!=null&&effectiveScores[key]>=75&&effectiveScores[key]<90})),isSummaryQualityGate:true};
     }
@@ -7400,6 +7413,219 @@ function moduleSummaryStoreView(store){
     store_meta:source.store_meta&&typeof source.store_meta==='object'?source.store_meta:{}
   };
 }
+
+const CANONICAL_SUMMARY_CONTEXT_VERSION='canonical-summary-context-v1';
+const CANONICAL_SUMMARY_SLOT_LIMITS=Object.freeze({
+  client_context:2,
+  financial_context:2,
+  critical_requirements:3,
+  objections:2,
+  open_questions:2,
+  important_agent_information:3,
+  conversation_result:1,
+  primary_next_step:1,
+  quote_candidates:2
+});
+const CANONICAL_SUMMARY_TOTAL_LIMIT=12;
+const CANONICAL_SUMMARY_SLOT_ORDER=Object.freeze([
+  'primary_next_step','conversation_result','financial_context','critical_requirements',
+  'objections','open_questions','important_agent_information','client_context','quote_candidates'
+]);
+function canonicalSummaryText(value){
+  if(Array.isArray(value)) return value.map(canonicalSummaryText).filter(Boolean).join(', ');
+  if(value&&typeof value==='object') return canonicalSummaryText(value.value??value.normalized_value??value.action??value.text??'');
+  return String(value??'').replace(/\s+/g,' ').trim();
+}
+function canonicalSummaryConfidence(value){
+  const number=Number(value);return Number.isFinite(number)?Math.max(0,Math.min(1,number>1?number/100:number)):0;
+}
+function canonicalSummaryEvidence(item){
+  return [...new Set([
+    canonicalSummaryText(item&&item.evidence),canonicalSummaryText(item&&item.answer_evidence),
+    ...toList(item&&item.evidence_items).map(canonicalSummaryText)
+  ].filter(Boolean))];
+}
+function canonicalSummarySourceIds(item,fallback){
+  return [...new Set([
+    canonicalSummaryText(item&&item.id),...toList(item&&item.source_fact_ids).map(canonicalSummaryText),
+    ...toList(item&&item.source_turn_ids).map(canonicalSummaryText),...toList(item&&item.agreement_ids).map(canonicalSummaryText),fallback
+  ].filter(Boolean))];
+}
+function canonicalSummaryIsRejected(item){
+  return /rejected|not_enough_evidence|technical_error|invariant_violation/i.test(String(item&&(item.verification_status||item.verdict||item.status)||''));
+}
+function canonicalSummaryNoise(value){
+  const text=moduleSummaryNorm(value);
+  return !text||/^(?:здравствуйте|добрый день|алло|да|угу|ага|хорошо|спасибо|до свидания)$/.test(text)
+    ||/(?:трет[а-я]*\s+(?:по счету|в очереди|на просмотр)|очеред[а-я]*\s+просмотр|маршрут|как добраться|доед[а-я]* на метро|подтверждени[а-я]* номер|с которого вы звоните|друг[а-я]*(?:\s+\S+){0,3}\s+(?:замк|ключ)|(?:ключ|замок).*(?:перенос|показ)|закрыл[а-я]* на друг[а-я]* замок|история\s+(?:тети|племянник|продавц|родственник))/.test(text);
+}
+function canonicalSummaryCardOnly(value,cardMetadata={}){
+  const text=moduleSummaryNorm(value),metadata=moduleSummaryNorm(JSON.stringify(cardMetadata||{}));
+  const cardShape=/(?:текущее объявление|детал[а-я]* объявлен|адрес объект|(?:улица|ул |проспект|пр |шоссе|переулок)\s+\S+\s+\d|цена объект|стоимость объект|этаж объект|площадь объект|комнатност|номер объявлен|код объект|название объект)/.test(text);
+  const explicitNeed=/(?:бюджет|до \d|не более|миним|не меньше|обязател|не подходит|смуща|дорог|локац|район поиска)/.test(text);
+  return cardShape&&!explicitNeed||Boolean(text&&metadata&&metadata.includes(text)&&!explicitNeed);
+}
+function canonicalSummarySlot(sourceType,value,item={}){
+  const type=moduleSummaryNorm(sourceType),text=moduleSummaryNorm(value),priority=String(item.business_priority||item.priority||'');
+  if(type==='conversation result'||type==='communication result') return 'conversation_result';
+  if(type==='primary next step') return 'primary_next_step';
+  if(/client goal|client context|client need/.test(type)) return 'client_context';
+  if(/client finance|client timing|price limit|budget|funding source|purchase term/.test(type)) return 'financial_context';
+  if(/client objection/.test(type)||/(?:смуща|возраж|не устраива|отказ|слишком дорог|сомнен)/.test(text)) return 'objections';
+  if(/open question/.test(type)) return ['answered'].includes(String(item.question_status||''))?'important_agent_information':'open_questions';
+  if(/agent information/.test(type)) return 'important_agent_information';
+  if(/agent commitment|agreement/.test(type)) return 'important_agent_information';
+  if(/client requirement|client preference|client constraint|property type|search location|minimum|maximum|other requirement/.test(type)) return 'critical_requirements';
+  if(priority==='critical'&&/(?:требован|услов|параметр|локац|площад|юрид|чистот|обремен|долг)/.test(text)) return 'critical_requirements';
+  return 'client_context';
+}
+function canonicalSummaryBaseScore(sourceType,slot,value,item={}){
+  const type=moduleSummaryNorm(sourceType),text=moduleSummaryNorm(value),priority=String(item.business_priority||item.priority||'');
+  if(slot==='conversation_result'||slot==='primary_next_step'||/client goal/.test(type)) return 100;
+  if(slot==='objections') return 95;
+  if(/price limit|budget|бюджет/.test(type+' '+text)) return 90;
+  if(/funding source|client finance/.test(type)) return 85;
+  if(/юрид|обремен|долг|наслед|оригинал|титульн/.test(text)) return 90;
+  if(slot==='open_questions') return 90;
+  if(/agent commitment|agreement/.test(type)) return 85;
+  if(/purchase term|client timing/.test(type)) return 80;
+  if(slot==='important_agent_information') return 75;
+  if(slot==='critical_requirements') return priority==='required'||priority==='critical'?100:70;
+  if(canonicalSummaryCardOnly(value,{})) return 10;
+  if(canonicalSummaryNoise(value)) return 0;
+  return priority==='critical'?90:priority==='important'?70:50;
+}
+function canonicalSummaryComponents(baseScore,slot,item,value){
+  const priority=String(item&&item.business_priority||item&&item.priority||''),text=moduleSummaryNorm(value);
+  const action=slot==='primary_next_step'||/agent commitment|agreement/.test(moduleSummaryNorm(item&&item.type||''));
+  const workValue=action?100:slot==='conversation_result'?90:['financial_context','critical_requirements','objections','open_questions'].includes(slot)?80:slot==='important_agent_information'?75:50;
+  const decisionImpact=slot==='objections'||priority==='required'||priority==='critical'?100:slot==='financial_context'?80:slot==='critical_requirements'?80:slot==='client_context'?60:30;
+  const criticality=['conversation_result','primary_next_step'].includes(slot)||baseScore>=95?100:baseScore>=80?80:baseScore>=70?60:40;
+  const confidenceScore=Math.round(canonicalSummaryConfidence(item&&item.confidence||1)*100);
+  const uniqueness=100;
+  return {workValue,decisionImpact,criticality,confidenceScore,uniqueness};
+}
+function canonicalSummaryAdjustments(slot,item,value,evidence,quoteSupport=false){
+  const text=moduleSummaryNorm(value),adjustments=[];
+  const add=(code,delta,reason)=>adjustments.push({code,delta,reason});
+  if(['objections','critical_requirements','financial_context'].includes(slot)) add('DECISION_IMPACT',20,'Напрямую влияет на решение клиента.');
+  if(String(item&&item.priority||item&&item.business_priority||'')==='required'||/(?:обязател|не меньше|только если|не подходит)/.test(text)) add('REQUIRED_CONDITION',15,'Клиент обозначил обязательное условие.');
+  if(/\d|мистолов|капитолов|лаврик|локац|район/.test(text)) add('SPECIFIC_LIMIT',15,'Содержит конкретный лимит, срок, площадь или локацию.');
+  if(slot==='objections') add('STRONG_OBJECTION',10,'Сильное сомнение или возражение.');
+  if(['primary_next_step','open_questions'].includes(slot)||/agent commitment|agreement/.test(moduleSummaryNorm(item&&item.type||''))) add('AGENT_ACTION_REQUIRED',10,'Требует действия агента.');
+  if(evidence.length>1)add('MULTIPLE_EVIDENCE',10,'Подтверждено несколькими независимыми источниками.');
+  if(quoteSupport)add('QUALITY_QUOTE',5,'Есть самостоятельная значимая цитата клиента.');
+  if(canonicalSummaryConfidence(item&&item.confidence)<.7)add('LOW_CONFIDENCE',-15,'Confidence ниже безопасного порога.');
+  if(moduleSummaryTokens(value).length<2)add('TOO_GENERAL',-15,'Факт слишком общий или неконкретный.');
+  return adjustments;
+}
+function canonicalSummaryScore(components,adjustments){
+  const raw=components.workValue*.30+components.decisionImpact*.25+components.criticality*.20+components.confidenceScore*.15+components.uniqueness*.10;
+  return Math.max(0,Math.min(100,Math.round((raw+adjustments.reduce((sum,item)=>sum+item.delta,0))*100)/100));
+}
+function canonicalSummaryDuplicate(left,right){
+  const leftItem=left&&typeof left==='object'?left:null,rightItem=right&&typeof right==='object'?right:null;
+  if(leftItem&&rightItem&&new Set([leftItem.target_slot,rightItem.target_slot]).has('conversation_result')&&new Set([leftItem.target_slot,rightItem.target_slot]).has('primary_next_step'))return false;
+  const a=moduleSummaryNorm(leftItem?leftItem.value:left),b=moduleSummaryNorm(rightItem?rightItem.value:right);if(!a||!b)return false;
+  const numbersA=a.match(/\b\d+(?:[.,]\d+)?\b/g)||[],numbersB=b.match(/\b\d+(?:[.,]\d+)?\b/g)||[];
+  if(numbersA.length&&numbersB.length&&numbersA.some(number=>!numbersB.includes(number))&&numbersB.some(number=>!numbersA.includes(number)))return false;
+  if(a===b||a.includes(b)&&b.length>=12||b.includes(a)&&a.length>=12)return true;
+  return Math.min(summarySemanticSimilarity(a,b),summarySemanticSimilarity(b,a))>=.84;
+}
+function canonicalSummaryPublicItem(item){
+  const result={id:item.id,value:item.value,source_type:item.source_type,source_ids:item.source_ids,evidence:item.evidence,confidence:item.confidence,base_score:item.base_score,adjustments:item.adjustments,summary_priority_score:item.summary_priority_score,target_slot:item.target_slot};
+  if(item.canonical_attribute)result.canonical_attribute=true;
+  return result;
+}
+function canonicalSummaryExcluded(item,reason,related=null){
+  return {id:item.id||'',value:item.value||'',source_type:item.source_type||'',score:Number(item.summary_priority_score||0),reason,related_selected_id:related&&related.id||null};
+}
+function buildCanonicalSummaryContext(store,transcript='',cardMetadata={}){
+  const source=store&&typeof store==='object'?store:{},conversation=source.conversation&&typeof source.conversation==='object'?source.conversation:{};
+  const candidates=[],excluded=[],merged_duplicates=[],cross_slot_duplicates_removed=[],warnings=[];
+  let sequence=0,unverified_data_used=false,technical_error=false;
+  const quoteFactIds=new Set(toList(conversation.quotes).flatMap(quote=>toList(quote&&quote.supports_fact_ids)));
+  const add=(sourceType,value,item={},slotOverride=null,options={})=>{
+    value=canonicalSummaryText(value);const id=String(item&&item.id||options.id||'summary_context_'+(++sequence));
+    const evidence=canonicalSummaryEvidence(item);const slot=slotOverride||canonicalSummarySlot(sourceType,value,item);const sourceIds=canonicalSummarySourceIds(item,id);
+    const baseScore=canonicalSummaryBaseScore(sourceType,slot,value,item);const confidence=canonicalSummaryConfidence((item&&item.confidence)??options.confidence??1);
+    const draft={id,value,source_type:sourceType,source_ids:sourceIds,evidence,confidence,base_score:baseScore,adjustments:[],summary_priority_score:0,target_slot:slot,canonical_attribute:Boolean(options.canonical_attribute),_components:null};
+    if(!value){excluded.push(canonicalSummaryExcluded(draft,'empty_value'));return;}
+    if(canonicalSummaryIsRejected(item)){excluded.push(canonicalSummaryExcluded(draft,'source_rejected'));return;}
+    if(canonicalSummaryNoise(value)){draft.adjustments=[{code:'ORGANIZATIONAL_NOISE',delta:-20,reason:'Организационная деталь не помогает продолжить работу.'}];excluded.push(canonicalSummaryExcluded(draft,'organizational_noise'));return;}
+    if(canonicalSummaryCardOnly(value,cardMetadata)&&!options.allow_card_value){draft.adjustments=[{code:'CARD_METADATA_ONLY',delta:-30,reason:'Только данные карточки объекта.'}];excluded.push(canonicalSummaryExcluded(draft,'card_metadata_only'));return;}
+    const storeVerified=options.store_verified===true;
+    if(!evidence.length&&!storeVerified){excluded.push(canonicalSummaryExcluded(draft,'missing_evidence'));return;}
+    if(!storeVerified&&!options.verified&&item&&item.source&&!/fact_check|need_check|outcome_check|conversation_store/.test(String(item.source))){unverified_data_used=true;excluded.push(canonicalSummaryExcluded(draft,'unverified_source'));return;}
+    draft.adjustments=canonicalSummaryAdjustments(slot,{...item,type:sourceType,confidence},value,evidence,quoteFactIds.has(id));
+    draft._components=canonicalSummaryComponents(baseScore,slot,{...item,type:sourceType,confidence},value);
+    draft.summary_priority_score=canonicalSummaryScore(draft._components,draft.adjustments);
+    candidates.push(draft);
+  };
+  try{
+    toList(conversation.facts).slice().sort((a,b)=>String(a&&a.id||'').localeCompare(String(b&&b.id||''),'ru')).forEach(fact=>{
+      const type=String(fact&&fact.type||fact&&fact.category||'other_important');
+      if(type==='open_question'&&fact.question_status==='answered'&&canonicalSummaryText(fact.answer||fact.answer_evidence)){
+        add('agent_information','Вопрос: '+canonicalSummaryText(fact.value||fact.evidence)+'. Ответ: '+canonicalSummaryText(fact.answer||fact.answer_evidence),{...fact,evidence_items:[fact.evidence,fact.answer_evidence]},'important_agent_information',{store_verified:true});
+      }else add(type,(fact&&fact.value)??(fact&&fact.normalized_value),fact,null,{store_verified:true});
+    });
+    toList(conversation.requirements).slice().sort((a,b)=>String(a&&a.id||'').localeCompare(String(b&&b.id||''),'ru')).forEach(requirement=>add(String(requirement&&requirement.type||'client_requirement'),(requirement&&requirement.normalized_value)??(requirement&&requirement.value),requirement,null,{store_verified:true}));
+    const attributes=conversation.attributes&&typeof conversation.attributes==='object'?conversation.attributes:{};
+    toList(attributes.interest).forEach((item,index)=>add('crm_attribute_interest',(item&&item.value)??item,{...(item&&typeof item==='object'?item:{}),id:item&&item.id||'crm_interest_'+index},'critical_requirements',{canonical_attribute:true,store_verified:true}));
+    ['funding_source','purchase_term'].forEach(name=>{const item=attributes[name];const value=canonicalSummaryText((item&&item.value)??item);if(value&&!/^не определено$/i.test(value))add('crm_attribute_'+name,value,{...(item&&typeof item==='object'?item:{}),id:item&&item.id||'crm_'+name},'financial_context',{canonical_attribute:true,store_verified:true});});
+    const resultEvidence=[...toList(conversation.call_results).flatMap(canonicalSummaryEvidence),...toList(conversation.agreements).flatMap(canonicalSummaryEvidence)];
+    if(canonicalSummaryText(conversation.call_result))add('conversation_result',conversation.call_result,{id:'conversation_result',evidence_items:resultEvidence,confidence:source.quality&&source.quality.outcome_check_score||1},'conversation_result',{store_verified:true});
+    const primary=conversation.primary_next_step&&typeof conversation.primary_next_step==='object'?conversation.primary_next_step:{};
+    if(primary.action&&primary.status!=='not_defined'){
+      const linkedIds=new Set(toList(primary.agreement_ids)),linked=toList(conversation.agreements).filter(item=>linkedIds.has(item&&item.id));
+      add('primary_next_step',moduleSummaryNaturalNextStep(conversation),{...primary,id:'primary_next_step',evidence_items:[...canonicalSummaryEvidence(primary),...linked.flatMap(canonicalSummaryEvidence)]},'primary_next_step',{store_verified:true});
+    }
+    const primaryIds=new Set(toList(primary.agreement_ids));
+    toList(conversation.agreements).filter(item=>!primaryIds.has(item&&item.id)).forEach(item=>add('agreement',item&&item.action,item,'important_agent_information',{store_verified:true}));
+    toList(conversation.quotes).slice().sort((a,b)=>String(a&&a.id||'').localeCompare(String(b&&b.id||''),'ru')).forEach(quote=>{
+      const text=canonicalSummaryText(quote&&quote.text||quote),draft={...quote,evidence:text};
+      if(quote&&quote.speaker&&quote.speaker!=='Клиент'){excluded.push(canonicalSummaryExcluded({id:quote.id,value:text,source_type:'quote',summary_priority_score:0},'non_client_quote'));return;}
+      if(String(transcript||'').trim()&&!moduleSummaryNorm(transcript).includes(moduleSummaryNorm(text))){excluded.push(canonicalSummaryExcluded({id:quote.id,value:text,source_type:'quote',summary_priority_score:0},'quote_not_in_transcript'));return;}
+      if(summaryUselessQuote(text)||summaryOrganizationalNoise(text)||moduleSummaryTokens(text).length<4){excluded.push(canonicalSummaryExcluded({id:quote&&quote.id||'',value:text,source_type:'quote',summary_priority_score:0},'low_value_quote'));return;}
+      add('quote',text,draft,'quote_candidates',{store_verified:true});
+    });
+  }catch(error){technical_error=true;warnings.push({code:'CANDIDATE_COLLECTION_WARNING',message:String(error&&error.message||error)});}
+  const merged=[];
+  candidates.slice().sort((a,b)=>b.base_score-a.base_score||b.confidence-a.confidence||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
+    const existing=merged.find(item=>item.target_slot===candidate.target_slot&&canonicalSummaryDuplicate(item,candidate));
+    if(!existing){merged.push(candidate);return;}
+    existing.source_ids=[...new Set([...existing.source_ids,...candidate.source_ids])];existing.evidence=[...new Set([...existing.evidence,...candidate.evidence])];existing.confidence=Math.max(existing.confidence,candidate.confidence);existing.canonical_attribute=existing.canonical_attribute||candidate.canonical_attribute;
+    existing.adjustments=[...existing.adjustments,{code:'MERGED_DUPLICATE',delta:-10,reason:'Смысл более слабого элемента включён в сохранённый факт.'}];
+    merged_duplicates.push({removed_id:candidate.id,kept_id:existing.id,removed_value:candidate.value,kept_value:existing.value});excluded.push(canonicalSummaryExcluded(candidate,'merged_duplicate',existing));
+  });
+  const bySlot=Object.fromEntries(Object.keys(CANONICAL_SUMMARY_SLOT_LIMITS).map(slot=>[slot,[]])),selected=[];
+  CANONICAL_SUMMARY_SLOT_ORDER.forEach(slot=>{
+    merged.filter(item=>item.target_slot===slot).sort((a,b)=>b.summary_priority_score-a.summary_priority_score||a.id.localeCompare(b.id,'ru')).forEach(candidate=>{
+      const duplicate=selected.find(item=>canonicalSummaryDuplicate(item,candidate));
+      if(duplicate){cross_slot_duplicates_removed.push({removed_id:candidate.id,kept_id:duplicate.id,removed_slot:slot,kept_slot:duplicate.target_slot});excluded.push(canonicalSummaryExcluded(candidate,'cross_slot_duplicate',duplicate));return;}
+      if(candidate.summary_priority_score<40&&!['conversation_result','primary_next_step'].includes(slot)){excluded.push(canonicalSummaryExcluded(candidate,'below_threshold'));return;}
+      if(bySlot[slot].length>=CANONICAL_SUMMARY_SLOT_LIMITS[slot]){excluded.push(canonicalSummaryExcluded(candidate,'slot_limit'));return;}
+      if(selected.length>=CANONICAL_SUMMARY_TOTAL_LIMIT){excluded.push(canonicalSummaryExcluded(candidate,'total_limit'));return;}
+      bySlot[slot].push(candidate);selected.push(candidate);
+    });
+  });
+  const critical_meanings_lost=excluded.filter(item=>item.score>=90&&['slot_limit','total_limit'].includes(item.reason)).length;
+  const conversationResult=bySlot.conversation_result[0]||null,primaryNextStep=bySlot.primary_next_step[0]||null;
+  const storePrimary=conversation.primary_next_step&&conversation.primary_next_step.status!=='not_defined'?moduleSummaryNaturalNextStep(conversation):'';
+  const primary_next_step_consistent=!storePrimary||Boolean(primaryNextStep&&moduleSummaryNorm(primaryNextStep.value)===moduleSummaryNorm(storePrimary));
+  if(!source.conversation||source.store_meta&&source.store_meta.partial===true||conversation.partial===true||toList(conversation.source_errors).length)warnings.push({code:'PARTIAL_STORE',message:'Conversation Store частично отсутствует; использованы только доступные verified-данные.'});
+  const selected_by_slot=Object.fromEntries(Object.entries(bySlot).map(([slot,items])=>[slot,items.length]));
+  const excluded_by_reason={};excluded.forEach(item=>{excluded_by_reason[item.reason]=(excluded_by_reason[item.reason]||0)+1;});
+  const ranking_diagnostics={candidates_total:candidates.length,selected_total:selected.length,excluded_total:excluded.length,merged_duplicates,cross_slot_duplicates_removed,selected_by_slot,excluded_by_reason,ranking_version:CANONICAL_SUMMARY_CONTEXT_VERSION,warnings,critical_meanings_lost,unverified_data_used,technical_error,conversation_result_present:Boolean(conversationResult),primary_next_step_consistent,total_limit:CANONICAL_SUMMARY_TOTAL_LIMIT};
+  return {
+    client_context:bySlot.client_context.map(canonicalSummaryPublicItem),financial_context:bySlot.financial_context.map(canonicalSummaryPublicItem),critical_requirements:bySlot.critical_requirements.map(canonicalSummaryPublicItem),objections:bySlot.objections.map(canonicalSummaryPublicItem),open_questions:bySlot.open_questions.map(canonicalSummaryPublicItem),important_agent_information:bySlot.important_agent_information.map(canonicalSummaryPublicItem),conversation_result:conversationResult?canonicalSummaryPublicItem(conversationResult):null,primary_next_step:primaryNextStep?canonicalSummaryPublicItem(primaryNextStep):null,quote_candidates:bySlot.quote_candidates.map(canonicalSummaryPublicItem),excluded_items:excluded,ranking_diagnostics
+  };
+}
+function canonicalSummaryPromptInput(context,attributes={},cardMetadata={}){
+  const summary_context={client_context:context.client_context,financial_context:context.financial_context,critical_requirements:context.critical_requirements,objections:context.objections,open_questions:context.open_questions,important_agent_information:context.important_agent_information,conversation_result:context.conversation_result,primary_next_step:context.primary_next_step,quote_candidates:context.quote_candidates};
+  const value=item=>item&&typeof item==='object'&&Object.prototype.hasOwnProperty.call(item,'value')?item.value:item;
+  return {summary_context,crm_attributes:{interest:toList(attributes.interest).map(value).filter(Boolean),funding_source:value(attributes.funding_source)||'не определено',purchase_term:value(attributes.purchase_term)||'не определено'},card_metadata:cardMetadata&&typeof cardMetadata==='object'?cardMetadata:{}};
+}
 function moduleSummaryPreparedContext(safeStore){
   const conversation=safeStore&&safeStore.conversation||{},facts=toList(conversation.facts),requirements=toList(conversation.requirements);
   const factValue=fact=>String(fact&&(fact.normalized_value??fact.value??fact.evidence)||'').trim();
@@ -7426,14 +7652,14 @@ function moduleSummaryPreparedContext(safeStore){
 function moduleSummaryPrompt(stage,ctx){
   const transcript=String(transcriptText(ctx)||'').trim();
   const safeStore=moduleSummaryStoreView(ctx&&ctx.conversation_store);
-  const summaryContext=moduleSummaryPreparedContext(safeStore);
+  const cardMetadata=ctx&&ctx.card_metadata||ctx&&ctx.__card_metadata||{};
+  const summaryContext=buildCanonicalSummaryContext(safeStore,transcript,cardMetadata);
+  const promptInput=canonicalSummaryPromptInput(summaryContext,safeStore&&safeStore.conversation&&safeStore.conversation.attributes||{},cardMetadata);
   const retryFeedback=String(ctx&&ctx.__summary_retry_feedback||'').trim();
-  const prompt=(stage.prompt||MODULE_SUMMARY_PROMPT)
+  const prompt=String(stage.prompt||MODULE_SUMMARY_PROMPT).replace(/\{\{ctx\.(?:conversation_store|conversation|transcript|transcript_text)\}\}/g,'[OMITTED: use SUMMARY AGENT INPUT]')
     +(retryFeedback?'\n\nПРЕТЕНЗИИ ПРОВЕРЩИКОВ К ПРЕДЫДУЩЕЙ ВЕРСИИ SUMMARY (устрани каждую; новых фактов вне Conversation Store не добавляй):\n'+retryFeedback:'')
-    +'\n\nCONVERSATION STORE (структурированный источник):\n'+JSON.stringify(safeStore)
-    +'\n\nFULL TRANSCRIPT (только вспомогательный контекст и дословные цитаты):\n'+transcript
-    +'\n\nINTERNAL SUMMARY PLAN (используй внутренне, не выводи отдельным блоком):\n'+JSON.stringify(summaryContext);
-  return {prompt,transcriptPresent:Boolean(transcript),transcriptInjected:Boolean(transcript),resolvedPromptContainsTranscript:Boolean(transcript&&prompt.includes(transcript)),transcript,safeStore,summaryContext,cardMetadataOmitted:factsOmittedCount(ctx&&ctx.conversation_store,safeStore),verifiedQuoteCount:summaryContext.best_quote_candidates.length};
+    +'\n\nSUMMARY AGENT INPUT (единственный генеративный контекст; не восстанавливай данные вне него):\n'+JSON.stringify(promptInput);
+  return {prompt,transcriptPresent:Boolean(transcript),transcriptInjected:false,resolvedPromptContainsTranscript:false,transcript,safeStore,summaryContext,promptInput,cardMetadataOmitted:factsOmittedCount(ctx&&ctx.conversation_store,safeStore),verifiedQuoteCount:summaryContext.quote_candidates.length};
 }
 function factsOmittedCount(source,safeStore){
   const sourceFacts=source&&source.conversation&&Array.isArray(source.conversation.facts)?source.conversation.facts.length:0;
@@ -8105,6 +8331,9 @@ async function runModuleSummaryStage(stage,ctx,t0){
     rep.meta=buildStageMeta(stage,rep); return rep;
   }
   let audit=moduleSummaryPrompt(stage,ctx),prompt=audit.prompt,promptHash=await hashPrompt(prompt);
+  ctx.__canonical_summary_context=audit.summaryContext;
+  ctx.__canonical_summary_prompt_input=audit.promptInput;
+  ctx.__summary_context_builder_version=CANONICAL_SUMMARY_CONTEXT_VERSION;
   let raw='',tokens=0,actualModel=null,actualProvider=null,fallbackNote=null,finishReason=null,networkRetryCount=0,networkRetryReason=null;
   let parsed=null,parseErr=null,retryable=false,retryCount=0,policyRepairCount=0,recoveryMode='',fallbackReason='',policyRepairChanges=[];
   let dedupAudit={before:null,after:null,removed_items:[]};
@@ -8114,6 +8343,8 @@ async function runModuleSummaryStage(stage,ctx,t0){
       audit=moduleSummaryPrompt(stage,{...ctx,__summary_retry_feedback:retryFeedback});
       prompt=audit.prompt;
       promptHash=await hashPrompt(prompt);
+      ctx.__canonical_summary_context=audit.summaryContext;
+      ctx.__canonical_summary_prompt_input=audit.promptInput;
     }
     const responseFormat={type:'json_schema',json_schema:{name:MODULE_SUMMARY_SCHEMA_ID,strict:true,schema:MODULE_SUMMARY_JSON_SCHEMA}};
     const response=await callModelWithTransientRetry(prompt,stage.model,stage.provider,stage.temperature,maxTokens,responseFormat,stageAllowsVendorFallback(stage));
@@ -8180,7 +8411,7 @@ async function runModuleSummaryStage(stage,ctx,t0){
   const groundedQuotes=parsed?parsed.quotes.filter((_,index)=>!groundingErrors.some(error=>error.path==='quotes['+index+']')).length:0;
   const summaryMetrics={json_valid:Boolean(parsed),grounded_key_facts:groundedFacts+'/'+(parsed?parsed.key_facts.length:0),grounded_quotes:groundedQuotes+'/'+(parsed?parsed.quotes.length:0),next_step_match:Boolean(parsed&&!groundingErrors.some(error=>error.path==='next_step')),character_count:outputLength,pii_absent:Boolean(parsed),generation_status:technical?'TECHNICAL_ERROR':status,generation_mode:recoveryMode||'llm',fallback_used:Boolean(recoveryMode)||outcomeSourceError,fallback_source:outcomeSourceError?'transcript_manual_review':recoveryMode||null,fallback_reason:outcomeSourceError?'Outcome Extractor technical error; результат требует ручной проверки.':fallbackReason,latency:ms,tokens,cost,retry_count:retryCount,store_status:storeStatus,next_step_source:nextSource,model:actualModel};
   const contractAudit={...repairAudit,prompt_schema_id:MODULE_SUMMARY_SCHEMA_ID,response_schema_id:MODULE_SUMMARY_SCHEMA_ID,parser_schema_id:MODULE_SUMMARY_SCHEMA_ID,runtime_schema_id:MODULE_SUMMARY_SCHEMA_ID,business_validation_applied:Boolean(parsed),fallback_used:summaryMetrics.fallback_used,fallback_source:summaryMetrics.fallback_source,fallback_reason:summaryMetrics.fallback_reason};
-  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,resolved_prompt_contains_transcript:audit.resolvedPromptContainsTranscript,prompt_chars:prompt.length,card_metadata_omitted:audit.cardMetadataOmitted,verified_quote_count:audit.verifiedQuoteCount},contract_audit:contractAudit,grounding_issues:groundingErrors,network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,policy_repair_count:policyRepairCount,policy_repair_changes:policyRepairChanges,diagnostics_before_deduplication:ctx.__summary_diagnostics_before,removed_duplicates:dedupAudit.removed_items,diagnostics_after_deduplication:ctx.__summary_diagnostics_after,model:actualModel,timestamp:new Date().toISOString(),finish_reason:finishReason||null,status:technical||status==='ERROR'?'bad':status==='MANUAL_REVIEW'?'attn':recoveryMode||repairAudit.repair_attempted?'warn':'ok',summary_metrics:summaryMetrics,metrics:Object.entries(summaryMetrics).map(([key,val])=>[key,typeof val==='number'&&key==='cost'?'$'+val.toFixed(4):val])};
+  const rep={output,raw,parseErr,ms,tokens,cost,provider:actualProvider,requested_provider:stage.provider||null,actual_model:actualModel,requested_model:stage.model,model_fallback:Boolean(fallbackNote),prompt_audit:{transcript_present:audit.transcriptPresent,transcript_injected:audit.transcriptInjected,transcript_chars:audit.transcript.length,resolved_prompt_contains_transcript:audit.resolvedPromptContainsTranscript,prompt_contains_raw_store:false,prompt_chars:prompt.length,card_metadata_omitted:audit.cardMetadataOmitted,verified_quote_count:audit.verifiedQuoteCount,summary_context_builder_version:CANONICAL_SUMMARY_CONTEXT_VERSION},canonical_summary_context:audit.summaryContext,summary_prompt_input:audit.promptInput,ranking_diagnostics:audit.summaryContext.ranking_diagnostics,contract_audit:contractAudit,grounding_issues:groundingErrors,network_retry_count:networkRetryCount,network_retry_reason:networkRetryReason,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:promptHash,resolved_prompt:prompt,retry_count:retryCount,policy_repair_count:policyRepairCount,policy_repair_changes:policyRepairChanges,diagnostics_before_deduplication:ctx.__summary_diagnostics_before,removed_duplicates:dedupAudit.removed_items,diagnostics_after_deduplication:ctx.__summary_diagnostics_after,model:actualModel,timestamp:new Date().toISOString(),finish_reason:finishReason||null,status:technical||status==='ERROR'?'bad':status==='MANUAL_REVIEW'?'attn':recoveryMode||repairAudit.repair_attempted?'warn':'ok',summary_metrics:summaryMetrics,metrics:Object.entries({...summaryMetrics,summary_context_builder_version:CANONICAL_SUMMARY_CONTEXT_VERSION,context_selected:audit.summaryContext.ranking_diagnostics.selected_total,context_excluded:audit.summaryContext.ranking_diagnostics.excluded_total}).map(([key,val])=>[key,typeof val==='number'&&key==='cost'?'$'+val.toFixed(4):val])};
   rep.meta=buildStageMeta(stage,rep); return rep;
 }
 
@@ -13316,6 +13547,9 @@ function renderReport(stage, rep, num){
   else if(moduleCrmStage&&rep.output){ body+=renderModuleCrmPanel(rep.output); }
   else if(moduleSummaryStage&&rep.output&&['GENERATED','MANUAL_REVIEW'].includes(rep.summary_metrics?.generation_status)){
     body+=renderModuleSummaryResult(rep.output)
+      +'<details class="help"><summary>Canonical Summary Context · '+escapeHtml(rep.ranking_diagnostics&&rep.ranking_diagnostics.ranking_version||CANONICAL_SUMMARY_CONTEXT_VERSION)+'</summary><div class="out">'+escapeHtml(JSON.stringify(rep.canonical_summary_context||{},null,2))+'</div></details>'
+      +'<details class="help"><summary>Ranking diagnostics</summary><div class="out">'+escapeHtml(JSON.stringify(rep.ranking_diagnostics||{},null,2))+'</div></details>'
+      +'<details class="help"><summary>Итоговый prompt input Summary Agent</summary><div class="out">'+escapeHtml(JSON.stringify(rep.summary_prompt_input||{},null,2))+'</div></details>'
       +'<details class="help"><summary>Diagnostics до дедупликации</summary><div class="out">'+escapeHtml(JSON.stringify(rep.diagnostics_before_deduplication||{},null,2))+'</div></details>'
       +'<details class="help"><summary>Удалённые дубли</summary><div class="out">'+escapeHtml(JSON.stringify(rep.removed_duplicates||[],null,2))+'</div></details>'
       +'<details class="help"><summary>Diagnostics после дедупликации</summary><div class="out">'+escapeHtml(JSON.stringify(rep.diagnostics_after_deduplication||{},null,2))+'</div></details>';

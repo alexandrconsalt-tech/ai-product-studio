@@ -1,0 +1,66 @@
+[
+  {
+    "id": "mystolovo",
+    "required_meanings": [["участ", "ижс"], ["5,5"], ["6 сот"], ["мистолов", "капитолов", "лаврик"], ["9600"], ["видео"], ["альтернатив"], ["max"]],
+    "allowed_meanings": [["строительств"], ["подбор"]],
+    "forbidden_meanings": [["привет"], ["4,65"], ["охтинское раздолье"]],
+    "expected_next_step": ["видео", "альтернатив", "max"],
+    "allowed_quotes": [["9600"]]
+  },
+  {
+    "id": "repeat_viewing",
+    "required_meanings": [["повторн", "контакт"], ["готов", "приех"], ["просмотр", "19:00"], ["точк", "встреч"], ["изменен"]],
+    "allowed_meanings": [],
+    "forbidden_meanings": [["бюджет"], ["ипотек"], ["возраж"]],
+    "expected_next_step": ["просмотр", "19:00"],
+    "allowed_quotes": []
+  },
+  {
+    "id": "granddaughter",
+    "required_meanings": [["17-лет", "внучк"], ["25", "26"], ["вуз"], ["9 млн"], ["наличн"], ["юридическ", "чист"], ["торг"], ["альтернатив"], ["позвон"]],
+    "allowed_meanings": [["студи"]],
+    "forbidden_meanings": [["адрес"], ["привет"]],
+    "expected_next_step": ["позвон"],
+    "allowed_quotes": [["внучк"], ["9 млн"]]
+  },
+  {
+    "id": "medikova",
+    "required_meanings": [["собственн", "проживан"], ["наслед"], ["оригинал"], ["обремен", "долг"], ["титульн", "страхован"], ["просмотр"], ["позвон"]],
+    "allowed_meanings": [["наличн"]],
+    "forbidden_meanings": [["медикова"], ["третий"], ["замок"], ["двер"], ["тет"], ["племян"], ["себе рассматриваю"]],
+    "expected_next_step": ["позвон", "просмотр"],
+    "allowed_quotes": []
+  },
+  {
+    "id": "short_call",
+    "required_meanings": [["перезвон"]],
+    "allowed_meanings": [["контакт"]],
+    "forbidden_meanings": [["бюджет"], ["ипотек"], ["требован"]],
+    "expected_next_step": ["перезвон"],
+    "allowed_quotes": []
+  },
+  {
+    "id": "no_next_step",
+    "required_meanings": [["консультац", "заверш"]],
+    "allowed_meanings": [["решение", "не принято"]],
+    "forbidden_meanings": [["позвон"], ["отправ"], ["просмотр"]],
+    "expected_next_step": [],
+    "allowed_quotes": []
+  },
+  {
+    "id": "legal",
+    "required_meanings": [["наслед"], ["обремен"], ["оригинал"], ["титульн"]],
+    "allowed_meanings": [["документ"]],
+    "forbidden_meanings": [["биограф"], ["очеред"]],
+    "expected_next_step": ["документ"],
+    "allowed_quotes": [["обремен"]]
+  },
+  {
+    "id": "requirements_objection",
+    "required_meanings": [["лифт"], ["60 м"], ["метро"], ["шум"], ["подбор"]],
+    "allowed_meanings": [["двухкомнат"]],
+    "forbidden_meanings": [["этаж объекта"], ["адрес"], ["привет"]],
+    "expected_next_step": ["подбор"],
+    "allowed_quotes": [["шум"]]
+  }
+]

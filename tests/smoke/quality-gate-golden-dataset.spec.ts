@@ -89,6 +89,7 @@ for (const goldenCase of GOLDEN_CASES) {
       ]));
       ctx.summary = { conversation_result: "Клиенту нужен тихий двор.", key_facts: [], quotes: [], next_step: "Клиент вернётся с решением." };
       ctx.conversation_store = { conversation: { partial: false, source_errors: [], attributes: {}, primary_next_step: { action: "вернуться с решением", status: "confirmed" } } };
+      ctx.__canonical_summary_context = { ranking_diagnostics: { conversation_result_present: true, critical_meanings_lost: 0, primary_next_step_consistent: true, unverified_data_used: false, technical_error: false } };
       return CODE_FUNCS.summaryQualityGate({}, ctx).output;
     }, goldenCase.scores);
     expect(result).toMatchObject({

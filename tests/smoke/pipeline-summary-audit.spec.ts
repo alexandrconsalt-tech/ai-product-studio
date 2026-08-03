@@ -560,7 +560,7 @@ test("Format Judge и Quality Gate применяют raw/effective caps и fall
 test("чистое Summary не получает cap и допускает AUTO_SAVE", async ({ page }) => {
   await page.goto(moduleUrl);
   const result = await page.evaluate(() => {
-    const ctx = { summary: { conversation_result: "Клиенту нужен тихий двор.", key_facts: [], quotes: [], next_step: "Клиент вернётся с решением." }, conversation_store: { conversation: { partial: false, source_errors: [], attributes: {}, primary_next_step: { action: "вернуться с решением", status: "confirmed" } } } };
+    const ctx = { summary: { conversation_result: "Клиенту нужен тихий двор.", key_facts: [], quotes: [], next_step: "Клиент вернётся с решением." }, conversation_store: { conversation: { partial: false, source_errors: [], attributes: {}, primary_next_step: { action: "вернуться с решением", status: "confirmed" } } }, __canonical_summary_context: { ranking_diagnostics: { conversation_result_present: true, critical_meanings_lost: 0, primary_next_step_consistent: true, unverified_data_used: false, technical_error: false } } };
     ctx.summary_diagnostics = analyzeSummaryDiagnostics(ctx, ctx.summary, { deduplication_applied: true, removed_items: [] });
     const base = { score: 95, status: "pass", issues: [], explanation: "OK" };
     return { diagnostics: ctx.summary_diagnostics, gate: CODE_FUNCS.summaryQualityGate({}, { ...ctx, truth_check: base, critical_completeness_check: base, agent_utility_check: base, action_check: base, presentation_check: base }).output };
