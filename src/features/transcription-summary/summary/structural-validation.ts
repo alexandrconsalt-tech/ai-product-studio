@@ -86,17 +86,6 @@ function keyFactDuplicateCodes(facts: SummaryV3["key_facts"]): readonly string[]
   return result;
 }
 
-function repairGeneratedFacts(facts: SummaryV3["key_facts"]): SummaryV3["key_facts"] {
-  const grouped = new Map<string, { label: string; values: string[] }>();
-  for (const fact of facts) {
-    const key = normalized(fact.label);
-    const current = grouped.get(key) ?? { label: fact.label.trim(), values: [] };
-    if (!current.values.some((value) => normalized(value) === normalized(fact.value))) current.values.push(fact.value.trim());
-    grouped.set(key, current);
-  }
-  return [...grouped.values()].map((item) => ({ label: item.label, value: item.values.join("; ") }));
-}
-
 function actionChannelCodes(nextStep: string): readonly string[] {
   return /(?:провед\S*\s+просмотр|покаж\S*\s+(?:квартир|объект)|приед\S*\s+на\s+просмотр)/iu.test(normalized(nextStep))
     && /(?:по\s+телефону|phone|телефонн\S*\s+канал)/iu.test(normalized(nextStep))
@@ -289,6 +278,21 @@ export function applySummaryPlanAndValidate(
   const plannedQuotes = plan.meanings.filter((item) => item.block === "quotes");
   const nextMeaning = plan.meanings.find((item) => item.block === "next_step");
   let conversationResult = generated.conversation_result.trim();
+  const generatedVisible = [generated.conversation_result, ...generated.key_facts.flatMap((item) => [item.label, item.value])].join(" ");
+  const plannedVisible = plan.meanings.map((item) => item.text).join(" ");
+  const generatedCardNoise = protectedTokens(generatedVisible).some((item) => !protectedPresent(plannedVisible, item))
+    || (/(?:\bжк\b|\bадрес\b|\bэтаж\b)/iu.test(generatedVisible)
+      && !/(?:\bжк\b|\bадрес\b|\bэтаж\b)/iu.test(plannedVisible))
+    || /(?:телефон|номер)\D{0,20}\d{3,}/iu.test(generatedVisible);
+  if (generatedCardNoise) {
+    conversationResult = renderConversationResult(requiredResult);
+    transformations.push({
+      ruleId: "summary.plan-block-enforced.v1",
+      fieldPath: "conversation_result",
+      meaningId: null,
+      reason: "Object-card data outside the Summary Plan was removed from conversation_result.",
+    });
+  }
 
   if (plannedFacts.some((meaning) => overlap(conversationResult, meaning.text) >= 0.5)) {
     conversationResult = renderConversationResult(requiredResult);
@@ -321,9 +325,7 @@ export function applySummaryPlanAndValidate(
 
   let candidate: SummaryV3 = {
     conversation_result: conversationResult,
-    key_facts: plannedFacts.length
-      ? renderPlannedFacts(plannedFacts)
-      : repairGeneratedFacts(generated.key_facts.filter((item) => technicalResidue(`${item.label} ${item.value}`).length === 0)),
+    key_facts: renderPlannedFacts(plannedFacts),
     quotes: plannedQuotes.map((item) => ({ text: item.text })),
     next_step: nextMeaning
       && technicalResidue(generated.next_step).length === 0

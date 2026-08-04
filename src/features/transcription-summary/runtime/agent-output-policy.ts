@@ -152,6 +152,11 @@ function isOperationalAgreement(action: string): boolean {
   return /(?:^|\s)(?:просмотр|показ|встреча|звонок|отправка|провести|посмотреть|показать|осмотреть|встретиться|приехать|позвонить|перезвонить|созвониться|связаться|отправить|прислать|направить|передать|подготовить|уточнить|подтвердить|забронировать|внести|подписать)(?:ся)?(?:\s|$)/iu.test(normalized(action));
 }
 
+function isPhoneConfirmationAgreement(action: string, evidence: string): boolean {
+  return /(?:номер|телефон|цифр)/iu.test(normalized(`${action} ${evidence}`))
+    && /(?:подтверд|верн|правильн)/iu.test(normalized(`${action} ${evidence}`));
+}
+
 function compactCallResult(outcome: OutcomeV3): string {
   if (outcome.primary_next_step.status !== "confirmed") return outcome.call_result.trim();
   const action = normalized(outcome.primary_next_step.action);
@@ -165,7 +170,9 @@ function compactCallResult(outcome: OutcomeV3): string {
 export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPolicyResultV3<OutcomeV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
   let agreements = value.agreements
-    .filter((agreement) => agreement.status === "confirmed" && isOperationalAgreement(agreement.action))
+    .filter((agreement) => agreement.status === "confirmed"
+      && isOperationalAgreement(agreement.action)
+      && !isPhoneConfirmationAgreement(agreement.action, agreement.evidence))
     .map((agreement) => ({
       ...agreement,
       action: normalizedViewingAction(agreement.action),
@@ -209,11 +216,9 @@ export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPo
   if (confirmsViewingAvailability && /(?:звон|phone|телефон)/iu.test(normalized(`${primary.channel} ${evidence}`))) {
     const originalAgreements = agreements;
     const originalPrimary = primary;
-    agreements = agreements.map((agreement) => ({
-      ...agreement,
-      action: "Сообщить клиенту о возможности просмотра",
-      channel: "телефон",
-    }));
+    agreements = agreements.map((agreement) => /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(normalized(`${agreement.action} ${agreement.evidence}`))
+      ? { ...agreement, action: "Сообщить клиенту о возможности просмотра", channel: "телефон" }
+      : agreement);
     primary = {
       ...primary,
       action: "Позвонить клиенту и сообщить, доступна ли квартира для просмотра",
