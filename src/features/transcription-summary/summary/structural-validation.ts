@@ -224,9 +224,9 @@ function nextStepDuplicatedInText(conversationResult: string, nextStep: string):
 
 function compactConversationResult(nextStep: string): string {
   const value = normalized(nextStep);
+  if (/(?:перезвон|повторн\S* звон|позвон|связ|сообщ)/u.test(value)) return "Договорились о повторном звонке.";
   if (/(?:осмотр|просмотр|встреч|встрет)/u.test(value)) return "Просмотр согласован.";
   if (/(?:документ)/u.test(value)) return "Отправка документов согласована.";
-  if (/(?:перезвон|повторн\S* звон|позвон)/u.test(value)) return "Договорились о повторном звонке.";
   if (/(?:подбор|вариант)/u.test(value)) return "Отправка подборки согласована.";
   if (/(?:видео|материал|планиров)/u.test(value)) return "Отправка материалов согласована.";
   return "Следующий шаг согласован.";

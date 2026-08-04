@@ -104,6 +104,34 @@ function factType(item: Record<string, unknown>): string {
   return text(item.predicate ?? item.type ?? item.kind).toLocaleLowerCase("ru-RU");
 }
 
+function clientGoalText(fact: Record<string, unknown>): string {
+  const evidence = text(fact.evidence);
+  const type = factType(fact);
+  if (/(?:searching_for|подбира)/u.test(type) && /(?:себе|для\s+себя)/iu.test(evidence)) {
+    return "Клиент подбирает квартиру для себя";
+  }
+  return text(fact);
+}
+
+function fundingContextText(facts: readonly Record<string, unknown>[]): string {
+  const source = facts.map((fact) => `${text(fact)} ${text(fact.evidence)}`).join(" ");
+  if (/деньг\S*\s+на\s+счет/iu.test(source) && /родител\S*\s+покуп/iu.test(source)) {
+    return "Деньги находятся на счёте, покупку оплачивают родители";
+  }
+  if (/деньг\S*\s+на\s+счет/iu.test(source)) return "Деньги находятся на счёте";
+  return facts.map(text).filter(Boolean).join("; ");
+}
+
+function legalContextPart(fact: Record<string, unknown>): string {
+  const type = factType(fact);
+  const source = `${text(fact)} ${text(fact.evidence)}`;
+  if (/(?:ownership_count|собствен)/u.test(type) || /один\s+собственник/iu.test(source)) return "один собственник";
+  if (/(?:acquisition|document|дду)/u.test(type) || /по\s+дду/iu.test(source)) return "квартира приобретена по ДДУ";
+  if (/(?:mortgage|ипотек)/u.test(type) || /ипотек\S*\s+(?:у|в)\s+сбер/iu.test(source)) return "квартира находится в ипотеке Сбербанка";
+  if (/(?:registration|registered_residents|пропис)/u.test(type) || /никто\s+не\s+прописан/iu.test(source)) return "зарегистрированных жильцов нет";
+  return text(fact);
+}
+
 function outcomeMeaning(item: Record<string, unknown>): boolean {
   return /(?:осмотр|просмотр|встреч|показ|позвон|перезвон|звонок|созвон|отправ|пришл|направ|договоренн|appointment|meeting|viewing)/iu.test(
     `${text(item.need_type)} ${text(item.value)}`,
@@ -157,7 +185,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
       meaningId,
       kind: "client_goal",
       block: "conversation_result",
-      text: text(fact),
+      text: clientGoalText(fact),
       required: true,
       exclusive: false,
       sourceIds: sourceIds(fact, meaningId),
@@ -184,7 +212,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
       meaningId: "verified_funding_context",
       kind: "key_fact",
       block: "key_facts",
-      text: financingFacts.map(text).filter(Boolean).join("; "),
+      text: fundingContextText(financingFacts),
       required: true,
       exclusive: false,
       sourceIds: [...new Set(financingFacts.flatMap((fact, index) => sourceIds(fact, `funding_${index + 1}`)))],
@@ -192,13 +220,13 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
   }
 
   const legalFacts = store.facts.map(record).filter((fact) =>
-    /(?:ownership|document|mortgage|registration|собствен|дду|обремен|ипотек|пропис)/u.test(factType(fact)));
+    /(?:ownership|acquisition|document|mortgage|registr|собствен|дду|обремен|ипотек|пропис)/u.test(factType(fact)));
   if (legalFacts.length) {
     add({
       meaningId: "verified_legal_context",
       kind: "key_fact",
       block: "key_facts",
-      text: legalFacts.map(text).filter(Boolean).join("; "),
+      text: [...new Set(legalFacts.map(legalContextPart).filter(Boolean))].join("; "),
       required: false,
       exclusive: false,
       sourceIds: [...new Set(legalFacts.flatMap((fact, index) => sourceIds(fact, `legal_${index + 1}`)))],
@@ -219,6 +247,32 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
       sourceIds: sourceIds(conditionalViewingAgreement, "conditional_viewing"),
     });
   }
+  const viewingStatusPending = /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(text(store.primary_next_step.action));
+  if (viewingStatusPending && !meanings.some((meaning) => meaning.meaningId === "viewing_status_pending")) {
+    add({
+      meaningId: "viewing_status_pending",
+      kind: "conversation_result",
+      block: "conversation_result",
+      text: "Возможность просмотра пока не подтверждена.",
+      required: true,
+      exclusive: false,
+      sourceIds: ["primary_next_step"],
+    });
+  }
+  const conditionalSource = store.sources.map(record).find((source) =>
+    /(?:если[^.!?]{0,80}(?:показ|просмотр)|при\s+подтвержден[^.!?]{0,80}(?:показ|просмотр))/iu.test(text(source.text))
+    && /завтра/iu.test(text(source.text)));
+  if (conditionalSource && !meanings.some((meaning) => meaning.meaningId === "conditional_viewing")) {
+    add({
+      meaningId: "conditional_viewing",
+      kind: "conversation_result",
+      block: "conversation_result",
+      text: "При подтверждении просмотр можно будет согласовать на завтра.",
+      required: true,
+      exclusive: false,
+      sourceIds: [text(conditionalSource.turn_id) || "conditional_viewing"],
+    });
+  }
 
   const keyCandidates = [
     ...store.requirements.map(record),
@@ -226,7 +280,14 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
       /(?:objection|constraint|legal|requirement|возраж|огранич|юрид|отриц)/u.test(factType(fact))),
   ]
     .filter((item) => !outcomeMeaning(item))
-    .filter((item) => !/(?:financing|funding|ownership|document|mortgage|registration|финанс|собствен|дду|обремен|ипотек|пропис)/u.test(factType(item)))
+    .filter((item) => !(
+      financingFacts.length > 0
+      && /(?:ипотек|funding|финанс|средств|депозит|наличн)/u.test(
+        `${text(item.need_type)} ${text(item.value)} ${factType(item)}`.toLocaleLowerCase("ru-RU"),
+      )
+    ))
+    .filter((item) => !/(?:intent_to_purchase|searching_for)/u.test(factType(item)))
+    .filter((item) => !/(?:financing|funding|ownership|acquisition|document|mortgage|registr|финанс|собствен|дду|обремен|ипотек|пропис)/u.test(factType(item)))
     .filter((item, index, values) => values.findIndex((candidate) => id(candidate, `key_fact_${index + 1}`) === id(item, `key_fact_${index + 1}`)) === index)
     .sort((left, right) => keyPriority(left) - keyPriority(right))
     .slice(0, crmCoverage.fundingSource && crmCoverage.purchaseTerm && crmCoverage.interest ? 3 : 4);

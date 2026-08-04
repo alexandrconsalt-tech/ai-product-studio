@@ -204,6 +204,25 @@ export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPo
     changed(transformations, "outcome.preserve-conditional-viewing.v1", "agreements", "A conditional viewing must remain conditional; the confirmed action is the status call.", originalAgreements, agreements);
     changed(transformations, "outcome.action-channel-consistency.v1", "primary_next_step", "A phone deadline belongs to the status call, not to conducting a viewing.", originalPrimary, primary);
   }
+  const confirmsViewingAvailability = /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(normalized(primary.action))
+    || /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(normalized(evidence));
+  if (confirmsViewingAvailability && /(?:звон|phone|телефон)/iu.test(normalized(`${primary.channel} ${evidence}`))) {
+    const originalAgreements = agreements;
+    const originalPrimary = primary;
+    agreements = agreements.map((agreement) => ({
+      ...agreement,
+      action: "Сообщить клиенту о возможности просмотра",
+      channel: "телефон",
+    }));
+    primary = {
+      ...primary,
+      action: "Позвонить клиенту и сообщить, доступна ли квартира для просмотра",
+      channel: "телефон",
+    };
+    callResult = "Клиент ожидает подтверждения возможности просмотра.";
+    changed(transformations, "outcome.canonical-viewing-status-call.v1", "agreements", "A confirmed availability update is rendered as a phone contact, not as a viewing.", originalAgreements, agreements);
+    changed(transformations, "outcome.canonical-viewing-status-call.v1", "primary_next_step", "The primary action preserves the confirmed availability call semantics.", originalPrimary, primary);
+  }
   changed(transformations, "outcome.compact-call-result.v1", "call_result", "call_result contains only the confirmed conversation outcome and excludes Facts/Needs/next-step details.", value.call_result, callResult);
   changed(transformations, "outcome.confirmed-agreements-only.v1", "agreements", "Unconfirmed proposals with status=not_defined are not agreements.", value.agreements, agreements);
   changed(transformations, "outcome.role-owner.v1", "primary_next_step", "Named owners and viewing terminology are normalized to role-based v3 semantics.", value.primary_next_step, primary);

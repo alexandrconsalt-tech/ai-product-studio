@@ -225,6 +225,9 @@ function transportFor(item: Case): StructuredProviderTransport {
 
 function expectedConversationOutcome(item: Case): string {
   const next = item.next.action.toLocaleLowerCase("ru-RU");
+  if (/(?:позвон|перезвон|созвон|связ)/u.test(next) && /(?:подтверд|возможност)/u.test(next) && /просмотр/u.test(next)) {
+    return "Клиент ожидает подтверждения возможности просмотра";
+  }
   if (/(?:позвон|перезвон|созвон|связ)/u.test(next)) return "Договорились о повторном звонке";
   if (/(?:осмотр|просмотр|встреч)/u.test(next)) return "Просмотр согласован";
   if (/(?:документ)/u.test(next)) return "Отправка документов согласована";
