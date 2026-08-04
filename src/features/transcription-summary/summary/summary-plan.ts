@@ -86,7 +86,7 @@ function primaryNextStep(store: ConversationStoreV3): string {
   };
   const deadline = text(step.deadline)
     .replace(/^пятница,?\s*пятнадцатого,?\s*(?:в\s*)?(\d{1,2}:\d{2})$/iu, "в пятницу, 15-го, в $1")
-    .replace(/^пятница,?\s*(\d+)-(?:е|ое|го),?\s*(?:в\s*)?(\d{1,2}:\d{2})$/iu, "в пятницу, $1-го, в $2");
+    .replace(/^пятница,?\s*(\d+)-(?:е|ое|го)(?:\s+числа)?,?\s*(?:в\s*)?(\d{1,2}:\d{2})$/iu, "в пятницу, $1-го, в $2");
   add(deadline);
   const channel = text(step.channel);
   if (!/(?:личн|на объекте|in_person)/iu.test(channel)) add(/^(?:e-?mail|электронная почта)$/iu.test(channel)
