@@ -179,7 +179,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
 
   store.facts.map(record).forEach((fact, index) => {
     const type = factType(fact);
-    if (!/(?:client_goal|client goal|goal|цель обращения|interest|интерес|searching_for|подбирает\s+для)/u.test(type)) return;
+    if (!/(?:client_goal|client goal|goal|цель обращения|searching_for|подбирает\s+для)/u.test(type)) return;
     const meaningId = id(fact, `client_goal_${index + 1}`);
     add({
       meaningId,
@@ -207,20 +207,32 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
   const financingFacts = store.facts.map(record).filter((fact) =>
     /(?:financing|funding|источник\s+средств|финанс)/u.test(factType(fact))
     && /(?:деньг\S*\s+на\s+счет|родител\S*\s+покуп)/iu.test(`${text(fact)} ${text(fact.evidence)}`));
-  if (financingFacts.length) {
+  const fundingAttribute = record(attributes.funding_source);
+  const verifiedFundingSources = financingFacts.length
+    ? financingFacts
+    : definedAttribute(fundingAttribute)
+      && /(?:деньг\S*\s+на\s+счет|родител\S*\s+покуп)/iu.test(text(fundingAttribute.evidence))
+      ? [fundingAttribute]
+      : [];
+  const includeFundingMeaning = verifiedFundingSources.length > 0 && store.requirements.length < 4;
+  if (includeFundingMeaning) {
     add({
       meaningId: "verified_funding_context",
       kind: "key_fact",
       block: "key_facts",
-      text: fundingContextText(financingFacts),
+      text: fundingContextText(verifiedFundingSources),
       required: true,
       exclusive: false,
-      sourceIds: [...new Set(financingFacts.flatMap((fact, index) => sourceIds(fact, `funding_${index + 1}`)))],
+      sourceIds: [...new Set(verifiedFundingSources.flatMap((fact, index) => sourceIds(fact, `funding_${index + 1}`)))],
     });
   }
 
-  const legalFacts = store.facts.map(record).filter((fact) =>
-    /(?:ownership|acquisition|document|mortgage|registr|собствен|дду|обремен|ипотек|пропис)/u.test(factType(fact)));
+  const legalContextRequested = store.requirements.map(record).some((item) =>
+    /(?:юрид|обремен|документ|собствен|дду|ипотек|пропис|чистот)/iu.test(`${text(item.need_type)} ${text(item.value)}`));
+  const legalFacts = legalContextRequested
+    ? store.facts.map(record).filter((fact) =>
+        /(?:ownership|acquisition|document|mortgage|registr|собствен|дду|обремен|ипотек|пропис)/u.test(factType(fact)))
+    : [];
   if (legalFacts.length) {
     add({
       meaningId: "verified_legal_context",
@@ -292,7 +304,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     .filter((item) => !/(?:financing|funding|ownership|acquisition|document|mortgage|registr|финанс|собствен|дду|обремен|ипотек|пропис)/u.test(factType(item)))
     .filter((item, index, values) => values.findIndex((candidate) => id(candidate, `key_fact_${index + 1}`) === id(item, `key_fact_${index + 1}`)) === index)
     .sort((left, right) => keyPriority(left) - keyPriority(right))
-    .slice(0, crmCoverage.fundingSource && crmCoverage.purchaseTerm && crmCoverage.interest ? 3 : 4);
+    .slice(0, Math.max(0, 4 - (includeFundingMeaning ? 1 : 0) - (legalFacts.length ? 1 : 0)));
   keyCandidates.forEach((item, index) => {
     const meaningId = id(item, `key_fact_${index + 1}`);
     add({

@@ -74,7 +74,14 @@ function isNonWorkingContactNeed(item: NeedsV3["business_needs"][number]): boole
 
 function isObjectCardNeed(item: NeedsV3["business_needs"][number]): boolean {
   const value = normalized(`${item.need_type} ${item.value}`);
-  return /(?:property_detail|цена\s*:|адрес\s*:|этаж\s*:|площадь\s*:|комплекс\s*:|жк\s+|\d+(?:[.,]\d+)?\s*(?:млн|м²|кв\.?)|ипотек\S*\s+у\s+сбер)/iu.test(value);
+  return /(?:property_detail|specific\s+(?:apartment|property)|конкретн\S*\s+(?:квартир|объект)|цена\s*:|адрес\s*:|этаж\s*:|площадь\s*:|комплекс\s*:|жк\s+|\d+(?:[.,]\d+)?\s*(?:m|млн|м²|кв\.?)|ипотек\S*\s+у\s+сбер)/iu.test(value);
+}
+
+function hasExplicitPurchaseTermEvidence(item: NeedsV3["structured_crm_attributes"]["purchase_term"]): boolean {
+  if (item.value === "не определено") return true;
+  const evidence = normalized(item.evidence);
+  if (/(?:сигнал|предполож|вероятн|можно\s+считать|быстр\S*\s+заинтересован)/u.test(evidence)) return false;
+  return /(?:клиент[^.!?]{0,160}(?:срок|планир|ближайш|месяц|недел|год)|(?:в\s+ближайш|через|в\s+течение|срок\S*\s+покуп)[^.!?]{0,80}(?:дн|недел|месяц|год))/u.test(evidence);
 }
 
 export function applyNeedsAgentOutputPolicyV3(value: NeedsV3): AgentOutputPolicyResultV3<NeedsV3> {
@@ -86,11 +93,15 @@ export function applyNeedsAgentOutputPolicyV3(value: NeedsV3): AgentOutputPolicy
     !isOutcomeNeed(item) && !isNonWorkingContactNeed(item) && explicitClientCriterion(item));
   const interestedIn = value.structured_crm_attributes.interested_in.filter((item) =>
     item.value !== "Новостройки" || /(?:новострой|новый\s+дом|первичн\S*\s+рын)/iu.test(item.evidence));
+  const purchaseTerm = hasExplicitPurchaseTermEvidence(value.structured_crm_attributes.purchase_term)
+    ? value.structured_crm_attributes.purchase_term
+    : { ...value.structured_crm_attributes.purchase_term, value: "не определено" as const };
   changed(transformations, "needs.remove-outcome-actions.v1", "business_needs", "Meetings, viewings, calls and deliveries belong to Outcome, not Needs.", value.business_needs, businessNeeds);
   changed(transformations, "needs.remove-object-card-data.v1", "business_needs", "A concrete listing parameter is not a client need.", value.business_needs, businessNeeds);
   changed(transformations, "needs.remove-outcome-actions.v1", "property_requirements", "Meetings, viewings, calls and deliveries belong to Outcome, not property requirements.", value.property_requirements, propertyRequirements);
   changed(transformations, "needs.explicit-client-criteria-only.v1", "property_requirements", "Object-card facts are not client requirements without explicit client criterion language.", value.property_requirements, propertyRequirements);
   changed(transformations, "needs.direct-interest-evidence.v1", "structured_crm_attributes.interested_in", "A residential complex or DDU mention is not direct evidence of a new-build interest.", value.structured_crm_attributes.interested_in, interestedIn);
+  changed(transformations, "needs.explicit-purchase-term-evidence.v1", "structured_crm_attributes.purchase_term", "Purchase term requires an explicit client time horizon and cannot be inferred from urgency or a proposed viewing.", value.structured_crm_attributes.purchase_term, purchaseTerm);
   return {
     value: {
       ...value,
@@ -99,6 +110,7 @@ export function applyNeedsAgentOutputPolicyV3(value: NeedsV3): AgentOutputPolicy
       structured_crm_attributes: {
         ...value.structured_crm_attributes,
         interested_in: interestedIn,
+        purchase_term: purchaseTerm,
       },
     },
     transformations,

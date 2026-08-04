@@ -104,6 +104,23 @@ describe("agent output policy v3", () => {
     expect(result.structured_crm_attributes.funding_source.value).toBe("наличные / депозит");
   });
 
+  it("не выводит интерес к конкретному объекту и не выводит срок покупки из косвенной срочности", () => {
+    const needs = NeedsV3Schema.parse({
+      business_needs: [{ id: "specific", need_type: "interest_in_property", value: "inquired about a specific apartment / expressed interest", ...evidence }],
+      property_requirements: [],
+      structured_crm_attributes: {
+        interested_in: [],
+        funding_source: { id: "funding", value: "наличные / депозит", ...evidence, evidence: "Клиент: деньги на счету, родители покупают квартиру." },
+        purchase_term: { id: "term", value: "до 1 месяца", ...evidence, evidence: "Агент предлагает просмотр завтра; это сигнал о быстрой заинтересованности." },
+      },
+      communication_preferences: [], client_questions: [],
+    });
+
+    const result = applyNeedsAgentOutputPolicyV3(needs).value;
+    expect(result.business_needs).toEqual([]);
+    expect(result.structured_crm_attributes.purchase_term.value).toBe("не определено");
+  });
+
   it("сохраняет условный просмотр и назначает подтверждённым шагом вечерний звонок", () => {
     const outcome = OutcomeV3Schema.parse({
       call_result: "Просмотр согласован.",
