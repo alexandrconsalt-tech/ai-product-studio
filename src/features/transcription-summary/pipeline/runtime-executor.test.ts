@@ -110,4 +110,19 @@ describe("v3 runtime executor dependencies", () => {
     expect(NeedsV3Schema.parse(result.value).property_requirements).toEqual([]);
     expect(result.audit.validationIssues).toContainEqual(expect.objectContaining({ code: "EMPTY_NEEDS_NORMALIZED" }));
   });
+
+  it("восстанавливает явные юридические требования после невалидного provider output", async () => {
+    const result = await executor([]).execute("needs_agent", context({
+      facts_agent: FactsV3Contract.validator.parse(FactsV3Contract.fixtures.valid),
+    }, "Для меня важно, чтобы квартира была юридически чистой: без обременений, с оригиналами документов."));
+
+    expect(result.status).toBe("SUCCESS_WITH_WARNING");
+    expect(NeedsV3Schema.parse(result.value).property_requirements.map((item) => item.value)).toEqual([
+      "юридическая чистота",
+      "без обременений",
+      "оригиналы документов",
+    ]);
+    expect(result.audit.errorCode).toBeNull();
+    expect(result.audit.validationIssues).toContainEqual(expect.objectContaining({ code: "EXPLICIT_NEEDS_RECOVERED" }));
+  });
 });

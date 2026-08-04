@@ -99,6 +99,44 @@ function emptyNeedsResult(context: PipelineExecutionContext): unknown | null {
   return parsed.success ? parsed.data : null;
 }
 
+function explicitLegalNeedsResult(context: PipelineExecutionContext): unknown | null {
+  const source = context.transcript.turns.find((turn) =>
+    turn.speaker === "client"
+    && /(?:важн\S*|нужн\S*|требу\S*)[^.!?]{0,180}(?:юрид|обремен|оригинал\S*\s+документ)/iu.test(turn.text));
+  if (!source) return null;
+  const normalized = source.text.toLocaleLowerCase("ru-RU");
+  const requirements = [
+    /юридическ\S*\s+чист/iu.test(normalized) ? "юридическая чистота" : null,
+    /без\s+обремен/iu.test(normalized) ? "без обременений" : null,
+    /оригинал\S*\s+документ/iu.test(normalized) ? "оригиналы документов" : null,
+  ].filter((value): value is string => Boolean(value));
+  if (!requirements.length) return null;
+  const base = {
+    source_turn_ids: [source.id],
+    evidence: source.text,
+    confidence: 1,
+    verification_status: "extracted" as const,
+  };
+  const candidate = {
+    business_needs: [],
+    property_requirements: requirements.map((value, index) => ({
+      id: `explicit-legal-requirement-${index + 1}`,
+      need_type: "legal_requirement",
+      value,
+      ...base,
+    })),
+    structured_crm_attributes: {
+      interested_in: [],
+      funding_source: { id: "funding-source-not-defined", value: "не определено", ...base },
+      purchase_term: { id: "purchase-term-not-defined", value: "не определено", ...base },
+    },
+    communication_preferences: [],
+    client_questions: [],
+  };
+  const parsed = NeedsV3Schema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
 function sourceReferences(context: PipelineExecutionContext) {
   return context.transcript.turns.map((turn) => ({
     turn_id: turn.id,
@@ -324,17 +362,19 @@ implements TranscriptionSummaryV3StageExecutor {
       rawProviderResponse: completion.ok ? null : completion.rawResponse ?? null,
     };
     if (!completion.ok && stageId === "needs_agent") {
-      const emptyNeeds = emptyNeedsResult(context);
-      if (emptyNeeds) return {
+      const deterministicNeeds = explicitLegalNeedsResult(context) ?? emptyNeedsResult(context);
+      if (deterministicNeeds) return {
         status: "SUCCESS_WITH_WARNING",
-        value: emptyNeeds,
+        value: deterministicNeeds,
         audit: {
           ...audit,
           validationStatus: "valid",
           validationIssues: [{
             path: "needs_agent",
-            code: "EMPTY_NEEDS_NORMALIZED",
-            message: "No business needs were discussed; deterministic empty Needs v3 result applied.",
+            code: explicitLegalNeedsResult(context) ? "EXPLICIT_NEEDS_RECOVERED" : "EMPTY_NEEDS_NORMALIZED",
+            message: explicitLegalNeedsResult(context)
+              ? "Provider output was invalid; explicit client legal requirements were recovered deterministically from source turns."
+              : "No business needs were discussed; deterministic empty Needs v3 result applied.",
           }],
           errorType: null,
           errorCode: null,
