@@ -10,7 +10,7 @@ describe("Summary Plan v3 deadline rendering", () => {
       primary_next_step: {
         action: "Провести просмотр",
         owner: "Агент",
-        deadline: "пятница, 15-го, 14:00",
+        deadline: "пятница, пятнадцатого, 14:00",
         channel: "личная встреча",
         status: "confirmed",
       },

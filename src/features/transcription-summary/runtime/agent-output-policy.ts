@@ -109,6 +109,10 @@ function deadlineWithConfirmedWeekday(deadline: string, evidence: string): strin
   return `${day}, ${deadline.trim()}`.replace(/,\s*$/u, "");
 }
 
+function isOperationalAgreement(action: string): boolean {
+  return /(?:^|\s)(?:провести|посмотреть|показать|осмотреть|встретиться|приехать|позвонить|перезвонить|созвониться|связаться|отправить|прислать|направить|передать|подготовить|уточнить|подтвердить|забронировать|внести|подписать)(?:ся)?(?:\s|$)/iu.test(normalized(action));
+}
+
 function compactCallResult(outcome: OutcomeV3): string {
   if (outcome.primary_next_step.status !== "confirmed") return outcome.call_result.trim();
   const action = normalized(outcome.primary_next_step.action);
@@ -122,7 +126,7 @@ function compactCallResult(outcome: OutcomeV3): string {
 export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPolicyResultV3<OutcomeV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
   const agreements = value.agreements
-    .filter((agreement) => agreement.status === "confirmed")
+    .filter((agreement) => agreement.status === "confirmed" && isOperationalAgreement(agreement.action))
     .map((agreement) => ({
       ...agreement,
       action: normalizedViewingAction(agreement.action),
