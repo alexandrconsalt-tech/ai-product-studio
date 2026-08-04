@@ -49,7 +49,8 @@ const SUMMARY_JUDGES = new Set<TranscriptionSummaryV3StageId>([
   "summary_judge_format",
 ]);
 
-const PIPELINE_TIMEOUT_MS = 235_000;
+const PIPELINE_TIMEOUT_MS = 225_000;
+const PIPELINE_RESPONSE_RESERVE_MS = 2_000;
 
 function stageReport(input: {
   stageId: TranscriptionSummaryV3StageId;
@@ -252,8 +253,36 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
       outputs,
       deadlineAtMs,
     };
+    const remainingMs = Math.max(
+      1,
+      deadlineAtMs - Date.now() - PIPELINE_RESPONSE_RESERVE_MS,
+    );
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const timeoutExecution = new Promise<PipelineStageExecution>((resolve) => {
+      timeout = setTimeout(() => {
+        const reference = manifest.contracts[STAGE_ROLE[stageId]];
+        resolve({
+          status: "TECHNICAL_ERROR",
+          value: null,
+          audit: {
+            contractId: reference.id,
+            contractVersion: reference.version,
+            schemaHash: reference.schemaHash,
+            validationStatus: "invalid",
+            errorType: "provider",
+            errorCode: "PIPELINE_DEADLINE_EXCEEDED",
+            timeoutStage: stageId,
+            blocking: !SUMMARY_JUDGES.has(stageId),
+            durationMs: remainingMs,
+          },
+        });
+      }, remainingMs);
+    });
     try {
-      return await input.executor.execute(stageId, context);
+      return await Promise.race([
+        input.executor.execute(stageId, context),
+        timeoutExecution,
+      ]);
     } catch (error) {
       const reference = manifest.contracts[STAGE_ROLE[stageId]];
       return {
@@ -270,6 +299,8 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
           blocking: !SUMMARY_JUDGES.has(stageId),
         },
       };
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   };
 
