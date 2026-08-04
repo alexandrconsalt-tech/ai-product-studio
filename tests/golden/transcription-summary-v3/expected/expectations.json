@@ -130,5 +130,93 @@
     "judgeScoreRanges": {"faithfulness": [75,100], "completeness": [75,100], "usefulness": [75,100], "agreements_next_step": [100,100], "format": [75,100]},
     "gate": "QUALITY_RECORDED",
     "crm": "DRY_RUN"
+  },
+  {
+    "id": "prazhskaya_cash_self_late_exit_viewing_callback",
+    "facts": ["наличные", "покупка для себя", "поздний выход устраивает"],
+    "needs": ["funding_source only; no duplicate mortgage need"],
+    "outcome": "client waits for viewing availability callback; viewing is not appointed",
+    "store": "no duplicate funding or next-step meaning",
+    "summary": "purpose, late-exit position and viewing callback",
+    "judgeScoreRanges": {"faithfulness": [90,100], "completeness": [90,100], "usefulness": [90,100], "agreements_next_step": [95,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "bolshevikov_legal_owners_deposit_terminal_refusal",
+    "facts": ["document request", "three owners", "documents pending", "deposit required", "terminal price and repair refusal"],
+    "needs": ["legal due diligence"],
+    "outcome": "terminal refusal without next step",
+    "store": "critical legal facts and refusal retained without agreements",
+    "summary": "legal context and explicit terminal refusal",
+    "judgeScoreRanges": {"faithfulness": [95,100], "completeness": [95,100], "usefulness": [90,100], "agreements_next_step": [95,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "conditional_viewing_not_appointment",
+    "facts": [],
+    "needs": [],
+    "outcome": "availability confirmation only; no appointed viewing",
+    "store": "no false viewing agreement",
+    "summary": "conditional viewing remains conditional",
+    "judgeScoreRanges": {"faithfulness": [95,100], "completeness": [90,100], "usefulness": [90,100], "agreements_next_step": [95,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "terminal_refusal_without_next_step",
+    "facts": ["terminal price and repair refusal"],
+    "needs": ["price objection"],
+    "outcome": "declined; no next step",
+    "store": "one canonical objection meaning",
+    "summary": "explicit refusal without invented follow-up",
+    "judgeScoreRanges": {"faithfulness": [95,100], "completeness": [95,100], "usefulness": [90,100], "agreements_next_step": [95,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "legal_due_diligence_documents",
+    "facts": ["DDU", "mortgage encumbrance", "documents prepared"],
+    "needs": ["legal due diligence"],
+    "outcome": "document preparation only when confirmed",
+    "store": "legal facts retained once",
+    "summary": "legal request and verified object status",
+    "judgeScoreRanges": {"faithfulness": [95,100], "completeness": [95,100], "usefulness": [90,100], "agreements_next_step": [90,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "cash_without_mortgage_single_meaning",
+    "facts": ["cash on account"],
+    "needs": ["наличные / депозит only"],
+    "outcome": "no agreement",
+    "store": "funding represented canonically without duplicate business need",
+    "summary": "cash funding attribute",
+    "judgeScoreRanges": {"faithfulness": [95,100], "completeness": [95,100], "usefulness": [90,100], "agreements_next_step": [90,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "listing_price_is_not_client_budget",
+    "facts": [],
+    "needs": [],
+    "outcome": "no agreement",
+    "store": "listing price is not client budget",
+    "summary": "no invented budget",
+    "judgeScoreRanges": {"faithfulness": [100,100], "completeness": [95,100], "usefulness": [90,100], "agreements_next_step": [90,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
+  },
+  {
+    "id": "listing_feature_is_not_search_requirement",
+    "facts": [],
+    "needs": [],
+    "outcome": "no agreement",
+    "store": "listing rooms, area and floor are not requirements",
+    "summary": "no invented search criterion",
+    "judgeScoreRanges": {"faithfulness": [100,100], "completeness": [95,100], "usefulness": [90,100], "agreements_next_step": [90,100], "format": [90,100]},
+    "gate": "QUALITY_RECORDED",
+    "crm": "DRY_RUN"
   }
 ]

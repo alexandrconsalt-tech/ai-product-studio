@@ -1,0 +1,8 @@
+{
+  "dataset_version": "summary-v3-golden-v1",
+  "status": "AWAITING_FIRST_ACCEPTED_PRODUCTION_RUN",
+  "trigger_fingerprint": "00c63cf46273d9c7cec34322cdef0b5b3de134b26fb32a94e7ae279816e39354",
+  "policy_fingerprint": "1f1222b9253081b0c7e4cfe3053c397e396affb4e2c0546cd95bcb63a94ddaf1",
+  "metrics": null,
+  "cases": []
+}

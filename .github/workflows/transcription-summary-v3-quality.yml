@@ -1,0 +1,69 @@
+name: Transcription Summary v3 Production Quality
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: "Candidate Preview or production /api/transcription-summary-v3/structured URL"
+        required: true
+        type: string
+  deployment_status:
+  pull_request:
+    paths:
+      - "src/features/transcription-summary/summary/**"
+      - "src/features/transcription-summary/summary-judges/**"
+      - "src/features/transcription-summary/quality-gate/**"
+      - "src/features/transcription-summary/contracts/**"
+      - "src/features/transcription-summary/normalization/**"
+      - "tests/golden/transcription-summary-v3/quality-regression/**"
+      - "scripts/transcription-summary-v3-quality-regression.mjs"
+  push:
+    branches: [main]
+    paths:
+      - "src/features/transcription-summary/summary/**"
+      - "src/features/transcription-summary/summary-judges/**"
+      - "src/features/transcription-summary/quality-gate/**"
+      - "src/features/transcription-summary/contracts/**"
+      - "src/features/transcription-summary/normalization/**"
+      - "tests/golden/transcription-summary-v3/quality-regression/**"
+      - "scripts/transcription-summary-v3-quality-regression.mjs"
+
+jobs:
+  validate-golden-dataset:
+    if: github.event_name != 'deployment_status'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run quality:summary-v3:validate
+
+  production-quality-regression:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'deployment_status' && github.event.deployment_status.state == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'deployment_status' && github.event.deployment.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validate Golden Dataset
+        run: npm run quality:summary-v3:validate
+      - name: Run 40-case production regression
+        env:
+          QUALITY_REGRESSION_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoint || format('{0}/api/transcription-summary-v3/structured', github.event.deployment_status.target_url) }}
+          QUALITY_REGRESSION_MODEL: gpt-5-mini-2025-08-07
+        run: npm run quality:summary-v3:production
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: transcription-summary-v3-quality-regression
+          path: artifacts/transcription-summary-v3-quality-regression.json
+          if-no-files-found: warn

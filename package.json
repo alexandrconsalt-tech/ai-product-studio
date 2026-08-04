@@ -10,6 +10,10 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "quality:summary-v3:validate": "node scripts/transcription-summary-v3-quality-regression.mjs",
+    "quality:summary-v3:production": "node scripts/transcription-summary-v3-quality-regression.mjs --live",
+    "predeploy": "npm run quality:summary-v3:production",
+    "deploy": "vercel --prod",
     "test:smoke": "playwright test",
     "test:smoke:headed": "playwright test --headed"
   },
