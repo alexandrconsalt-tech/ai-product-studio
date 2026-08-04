@@ -295,6 +295,10 @@ export function createOpenAiDirectTransport(input: {
         signal: controller.signal,
       });
       responseReceivedAt = now();
+      payload = await response.json().catch((error: unknown) => {
+        if (controller.signal.aborted) throw error;
+        return null;
+      });
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "AbortError";
       errorCategory = timedOut ? "timeout" : "network";
@@ -308,7 +312,6 @@ export function createOpenAiDirectTransport(input: {
       clearTimeout(timeout);
     }
 
-    payload = await response.json().catch(() => null);
     providerErrorValue = providerError(payload);
     if (!response.ok) {
       const classified = classifyProviderError({
