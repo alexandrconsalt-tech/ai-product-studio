@@ -68,4 +68,22 @@ describe("Summary Plan v3 deadline rendering", () => {
 
     expect(plan.meanings.some((meaning) => meaning.meaningId === "purchase-intent")).toBe(false);
   });
+
+  it("не выводит generic purchase в key facts", () => {
+    const fixture = createSummaryFixtureContext();
+    const plan = buildSummaryPlanV3({
+      ...fixture.store,
+      requirements: [
+        { id: "generic-purchase", need_type: "business_need", value: "покупка квартиры", evidence: "Клиент покупает квартиру.", source_turn_ids: ["turn-1"] },
+        { id: "interest", need_type: "interest", value: "Новостройки в центре", evidence: "Интересуют новостройки в центре.", source_turn_ids: ["turn-2"] },
+      ],
+      attributes: {
+        ...fixture.store.attributes,
+        interested_in: [{ id: "crm-interest", value: "Новостройки", evidence: "Интересуют новостройки в центре.", source_turn_ids: ["turn-2"] }],
+      },
+    });
+
+    expect(plan.meanings.some((meaning) => meaning.meaningId === "generic-purchase")).toBe(false);
+    expect(plan.meanings.some((meaning) => meaning.meaningId === "interest")).toBe(true);
+  });
 });

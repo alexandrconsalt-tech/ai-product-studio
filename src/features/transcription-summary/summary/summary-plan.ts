@@ -303,6 +303,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     .filter((item) => !/(?:^intent$|client_goal|^goal$|intent_to_purchase|purchase_intent|searching_for)/u.test(
       `${factType(item)} ${text(item.need_type).toLocaleLowerCase("ru-RU")}`,
     ))
+    .filter((item) => !/^(?:покупка|купить)\s+(?:квартир(?:а|у|ы)?|недвижимость)(?:\s+для\s+себя)?[.!]?$/iu.test(text(item)))
     .filter((item) => !/(?:financing|funding|ownership|acquisition|document|mortgage|registr|финанс|собствен|дду|обремен|ипотек|пропис)/u.test(factType(item)))
     .filter((item, index, values) => values.findIndex((candidate) => id(candidate, `key_fact_${index + 1}`) === id(item, `key_fact_${index + 1}`)) === index)
     .sort((left, right) => keyPriority(left) - keyPriority(right))
