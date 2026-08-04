@@ -58,7 +58,7 @@ describe("agent output policy v3", () => {
     const outcome = OutcomeV3Schema.parse({
       call_result: "Клиент Татьяна ищет новостройку, бюджет 8 млн; просмотр назначен в пятницу в 14:00.",
       agreements: [
-        { id: "confirmed", action: "Посмотреть квартиру", owner: "Менеджер Анна, агент", deadline: "15-е, 14:00", channel: "на объекте", status: "confirmed", evidence: "Да, давайте в пятницу. Договорились." },
+        { id: "confirmed", action: "Показ вариантов", owner: "Менеджер Анна, агент", deadline: "15-е, 14:00", channel: "on-site", status: "confirmed", evidence: "Да, давайте в пятницу. Договорились." },
         { id: "fact-as-agreement", action: "Бюджет до восьми миллионов", owner: "Клиент", deadline: "", channel: "телефон", status: "confirmed", evidence: "Рассматриваю до восьми миллионов." },
         { id: "proposal", action: "Позвонить", owner: "Агент", deadline: "", channel: "", status: "not_defined", evidence: "Можно позвонить." },
       ],

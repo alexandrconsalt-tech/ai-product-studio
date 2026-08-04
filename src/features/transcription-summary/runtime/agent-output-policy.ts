@@ -87,7 +87,7 @@ function normalizedViewingAction(value: string): string {
 
 function normalizedChannel(value: string, action: string): string {
   if (/(?:осмотр|просмотр|показ|встреч)/iu.test(normalized(action))
-    && /(?:на объекте|личн|in_person)/iu.test(normalized(value))) return "личная встреча";
+    && /(?:на объекте|личн|in[_-]person|on[_-]?site)/iu.test(normalized(value))) return "личная встреча";
   return value.trim();
 }
 
@@ -110,7 +110,7 @@ function deadlineWithConfirmedWeekday(deadline: string, evidence: string): strin
 }
 
 function isOperationalAgreement(action: string): boolean {
-  return /(?:^|\s)(?:провести|посмотреть|показать|осмотреть|встретиться|приехать|позвонить|перезвонить|созвониться|связаться|отправить|прислать|направить|передать|подготовить|уточнить|подтвердить|забронировать|внести|подписать)(?:ся)?(?:\s|$)/iu.test(normalized(action));
+  return /(?:^|\s)(?:просмотр|показ|встреча|звонок|отправка|провести|посмотреть|показать|осмотреть|встретиться|приехать|позвонить|перезвонить|созвониться|связаться|отправить|прислать|направить|передать|подготовить|уточнить|подтвердить|забронировать|внести|подписать)(?:ся)?(?:\s|$)/iu.test(normalized(action));
 }
 
 function compactCallResult(outcome: OutcomeV3): string {
