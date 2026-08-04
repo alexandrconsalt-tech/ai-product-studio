@@ -20,6 +20,7 @@ describe("agent output policy v3", () => {
         { id: "name", kind: "client_fact", subject: "client", predicate: "client_name", value: "Татьяна", ...evidence },
         { id: "goal", kind: "client_fact", subject: "client", predicate: "client_goal", value: "Ищет новостройку", ...evidence },
         { id: "view", kind: "requirement_signal", subject: "conversation", predicate: "viewing_appointment", value: "Просмотр в пятницу", ...evidence },
+        { id: "contact", kind: "client_fact", subject: "client", predicate: "contact_reason", value: "ответ на объявление", ...evidence },
       ],
       client_questions: [], contextual_statements: [], rejected_assumptions: [],
       quotes: [
@@ -38,6 +39,7 @@ describe("agent output policy v3", () => {
       business_needs: [
         { id: "view", need_type: "action", value: "Посмотреть квартиру", ...evidence },
         { id: "budget", need_type: "budget", value: "До 8 миллионов", ...evidence, evidence: "После просмотра обсудили бюджет." },
+        { id: "contact", need_type: "contact_reason", value: "ответ на объявление", ...evidence },
       ],
       property_requirements: [{ id: "send", need_type: "action", value: "Отправить документы", ...evidence }],
       structured_crm_attributes: {
@@ -56,14 +58,14 @@ describe("agent output policy v3", () => {
     const outcome = OutcomeV3Schema.parse({
       call_result: "Клиент Татьяна ищет новостройку, бюджет 8 млн; просмотр назначен в пятницу в 14:00.",
       agreements: [
-        { id: "confirmed", action: "Посмотреть квартиру", owner: "Менеджер Анна, агент", deadline: "пятница, 15-е, 14:00", channel: "на объекте", status: "confirmed", evidence: "Договорились." },
+        { id: "confirmed", action: "Посмотреть квартиру", owner: "Менеджер Анна, агент", deadline: "15-е, 14:00", channel: "на объекте", status: "confirmed", evidence: "Да, давайте в пятницу. Договорились." },
         { id: "proposal", action: "Позвонить", owner: "Агент", deadline: "", channel: "", status: "not_defined", evidence: "Можно позвонить." },
       ],
-      primary_next_step: { action: "Посмотреть квартиру", owner: "Менеджер Анна, агент", deadline: "пятница, 15-е, 14:00", channel: "на объекте", status: "confirmed" },
+      primary_next_step: { action: "Посмотреть квартиру", owner: "Менеджер Анна, агент", deadline: "15-е, 14:00", channel: "на объекте", status: "confirmed" },
     });
     const result = applyOutcomeAgentOutputPolicyV3(outcome).value;
     expect(result.call_result).toBe("Просмотр согласован.");
     expect(result.agreements).toHaveLength(1);
-    expect(result.primary_next_step).toMatchObject({ action: "Провести просмотр", owner: "Агент", channel: "личная встреча" });
+    expect(result.primary_next_step).toMatchObject({ action: "Провести просмотр", owner: "Агент", deadline: "пятница, 15-е, 14:00", channel: "личная встреча" });
   });
 });

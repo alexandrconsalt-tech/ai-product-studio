@@ -8,7 +8,7 @@ import type {
 import { executeStructuredCompletion } from "../runtime/structured-output";
 import type { TranscriptV3 } from "../contracts/transcript/v3/contract";
 import type { SummaryResolvedPromptV3 } from "./prompt-builder";
-import { buildSummaryAgentInput } from "./input-builder";
+import { buildSummaryAgentInput, SUMMARY_PROMPT_VERSION } from "./input-builder";
 import { buildSummaryPromptV3 } from "./prompt-builder";
 import {
   processSummaryOutput,
@@ -109,7 +109,7 @@ export async function executeSummaryAgentV3(input: {
     manifestHash: input.manifest.manifestHash,
     storeId: null,
     storeContentHash: null,
-    promptVersion: input.promptVersion ?? "summary-agent-v3.0.0",
+    promptVersion: input.promptVersion ?? SUMMARY_PROMPT_VERSION,
     promptHash: null,
     schemaHash: SummaryV3Contract.schemaHash,
     structuredOutputRequested: false,

@@ -16,7 +16,7 @@ import {
   calculateTranscriptContentHash,
 } from "../store";
 
-export const SUMMARY_PROMPT_VERSION = "summary-agent-v3.0.0" as const;
+export const SUMMARY_PROMPT_VERSION = "summary-agent-v3.1.0" as const;
 
 export type SummaryInputErrorCode =
   | "SUMMARY_STORE_MISSING"
