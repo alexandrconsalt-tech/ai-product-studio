@@ -248,7 +248,9 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     });
   }
   const viewingStatusPending = /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(text(store.primary_next_step.action));
-  if (viewingStatusPending && !meanings.some((meaning) => meaning.meaningId === "viewing_status_pending")) {
+  if (viewingStatusPending
+    && !/(?:ожидает\s+подтвержден|пока\s+не\s+подтвержден)/iu.test(text(store.call_result))
+    && !meanings.some((meaning) => meaning.meaningId === "viewing_status_pending")) {
     add({
       meaningId: "viewing_status_pending",
       kind: "conversation_result",
@@ -286,7 +288,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
         `${text(item.need_type)} ${text(item.value)} ${factType(item)}`.toLocaleLowerCase("ru-RU"),
       )
     ))
-    .filter((item) => !/(?:^intent$|intent_to_purchase|searching_for)/u.test(factType(item)))
+    .filter((item) => !/(?:^intent$|client_goal|^goal$|intent_to_purchase|searching_for)/u.test(factType(item)))
     .filter((item) => !/(?:financing|funding|ownership|acquisition|document|mortgage|registr|финанс|собствен|дду|обремен|ипотек|пропис)/u.test(factType(item)))
     .filter((item, index, values) => values.findIndex((candidate) => id(candidate, `key_fact_${index + 1}`) === id(item, `key_fact_${index + 1}`)) === index)
     .sort((left, right) => keyPriority(left) - keyPriority(right))

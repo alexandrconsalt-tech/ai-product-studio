@@ -131,7 +131,7 @@ function label(meaning: SummaryPlanMeaning): string {
   if (meaning.kind === "client_goal") return "Цель клиента";
   if (/(?:бюджет|руб|₽|млн|миллион)/iu.test(meaning.text)) return "Бюджет";
   if (/(?:собственник|дду|зарегистрирован|прописан|юрид)/iu.test(meaning.text)) return "Юридическая информация";
-  if (/(?:ипотек|финанс|сбербанк|наличн|депозит|деньги\s+находятся\s+на\s+счет)/iu.test(meaning.text)) return "Финансирование";
+  if (/(?:ипотек|финанс|сбербанк|наличн|депозит|деньги\s+находятся\s+на\s+сч[её]т)/iu.test(meaning.text)) return "Финансирование";
   if (/(?:срок|месяц)/iu.test(meaning.text)) return "Срок покупки";
   return /(?:возраж|сомнен|не рассматрива|огранич)/iu.test(meaning.text) ? "Ограничение" : "Ключевой факт";
 }

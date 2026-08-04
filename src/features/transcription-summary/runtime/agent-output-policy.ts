@@ -216,7 +216,10 @@ export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPo
   if (confirmsViewingAvailability && /(?:звон|phone|телефон)/iu.test(normalized(`${primary.channel} ${evidence}`))) {
     const originalAgreements = agreements;
     const originalPrimary = primary;
-    agreements = agreements.map((agreement) => /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(normalized(`${agreement.action} ${agreement.evidence}`))
+    agreements = agreements.map((agreement) => (
+      (isViewingExecutionAction(agreement.action) && /(?:phone|телефон|звон)/iu.test(normalized(agreement.channel)))
+      || /(?:подтверд|сообщ|уточн)[^.!?]{0,100}(?:возможност|доступн|просмотр)/iu.test(normalized(`${agreement.action} ${agreement.evidence}`))
+    )
       ? { ...agreement, action: "Сообщить клиенту о возможности просмотра", channel: "телефон" }
       : agreement);
     primary = {
