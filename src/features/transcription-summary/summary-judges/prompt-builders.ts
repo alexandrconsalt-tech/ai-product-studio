@@ -214,6 +214,7 @@ export function buildAgreementsJudgePrompt(
     ],
     exclusions: [
       "не требуй deadline или channel, если их нет в Store",
+      "не требуй recipient, если поле recipient отсутствует в зарегистрированном Outcome/Store v3 contract",
       "не оценивай прочие факты, формат или полезность",
       "не исправляй Summary",
     ],

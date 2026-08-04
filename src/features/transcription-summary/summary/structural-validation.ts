@@ -141,8 +141,8 @@ function meaningCovered(summary: SummaryV3, meaning: SummaryPlanMeaning): boolea
 function label(meaning: SummaryPlanMeaning): string {
   if (meaning.kind === "client_goal") return "Цель клиента";
   if (/(?:бюджет|руб|₽|млн|миллион)/iu.test(meaning.text)) return "Бюджет";
-  if (/(?:ипотек|финанс|сбербанк|наличн|депозит)/iu.test(meaning.text)) return "Финансирование";
   if (/(?:собственник|дду|зарегистрирован|прописан|юрид)/iu.test(meaning.text)) return "Юридическая информация";
+  if (/(?:ипотек|финанс|сбербанк|наличн|депозит|деньги\s+находятся\s+на\s+счет)/iu.test(meaning.text)) return "Финансирование";
   if (/(?:срок|месяц)/iu.test(meaning.text)) return "Срок покупки";
   return /(?:возраж|сомнен|не рассматрива|огранич)/iu.test(meaning.text) ? "Ограничение" : "Ключевой факт";
 }
@@ -172,7 +172,7 @@ function exactNextStepDuplicated(conversationResult: string, nextStep: string): 
 
 const NEXT_STEP_ACTION_FAMILIES = [
   /(?:отправ|пришл|направ|переда|предостав|подготов|подбор|подбер|предлож|вариант)/u,
-  /(?:позвон|перезвон|созвон|связ|контакт)/u,
+  /(?:позвон|перезвон|созвон|свя[зж]|контакт)/u,
   /(?:встреч|встрет|приед|приех|прибы|осмотр|просмотр)/u,
   /(?:показ|демонстр)/u,
 ] as const;
@@ -180,7 +180,22 @@ const NEXT_STEP_ACTION_FAMILIES = [
 function sharedNextStepAction(value: string, nextStep: string): boolean {
   const actual = normalized(value);
   const expected = normalized(nextStep);
-  return NEXT_STEP_ACTION_FAMILIES.some((pattern) => pattern.test(actual) && pattern.test(expected));
+  const contact = /(?:позвон|перезвон|созвон|свя[зж]|контакт)/u;
+  if (contact.test(actual) || contact.test(expected)) return contact.test(actual) && contact.test(expected);
+  const primaryFamily = (text: string): number => {
+    let selected = -1;
+    let selectedIndex = Number.POSITIVE_INFINITY;
+    NEXT_STEP_ACTION_FAMILIES.forEach((pattern, index) => {
+      const matchIndex = text.search(pattern);
+      if (matchIndex >= 0 && matchIndex < selectedIndex) {
+        selected = index;
+        selectedIndex = matchIndex;
+      }
+    });
+    return selected;
+  };
+  const actualFamily = primaryFamily(actual);
+  return actualFamily >= 0 && actualFamily === primaryFamily(expected);
 }
 
 function isAllowedCompactOutcome(value: string, nextStep: string): boolean {
@@ -274,6 +289,16 @@ export function applySummaryPlanAndValidate(
   const plannedQuotes = plan.meanings.filter((item) => item.block === "quotes");
   const nextMeaning = plan.meanings.find((item) => item.block === "next_step");
   let conversationResult = generated.conversation_result.trim();
+
+  if (plannedFacts.some((meaning) => overlap(conversationResult, meaning.text) >= 0.5)) {
+    conversationResult = renderConversationResult(requiredResult);
+    transformations.push({
+      ruleId: "summary.plan-block-enforced.v1",
+      fieldPath: "conversation_result",
+      meaningId: null,
+      reason: "Key-fact meanings duplicated in conversation_result were removed using the deterministic block plan.",
+    });
+  }
 
   if (technicalResidue(conversationResult).length) {
     conversationResult = renderConversationResult(requiredResult);
