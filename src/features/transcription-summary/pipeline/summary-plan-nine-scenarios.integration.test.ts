@@ -169,7 +169,12 @@ function extracted(item: Case) {
     },
     needs: {
       business_needs: [],
-      property_requirements: item.requirements.map((value, index) => ({ ...base(`requirement-${index + 1}`), need_type: "client_requirement", value })),
+      property_requirements: item.requirements.map((value, index) => ({
+        ...base(`requirement-${index + 1}`),
+        need_type: "client_requirement",
+        value,
+        evidence: `Клиент подтвердил требование: ${value}`,
+      })),
       structured_crm_attributes: {
         interested_in: item.interest ? [{ ...base("interest"), value: item.interest }] : [],
         funding_source: { ...base("funding-source"), value: item.funding ?? "не определено" },
@@ -220,9 +225,9 @@ function transportFor(item: Case): StructuredProviderTransport {
 
 function expectedConversationOutcome(item: Case): string {
   const next = item.next.action.toLocaleLowerCase("ru-RU");
+  if (/(?:позвон|перезвон|созвон|связ)/u.test(next)) return "Договорились о повторном звонке";
   if (/(?:осмотр|просмотр|встреч)/u.test(next)) return "Просмотр согласован";
   if (/(?:документ)/u.test(next)) return "Отправка документов согласована";
-  if (/(?:позвон|перезвон|созвон|связ)/u.test(next)) return "Договорились о повторном звонке";
   if (/(?:подбор|вариант)/u.test(next)) return "Отправка подборки согласована";
   if (/(?:видео|материал)/u.test(next)) return "Отправка материалов согласована";
   return item.callResult.replace(/[.]$/u, "");
@@ -261,7 +266,7 @@ describe("nine audited scenarios through production typed v3 orchestrator", () =
     expect([
       item.callResult.replace(/[.]$/u, ""),
       expectedConversationOutcome(item),
-    ].some((outcome) => summary.conversation_result.includes(outcome))).toBe(true);
+    ].some((outcome) => summary.conversation_result.includes(outcome)), JSON.stringify(summary)).toBe(true);
     expect(summary.conversation_result).not.toContain(item.next.deadline);
     expect(summary.next_step).toContain(item.next.deadline);
     const visibleSummary = [summary.conversation_result, ...summary.key_facts.map((entry) => entry.value), summary.next_step].join(" ");

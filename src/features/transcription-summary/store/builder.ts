@@ -202,30 +202,39 @@ export function buildConversationStoreV3(
   const facts = FactsV3Schema.safeParse(input.facts);
   const needs = NeedsV3Schema.safeParse(input.needs);
   const outcome = OutcomeV3Schema.safeParse(input.outcome);
-  const sourceErrors = [
+  const factsPolicy = facts.success ? applyFactsAgentOutputPolicyV3(facts.data) : null;
+  const needsPolicy = needs.success ? applyNeedsAgentOutputPolicyV3(needs.data) : null;
+  const outcomePolicy = outcome.success ? applyOutcomeAgentOutputPolicyV3(outcome.data) : null;
+  const semanticSourceErrors = [
+    ...(factsPolicy?.transformations.some((item) => item.ruleId === "facts.remove-object-card-data.v1") ? ["facts" as const] : []),
+    ...(needsPolicy?.transformations.some((item) => item.ruleId === "needs.explicit-client-criteria-only.v1" || item.ruleId === "needs.direct-interest-evidence.v1") ? ["needs" as const] : []),
+    ...(outcomePolicy?.transformations.some((item) => item.ruleId === "outcome.preserve-conditional-viewing.v1" || item.ruleId === "outcome.action-channel-consistency.v1") ? ["outcome" as const] : []),
+  ];
+  const sourceErrors = [...new Set([
     ...(!facts.success ? ["facts" as const] : []),
     ...(!needs.success ? ["needs" as const] : []),
     ...(!outcome.success ? ["outcome" as const] : []),
-  ];
-  const safeFacts = facts.success ? applyFactsAgentOutputPolicyV3(facts.data).value : {
+    ...semanticSourceErrors,
+  ])];
+  const safeFacts = factsPolicy?.value ?? {
     confirmed_facts: [],
     quotes: [],
     client_questions: [],
     contextual_statements: [],
     rejected_assumptions: [],
   };
-  const safeNeeds = needs.success ? applyNeedsAgentOutputPolicyV3(needs.data).value : {
+  const safeNeeds = needsPolicy?.value ?? {
     business_needs: [],
     property_requirements: [],
     structured_crm_attributes: {},
     communication_preferences: [],
     client_questions: [],
   };
-  const safeOutcome = outcome.success ? applyOutcomeAgentOutputPolicyV3(outcome.data).value : EMPTY_OUTCOME_V3;
+  const safeOutcome = outcomePolicy?.value ?? EMPTY_OUTCOME_V3;
   const sourceQuality = {
-    facts: facts.success ? "valid" : "technical_error",
-    needs: needs.success ? "valid" : "technical_error",
-    outcome: outcome.success ? "valid" : "technical_error",
+    facts: !facts.success ? "technical_error" : semanticSourceErrors.includes("facts") ? "semantic_repair" : "valid",
+    needs: !needs.success ? "technical_error" : semanticSourceErrors.includes("needs") ? "semantic_repair" : "valid",
+    outcome: !outcome.success ? "technical_error" : semanticSourceErrors.includes("outcome") ? "semantic_repair" : "valid",
   };
   const payload = stripPii({
     meta: {

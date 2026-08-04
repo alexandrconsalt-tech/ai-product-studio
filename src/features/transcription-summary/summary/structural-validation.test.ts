@@ -15,6 +15,23 @@ const plan: SummaryPlanV3 = {
 };
 
 describe("Summary Plan and post-final Structural Validator", () => {
+  it("repairs technical field residue and duplicate key fact labels before acceptance", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру. next_step). {\"error\":\"bad\"}",
+      key_facts: [
+        { label: "Бюджет", value: "до 10 млн" },
+        { label: "Бюджет", value: "до 10 млн" },
+      ],
+      quotes: [],
+      next_step: "Агент перезвонит сегодня после 18:00 по телефону.",
+    }, plan);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect([result.value.conversation_result, ...result.value.key_facts.flatMap((item) => [item.label, item.value]), result.value.next_step].join(" ")).not.toMatch(/next_step|error/iu);
+    expect(new Set(result.value.key_facts.map((item) => item.label)).size).toBe(result.value.key_facts.length);
+    expect(result.diagnostics.technicalResidue).toEqual([]);
+  });
+
   it("restores protected values, negation and removes technical residue", () => {
     const result = applySummaryPlanAndValidate({
       conversation_result: "Клиент ищет квартиру. {\"error\":\"bad\"}",

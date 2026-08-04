@@ -74,6 +74,31 @@ function status(score: number | null): SummaryQualityGateResultV3["qualityStatus
   return "LOW_QUALITY";
 }
 
+function semanticDecisionReasons(
+  store: unknown,
+  diagnostics: SummaryFinalDiagnosticsV3 | null,
+): readonly string[] {
+  const item = store && typeof store === "object" ? store as Record<string, unknown> : {};
+  const step = item.primary_next_step && typeof item.primary_next_step === "object"
+    ? item.primary_next_step as Record<string, unknown> : {};
+  const action = String(step.action ?? "").toLocaleLowerCase("ru-RU");
+  const channel = String(step.channel ?? "").toLocaleLowerCase("ru-RU");
+  const requirements = Array.isArray(item.requirements) ? item.requirements : [];
+  const result: string[] = [];
+  if (diagnostics?.technicalResidue.length) result.push("SUMMARY_TECHNICAL_RESIDUE");
+  if (diagnostics?.duplicatedMeaningIds.length
+    || diagnostics?.technicalResidue.some((code) => code.startsWith("DUPLICATE_KEY_FACT"))) result.push("DUPLICATE_KEY_FACT");
+  if (/(?:осмотр|просмотр|показ)/u.test(action) && /(?:phone|телефон|звон)/u.test(channel)) {
+    result.push("OUTCOME_ACTION_MISMATCH", "NEXT_STEP_CHANNEL_CONFLICT");
+  }
+  if (/(?:просмотр\s+согласован)/u.test(String(item.call_result ?? "").toLocaleLowerCase("ru-RU"))
+    && step.status !== "confirmed") result.push("UNCONFIRMED_VIEWING");
+  if (requirements.some((value) => /(?:адрес|этаж|площадь|жк|комплекс|цена\s*:|property_detail)/iu.test(JSON.stringify(value)))) {
+    result.push("CRM_DATA_IN_REQUIREMENTS");
+  }
+  return [...new Set(result)];
+}
+
 export function executeSummaryQualityGateV3(input: {
   manifest: PipelineContractManifest;
   conversationStore: unknown;
@@ -115,16 +140,17 @@ export function executeSummaryQualityGateV3(input: {
         criterion,
         message: issue.message,
       })));
+  const finalValidation = store.success && summary.success
+    ? applySummaryPlanAndValidate(summary.data, buildSummaryPlanV3(store.data))
+    : null;
+  const postFinalDiagnostics = finalValidation?.diagnostics ?? null;
   const decisionReasons = [
     ...criterionResults
       .filter((item) => item.score !== null && item.score < 80)
       .map((item) => `JUDGE_SCORE_BELOW_80:${item.criterion}:${item.score}`),
     ...criticalIssues.map((item) => `CRITICAL_ISSUE:${item.criterion ?? "unknown"}:${item.code}`),
+    ...semanticDecisionReasons(store.success ? store.data : input.conversationStore, postFinalDiagnostics),
   ];
-  const finalValidation = store.success && summary.success
-    ? applySummaryPlanAndValidate(summary.data, buildSummaryPlanV3(store.data))
-    : null;
-  const postFinalDiagnostics = finalValidation?.diagnostics ?? null;
   const computedStatus = status(qualityScore);
   const storeData = store.success ? store.data : null;
   const value = SummaryQualityGateResultV3Schema.parse({

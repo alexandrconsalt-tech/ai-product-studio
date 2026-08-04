@@ -69,4 +69,57 @@ describe("agent output policy v3", () => {
     expect(result.agreements).toHaveLength(1);
     expect(result.primary_next_step).toMatchObject({ action: "Провести просмотр", owner: "Агент", deadline: "пятница, 15-е, 14:00", channel: "личная встреча" });
   });
+
+  it("удаляет телефон и параметры карточки объекта из Facts", () => {
+    const facts = FactsV3Schema.parse({
+      confirmed_facts: [
+        { id: "phone", kind: "client_fact", subject: "client", predicate: "phone_last_digits", value: "9066", ...evidence },
+        { id: "price", kind: "property_fact", subject: "property", predicate: "price", value: "23 млн", ...evidence },
+        { id: "area", kind: "property_fact", subject: "property", predicate: "area", value: "37,8 м²", ...evidence },
+        { id: "funding", kind: "client_fact", subject: "client", predicate: "financing", value: "деньги на счету", ...evidence },
+      ],
+      client_questions: [], contextual_statements: [], rejected_assumptions: [], quotes: [],
+    });
+    expect(applyFactsAgentOutputPolicyV3(facts).value.confirmed_facts.map((item) => item.id)).toEqual(["funding"]);
+  });
+
+  it("не превращает карточку объекта в requirements или Новостройки", () => {
+    const needs = NeedsV3Schema.parse({
+      business_needs: [{ id: "card", need_type: "interest", value: "Квартира за 23 млн", ...evidence }],
+      property_requirements: [
+        { id: "area", need_type: "property_detail", value: "Площадь: 37,8 м²", ...evidence, evidence: "В объявлении указано 37,8 м²." },
+        { id: "quiet", need_type: "constraint", value: "Тихая квартира", ...evidence, evidence: "Мне важна тишина." },
+      ],
+      structured_crm_attributes: {
+        interested_in: [{ id: "interest", value: "Новостройки", ...evidence, evidence: "Квартира приобретена по ДДУ." }],
+        funding_source: { id: "funding", value: "наличные / депозит", ...evidence, evidence: "Деньги на счету." },
+        purchase_term: { id: "term", value: "не определено", ...evidence },
+      },
+      communication_preferences: [], client_questions: [],
+    });
+    const result = applyNeedsAgentOutputPolicyV3(needs).value;
+    expect(result.business_needs).toEqual([]);
+    expect(result.property_requirements.map((item) => item.id)).toEqual(["quiet"]);
+    expect(result.structured_crm_attributes.interested_in).toEqual([]);
+    expect(result.structured_crm_attributes.funding_source.value).toBe("наличные / депозит");
+  });
+
+  it("сохраняет условный просмотр и назначает подтверждённым шагом вечерний звонок", () => {
+    const outcome = OutcomeV3Schema.parse({
+      call_result: "Просмотр согласован.",
+      agreements: [{
+        id: "viewing", action: "Провести просмотр", owner: "Агент", deadline: "сегодня вечером",
+        channel: "phone", status: "confirmed",
+        evidence: "Сегодня вечером точно скажу. Если что, тогда завтра смогу показать.",
+      }],
+      primary_next_step: { action: "Провести просмотр", owner: "Агент", deadline: "сегодня вечером", channel: "phone", status: "confirmed" },
+    });
+    const result = applyOutcomeAgentOutputPolicyV3(outcome).value;
+    expect(result.call_result).toBe("Клиент ожидает подтверждения возможности просмотра.");
+    expect(result.agreements[0]).toMatchObject({ action: "Сообщить клиенту о возможности просмотра", channel: "телефон" });
+    expect(result.primary_next_step).toMatchObject({
+      action: "Позвонить клиенту и сообщить, доступна ли квартира для просмотра",
+      deadline: "сегодня вечером", channel: "телефон", status: "confirmed",
+    });
+  });
 });

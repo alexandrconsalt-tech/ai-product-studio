@@ -151,7 +151,7 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
 
   store.facts.map(record).forEach((fact, index) => {
     const type = factType(fact);
-    if (!/(?:client_goal|client goal|goal|цель обращения|interest|интерес)/u.test(type)) return;
+    if (!/(?:client_goal|client goal|goal|цель обращения|interest|интерес|searching_for|подбирает\s+для)/u.test(type)) return;
     const meaningId = id(fact, `client_goal_${index + 1}`);
     add({
       meaningId,
@@ -176,12 +176,57 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     });
   }
 
+  const financingFacts = store.facts.map(record).filter((fact) =>
+    /(?:financing|funding|источник\s+средств|финанс)/u.test(factType(fact))
+    && /(?:деньг\S*\s+на\s+счет|родител\S*\s+покуп)/iu.test(`${text(fact)} ${text(fact.evidence)}`));
+  if (financingFacts.length) {
+    add({
+      meaningId: "verified_funding_context",
+      kind: "key_fact",
+      block: "key_facts",
+      text: financingFacts.map(text).filter(Boolean).join("; "),
+      required: true,
+      exclusive: false,
+      sourceIds: [...new Set(financingFacts.flatMap((fact, index) => sourceIds(fact, `funding_${index + 1}`)))],
+    });
+  }
+
+  const legalFacts = store.facts.map(record).filter((fact) =>
+    /(?:ownership|document|mortgage|registration|собствен|дду|обремен|ипотек|пропис)/u.test(factType(fact)));
+  if (legalFacts.length) {
+    add({
+      meaningId: "verified_legal_context",
+      kind: "key_fact",
+      block: "key_facts",
+      text: legalFacts.map(text).filter(Boolean).join("; "),
+      required: false,
+      exclusive: false,
+      sourceIds: [...new Set(legalFacts.flatMap((fact, index) => sourceIds(fact, `legal_${index + 1}`)))],
+    });
+  }
+
+  const conditionalViewingAgreement = store.agreements.map(record).find((agreement) =>
+    /(?:если\s+(?:что|получится|сможем|подтверд)|при\s+подтвержден)/iu.test(text(agreement.evidence))
+    && /(?:завтра|следующ\S*\s+день)/iu.test(text(agreement.evidence)));
+  if (conditionalViewingAgreement) {
+    add({
+      meaningId: "conditional_viewing",
+      kind: "conversation_result",
+      block: "conversation_result",
+      text: "При подтверждении просмотр можно будет согласовать на завтра.",
+      required: true,
+      exclusive: false,
+      sourceIds: sourceIds(conditionalViewingAgreement, "conditional_viewing"),
+    });
+  }
+
   const keyCandidates = [
     ...store.requirements.map(record),
     ...store.facts.map(record).filter((fact) =>
       /(?:objection|constraint|legal|requirement|возраж|огранич|юрид|отриц)/u.test(factType(fact))),
   ]
     .filter((item) => !outcomeMeaning(item))
+    .filter((item) => !/(?:financing|funding|ownership|document|mortgage|registration|финанс|собствен|дду|обремен|ипотек|пропис)/u.test(factType(item)))
     .filter((item, index, values) => values.findIndex((candidate) => id(candidate, `key_fact_${index + 1}`) === id(item, `key_fact_${index + 1}`)) === index)
     .sort((left, right) => keyPriority(left) - keyPriority(right))
     .slice(0, crmCoverage.fundingSource && crmCoverage.purchaseTerm && crmCoverage.interest ? 3 : 4);

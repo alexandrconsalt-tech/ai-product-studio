@@ -47,11 +47,18 @@ function isOutcomeFact(fact: FactsV3["confirmed_facts"][number]): boolean {
   return /(?:viewing_appointment|appointment|meeting|просмотр|встреч|показ|перезвон|звонок|отправк|договоренн)/iu.test(value);
 }
 
+function isObjectCardFact(fact: FactsV3["confirmed_facts"][number]): boolean {
+  const predicate = normalized(fact.predicate);
+  return /^(?:phone_last_digits|phone|телефон|price|цена|address|адрес|area|площадь|floor|этаж|complex|residential_complex|жк|object_code|код_объекта)$/u.test(predicate)
+    || /(?:номер\s+телефона|последн\S*\s+цифр\S*\s+телефон)/iu.test(normalized(`${fact.value} ${fact.evidence}`));
+}
+
 export function applyFactsAgentOutputPolicyV3(value: FactsV3): AgentOutputPolicyResultV3<FactsV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
-  const facts = value.confirmed_facts.filter((fact) => !isNameFact(fact) && !isNonWorkingContactFact(fact) && !isOutcomeFact(fact));
+  const facts = value.confirmed_facts.filter((fact) => !isNameFact(fact) && !isNonWorkingContactFact(fact) && !isOutcomeFact(fact) && !isObjectCardFact(fact));
   const quotes = [...selectUsefulClientQuotesV3(value.quotes)];
   changed(transformations, "facts.remove-nonbusiness-name.v1", "confirmed_facts", "Client names are not working facts.", value.confirmed_facts, facts);
+  changed(transformations, "facts.remove-object-card-data.v1", "confirmed_facts", "Phone fragments and object-card parameters are not confirmed business facts.", value.confirmed_facts, facts);
   changed(transformations, "facts.select-useful-client-quotes.v1", "quotes", "Quotes are limited to two client motives, objections or constraints that add meaning beyond ordinary facts.", value.quotes, quotes);
   return { value: { ...value, confirmed_facts: facts, quotes }, transformations };
 }
@@ -65,13 +72,37 @@ function isNonWorkingContactNeed(item: NeedsV3["business_needs"][number]): boole
     || /(?:ответ на объявлен|по объявлению звон)/iu.test(normalized(item.value));
 }
 
+function isObjectCardNeed(item: NeedsV3["business_needs"][number]): boolean {
+  const value = normalized(`${item.need_type} ${item.value}`);
+  return /(?:property_detail|цена\s*:|адрес\s*:|этаж\s*:|площадь\s*:|комплекс\s*:|жк\s+|\d+(?:[.,]\d+)?\s*(?:млн|м²|кв\.?)|ипотек\S*\s+у\s+сбер)/iu.test(value);
+}
+
 export function applyNeedsAgentOutputPolicyV3(value: NeedsV3): AgentOutputPolicyResultV3<NeedsV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
-  const businessNeeds = value.business_needs.filter((item) => !isOutcomeNeed(item) && !isNonWorkingContactNeed(item));
-  const propertyRequirements = value.property_requirements.filter((item) => !isOutcomeNeed(item) && !isNonWorkingContactNeed(item));
+  const businessNeeds = value.business_needs.filter((item) => !isOutcomeNeed(item) && !isNonWorkingContactNeed(item) && !isObjectCardNeed(item));
+  const explicitClientCriterion = (item: NeedsV3["property_requirements"][number]) =>
+    /(?:нужн\S*|важн\S*|(?:^|\s)только(?:\s|$)|не\s+рассматрива\S*|не\s+менее|не\s+более|хоч\S*\s+(?:не\s+)?(?:менее|более)|обязательн\S*|требован\S*|критери\S*)/iu.test(item.evidence);
+  const propertyRequirements = value.property_requirements.filter((item) =>
+    !isOutcomeNeed(item) && !isNonWorkingContactNeed(item) && explicitClientCriterion(item));
+  const interestedIn = value.structured_crm_attributes.interested_in.filter((item) =>
+    item.value !== "Новостройки" || /(?:новострой|новый\s+дом|первичн\S*\s+рын)/iu.test(item.evidence));
   changed(transformations, "needs.remove-outcome-actions.v1", "business_needs", "Meetings, viewings, calls and deliveries belong to Outcome, not Needs.", value.business_needs, businessNeeds);
+  changed(transformations, "needs.remove-object-card-data.v1", "business_needs", "A concrete listing parameter is not a client need.", value.business_needs, businessNeeds);
   changed(transformations, "needs.remove-outcome-actions.v1", "property_requirements", "Meetings, viewings, calls and deliveries belong to Outcome, not property requirements.", value.property_requirements, propertyRequirements);
-  return { value: { ...value, business_needs: businessNeeds, property_requirements: propertyRequirements }, transformations };
+  changed(transformations, "needs.explicit-client-criteria-only.v1", "property_requirements", "Object-card facts are not client requirements without explicit client criterion language.", value.property_requirements, propertyRequirements);
+  changed(transformations, "needs.direct-interest-evidence.v1", "structured_crm_attributes.interested_in", "A residential complex or DDU mention is not direct evidence of a new-build interest.", value.structured_crm_attributes.interested_in, interestedIn);
+  return {
+    value: {
+      ...value,
+      business_needs: businessNeeds,
+      property_requirements: propertyRequirements,
+      structured_crm_attributes: {
+        ...value.structured_crm_attributes,
+        interested_in: interestedIn,
+      },
+    },
+    transformations,
+  };
 }
 
 function roleOwner(value: string): string {
@@ -82,7 +113,15 @@ function roleOwner(value: string): string {
 }
 
 function normalizedViewingAction(value: string): string {
-  return /(?:осмотр|просмотр|показ|встреч)/iu.test(normalized(value)) ? "Провести просмотр" : value.trim();
+  const action = normalized(value);
+  if (/(?:позвон|перезвон|сообщ|уточн|подтверд|согласов|узна|провер)/u.test(action)) return value.trim();
+  return /(?:осмотр|просмотр|показ|встреч)/iu.test(action) ? "Провести просмотр" : value.trim();
+}
+
+function isViewingExecutionAction(value: string): boolean {
+  const action = normalized(value);
+  return /(?:провести|показать|посмотреть|осмотреть|приехать|встретиться|^просмотр$|^показ$)/u.test(action)
+    && !/(?:позвон|перезвон|сообщ|уточн|подтверд|согласов|узна|провер)/u.test(action);
 }
 
 function normalizedChannel(value: string, action: string): string {
@@ -116,7 +155,7 @@ function isOperationalAgreement(action: string): boolean {
 function compactCallResult(outcome: OutcomeV3): string {
   if (outcome.primary_next_step.status !== "confirmed") return outcome.call_result.trim();
   const action = normalized(outcome.primary_next_step.action);
-  if (/(?:осмотр|просмотр|показ)/u.test(action)) return "Просмотр согласован.";
+  if (isViewingExecutionAction(action)) return "Просмотр согласован.";
   if (/(?:встреч)/u.test(action)) return "Встреча согласована.";
   if (/(?:позвон|перезвон|созвон)/u.test(action)) return "Договорились о повторном звонке.";
   if (/(?:отправ|пришл|направ)/u.test(action)) return "Отправка согласована.";
@@ -125,7 +164,7 @@ function compactCallResult(outcome: OutcomeV3): string {
 
 export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPolicyResultV3<OutcomeV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
-  const agreements = value.agreements
+  let agreements = value.agreements
     .filter((agreement) => agreement.status === "confirmed" && isOperationalAgreement(agreement.action))
     .map((agreement) => ({
       ...agreement,
@@ -138,14 +177,33 @@ export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPo
     normalized(agreement.action) === normalized(normalizedViewingAction(value.primary_next_step.action)))?.evidence
     ?? agreements[0]?.evidence
     ?? "";
-  const primary = {
+  let primary = {
     ...value.primary_next_step,
     action: normalizedViewingAction(value.primary_next_step.action),
     owner: roleOwner(value.primary_next_step.owner),
     deadline: deadlineWithConfirmedWeekday(value.primary_next_step.deadline, primaryEvidence),
     channel: normalizedChannel(value.primary_next_step.channel, value.primary_next_step.action),
   };
-  const callResult = compactCallResult(value);
+  let callResult = compactCallResult({ ...value, agreements, primary_next_step: primary });
+  const viewingByPhone = isViewingExecutionAction(primary.action)
+    && /(?:phone|телефон|звон)/iu.test(normalized(primary.channel));
+  const evidence = agreements.map((item) => item.evidence).join(" ");
+  const conditionalViewing = /(?:если[^.!?]{0,80}(?:показ|просмотр|смож\S*\s+показ)|при\s+подтвержден[^.!?]{0,80}(?:показ|просмотр)|возможност\S*\s+просмотр\S*\s+(?:пока\s+)?не\s+подтвержден)/iu.test(normalized(evidence));
+  if (viewingByPhone || (isViewingExecutionAction(primary.action) && conditionalViewing)) {
+    const originalAgreements = agreements;
+    const originalPrimary = primary;
+    agreements = agreements.map((agreement) => isViewingExecutionAction(agreement.action)
+      ? { ...agreement, action: "Сообщить клиенту о возможности просмотра", channel: "телефон" }
+      : agreement);
+    primary = {
+      ...primary,
+      action: "Позвонить клиенту и сообщить, доступна ли квартира для просмотра",
+      channel: "телефон",
+    };
+    callResult = "Клиент ожидает подтверждения возможности просмотра.";
+    changed(transformations, "outcome.preserve-conditional-viewing.v1", "agreements", "A conditional viewing must remain conditional; the confirmed action is the status call.", originalAgreements, agreements);
+    changed(transformations, "outcome.action-channel-consistency.v1", "primary_next_step", "A phone deadline belongs to the status call, not to conducting a viewing.", originalPrimary, primary);
+  }
   changed(transformations, "outcome.compact-call-result.v1", "call_result", "call_result contains only the confirmed conversation outcome and excludes Facts/Needs/next-step details.", value.call_result, callResult);
   changed(transformations, "outcome.confirmed-agreements-only.v1", "agreements", "Unconfirmed proposals with status=not_defined are not agreements.", value.agreements, agreements);
   changed(transformations, "outcome.role-owner.v1", "primary_next_step", "Named owners and viewing terminology are normalized to role-based v3 semantics.", value.primary_next_step, primary);

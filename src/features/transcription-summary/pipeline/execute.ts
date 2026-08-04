@@ -12,6 +12,7 @@ import {
 } from "../contracts/pipeline-report/v3/contract";
 import { TranscriptV3Schema } from "../contracts/transcript/v3/contract";
 import { stableStringify } from "../contracts/schema-utils";
+import { applyTranscriptSpeakerInheritanceV3 } from "../runtime/transcript-speaker-policy";
 import { calculateTranscriptContentHash } from "../store";
 import type {
   ExecuteTranscriptionSummaryV3PipelineResult,
@@ -181,9 +182,10 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
   const deadlineAtMs = startedAt.getTime() + PIPELINE_TIMEOUT_MS;
   const runId = input.runId ?? `run-${randomUUID()}`;
   const manifest = createContractManifest(AI_SUMMARY_V3_PIPELINE_VERSION);
-  const rawTranscript = input.transcript && typeof input.transcript === "object"
+  const incomingTranscript = input.transcript && typeof input.transcript === "object"
     ? input.transcript as Record<string, unknown>
     : {};
+  const rawTranscript = applyTranscriptSpeakerInheritanceV3(incomingTranscript);
   const transcriptForHash = {
     transcript_id: rawTranscript.transcript_id,
     turns: rawTranscript.turns,

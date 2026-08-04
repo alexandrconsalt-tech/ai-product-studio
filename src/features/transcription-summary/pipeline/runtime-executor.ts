@@ -57,15 +57,15 @@ const SUMMARY_JUDGE_CRITERION = {
 } as const satisfies Partial<Record<TranscriptionSummaryV3StageId, SummaryCriterionV3>>;
 
 const BUSINESS_INSTRUCTIONS = {
-  facts_agent: "Извлеки только явно подтверждённые рабочие факты. Не включай имя клиента и действия Outcome (просмотр, встречу, звонок, отправку) в confirmed_facts. Цитаты: только клиент, максимум две, только мотив, сомнение, ограничение, возражение или важная позиция; не цитируй приветствие, имя, обычную цель, бюджет, финансирование, срок, время или договорённость. verification_status каждого валидного элемента должен быть extracted.",
-  needs_agent: "Используй ctx.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check. Разделяй потребности, требования и CRM-атрибуты. Просмотры, встречи, звонки, отправки и другие действия относятся к Outcome и запрещены в business_needs/property_requirements. verification_status каждого валидного элемента должен быть extracted.",
-  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_result, agreements и primary_next_step строго по JSON Schema. call_result всегда строка: только короткий результат разговора без Facts/Needs и точных деталей primary_next_step. agreements содержит только подтверждённые клиентом договорённости; не создавай status=not_defined. owner задавай ролью, без имени. Не используй call_results, agreement_id, outcome_meta или text.",
+  facts_agent: "Извлеки только явно подтверждённые рабочие факты. Не включай имя, телефон или его части, полный адрес, цену, площадь, этаж, ЖК, код объекта и прочие параметры карточки объявления. Не включай действия Outcome (просмотр, встречу, звонок, отправку) в confirmed_facts. Цитаты: только клиент, максимум две, только мотив, сомнение, ограничение, возражение или важная позиция; не цитируй приветствие, имя, обычную цель, бюджет, финансирование, срок, время или договорённость. verification_status каждого валидного элемента должен быть extracted.",
+  needs_agent: "Используй ctx.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check. Разделяй потребности, требования и CRM-атрибуты. Параметр конкретного объекта не является требованием клиента. property_requirements допустим только при прямой формулировке клиента: нужно, важно, только, не рассматриваю без, хочу не менее или равнозначной. ЖК и ДДУ не означают interested_in=Новостройки без прямого клиентского критерия. Просмотры, встречи, звонки, отправки и другие действия относятся к Outcome и запрещены в business_needs/property_requirements. verification_status каждого валидного элемента должен быть extracted.",
+  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_result, agreements и primary_next_step строго по JSON Schema. call_result всегда строка: только короткий результат разговора без Facts/Needs и точных деталей primary_next_step. agreements содержит только подтверждённые клиентом договорённости; не создавай status=not_defined. Условная возможность просмотра не является согласованным просмотром. Если агент обещал сначала подтвердить доступность объекта, primary_next_step — звонок/сообщение с ответом; не переноси время и канал этого контакта на просмотр. Просмотр нельзя проводить по телефону. owner задавай ролью, без имени. Не используй call_results, agreement_id, outcome_meta или text.",
 } as const;
 
 const PROMPT_VERSION_BY_STAGE = {
-  facts_agent: "facts_agent-v3.1.0",
-  needs_agent: "needs_agent-v3.3.0",
-  outcome_agent: "outcome_agent-v3.3.0",
+  facts_agent: "facts_agent-v3.2.0",
+  needs_agent: "needs_agent-v3.4.0",
+  outcome_agent: "outcome_agent-v3.4.0",
 } as const;
 
 function remainingTimeout(context: PipelineExecutionContext, stageLimitMs: number): number {

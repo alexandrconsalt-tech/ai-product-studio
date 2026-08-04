@@ -57,7 +57,51 @@ function technicalResidue(value: string): readonly string[] {
   const result: string[] = [];
   if (/```|[{}\[\]]|"(?:status|error|message|code)"\s*:/iu.test(value)) result.push("JSON_FRAGMENT");
   if (/(?:^|\s)(?:error|technical_error)(?:\s|$)/iu.test(value)) result.push("TECHNICAL_ERROR_TOKEN");
+  if (/(?:next_step|conversation_result|key_facts|summary[_\s-]*plan)\s*\)?/iu.test(value)) result.push("TECHNICAL_FIELD_NAME");
+  if (/(?:объект\s*:\s*00|не\s+объект\s*(?:м²|кв\.?\s*м)?)/iu.test(value)) result.push("CORRUPTED_VALUE");
+  const opens = (value.match(/\(/gu) ?? []).length;
+  const closes = (value.match(/\)/gu) ?? []).length;
+  if (opens !== closes || /(?:next_step|conversation_result|key_facts)\s*\)/iu.test(value)) result.push("UNBALANCED_PARENTHESES");
   return [...new Set(result)];
+}
+
+function renderPlannedFacts(meanings: readonly SummaryPlanMeaning[]): SummaryV3["key_facts"] {
+  const used = new Map<string, number>();
+  return meanings
+    .filter((meaning, index, values) => values.findIndex((item) => normalized(item.text) === normalized(meaning.text)) === index)
+    .map((meaning) => {
+      const base = label(meaning);
+      const count = (used.get(base) ?? 0) + 1;
+      used.set(base, count);
+      return { label: count === 1 ? base : `${base} ${count}`, value: meaning.text };
+    });
+}
+
+function keyFactDuplicateCodes(facts: SummaryV3["key_facts"]): readonly string[] {
+  const labels = facts.map((item) => normalized(item.label));
+  const values = facts.map((item) => normalized(item.value));
+  const result: string[] = [];
+  if (new Set(labels).size !== labels.length) result.push("DUPLICATE_KEY_FACT_LABEL");
+  if (new Set(values).size !== values.length) result.push("DUPLICATE_KEY_FACT_VALUE");
+  return result;
+}
+
+function repairGeneratedFacts(facts: SummaryV3["key_facts"]): SummaryV3["key_facts"] {
+  const grouped = new Map<string, { label: string; values: string[] }>();
+  for (const fact of facts) {
+    const key = normalized(fact.label);
+    const current = grouped.get(key) ?? { label: fact.label.trim(), values: [] };
+    if (!current.values.some((value) => normalized(value) === normalized(fact.value))) current.values.push(fact.value.trim());
+    grouped.set(key, current);
+  }
+  return [...grouped.values()].map((item) => ({ label: item.label, value: item.values.join("; ") }));
+}
+
+function actionChannelCodes(nextStep: string): readonly string[] {
+  return /(?:провед\S*\s+просмотр|покаж\S*\s+(?:квартир|объект)|приед\S*\s+на\s+просмотр)/iu.test(normalized(nextStep))
+    && /(?:по\s+телефону|phone|телефонн\S*\s+канал)/iu.test(normalized(nextStep))
+    ? ["NEXT_STEP_CHANNEL_CONFLICT"]
+    : [];
 }
 
 function protectedTokens(value: string): readonly string[] {
@@ -98,6 +142,7 @@ function label(meaning: SummaryPlanMeaning): string {
   if (meaning.kind === "client_goal") return "Цель клиента";
   if (/(?:бюджет|руб|₽|млн|миллион)/iu.test(meaning.text)) return "Бюджет";
   if (/(?:ипотек|финанс|сбербанк|наличн|депозит)/iu.test(meaning.text)) return "Финансирование";
+  if (/(?:собственник|дду|зарегистрирован|прописан|юрид)/iu.test(meaning.text)) return "Юридическая информация";
   if (/(?:срок|месяц)/iu.test(meaning.text)) return "Срок покупки";
   return /(?:возраж|сомнен|не рассматрива|огранич)/iu.test(meaning.text) ? "Ограничение" : "Ключевой факт";
 }
@@ -252,8 +297,8 @@ export function applySummaryPlanAndValidate(
   let candidate: SummaryV3 = {
     conversation_result: conversationResult,
     key_facts: plannedFacts.length
-      ? plannedFacts.map((item) => ({ label: label(item), value: item.text }))
-      : generated.key_facts.filter((item) => technicalResidue(`${item.label} ${item.value}`).length === 0),
+      ? renderPlannedFacts(plannedFacts)
+      : repairGeneratedFacts(generated.key_facts.filter((item) => technicalResidue(`${item.label} ${item.value}`).length === 0)),
     quotes: plannedQuotes.map((item) => ({ text: item.text })),
     next_step: nextMeaning
       && technicalResidue(generated.next_step).length === 0
@@ -371,7 +416,11 @@ export function applySummaryPlanAndValidate(
     if (hasNegation(meaning.text) && !negationCoveredByDedicatedFact && !hasNegation(actualBlock)) missing.push("negation");
     return missing.map((item) => `${meaning.meaningId}:${item}`);
   });
-  const residue = technicalResidue(allText);
+  const residue = [
+    ...technicalResidue(allText),
+    ...keyFactDuplicateCodes(candidate.key_facts),
+    ...actionChannelCodes(candidate.next_step),
+  ];
   const nextStepDuplicationCount = nextMeaning && nextStepDuplicatedInText(candidate.conversation_result, candidate.next_step) ? 1 : 0;
   const diagnostics: SummaryFinalDiagnosticsV3 = {
     requiredMeaningIds: required.map((item) => item.meaningId),

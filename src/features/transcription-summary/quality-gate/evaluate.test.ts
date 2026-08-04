@@ -100,4 +100,25 @@ describe("Summary Quality Gate — только аналитика", () => {
     expect(result.diagnostic.decisionReasons).toContain("JUDGE_SCORE_BELOW_80:format:75");
     expect(result.diagnostic.effectiveCriterionScores.format).toBe(75);
   });
+
+  it("reports structured semantic blocker codes", () => {
+    const fixture = createSummaryQualityGateFixture();
+    fixture.conversationStore = {
+      ...fixture.conversationStore,
+      requirements: [{ id: "card", need_type: "property_detail", value: "Площадь: 37,8 м²" }],
+      primary_next_step: {
+        action: "Провести просмотр",
+        owner: "Агент",
+        deadline: "сегодня вечером",
+        channel: "телефон",
+        status: "confirmed",
+      },
+    };
+    const result = executeSummaryQualityGateV3(fixture);
+    expect(result.diagnostic.decisionReasons).toEqual(expect.arrayContaining([
+      "OUTCOME_ACTION_MISMATCH",
+      "NEXT_STEP_CHANNEL_CONFLICT",
+      "CRM_DATA_IN_REQUIREMENTS",
+    ]));
+  });
 });

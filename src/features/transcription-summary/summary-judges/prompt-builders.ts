@@ -132,6 +132,8 @@ export function buildFaithfulnessJudgePrompt(
       "неточные цитаты и их source turn IDs",
       "выдуманные owner, deadline или channel",
       "несовпадение structured attributes",
+      "ложно подтверждённый просмотр, перенос времени звонка на просмотр и несовместимый channel=phone для просмотра",
+      "технические фрагменты вроде next_step), JSON или error",
     ],
     exclusions: [
       "не считай omission ошибкой faithfulness",
@@ -141,6 +143,7 @@ export function buildFaithfulnessJudgePrompt(
     rules: [
       "Conversation Store v3 — основной источник фактов",
       "транскрипция используется только для проверки цитат и ролей",
+      "если Outcome был преобразован deterministic policy, сверяй action, deadline и channel с transcript context",
     ],
   });
 }
@@ -160,6 +163,7 @@ export function buildCompletenessJudgePrompt(
     exclusions: [
       "не требуй каждый блок во всех звонках",
       "не считай отсутствующие в Store данные пропуском",
+      "не считай вопрос об авансе пропуском, если клиент не задавал его и он не сохранён как verified open question в Store",
       "не штрафуй за неопределённые funding source или purchase term",
       "не считай пропуском funding_source, purchase_term или interest, если значение присутствует в conversationStore.attributes: эти поля отображаются пользователю в секции «Потребности клиента» и являются частью финального результата",
       "не требуй agreement или next step, если их нет в Store",
@@ -182,6 +186,7 @@ export function buildUsefulnessJudgePrompt(
       "видно ли подтверждённое дальнейшее действие",
       "нет ли двусмысленности и потери практической ценности",
       "нет ли перегрузки второстепенными сведениями",
+      "Summary с техническим мусором или противоречивым следующим шагом не может иметь usabilityAssessment=ready и score=100",
     ],
     exclusions: [
       "не перепроверяй точность фактов",
@@ -205,6 +210,7 @@ export function buildAgreementsJudgePrompt(
       "выдуманные детали",
       "пропущенный primary next step",
       "соответствие Store",
+      "при transformations сверка action, deadline и channel с transcript context обязательна",
     ],
     exclusions: [
       "не требуй deadline или channel, если их нет в Store",
@@ -214,6 +220,7 @@ export function buildAgreementsJudgePrompt(
     rules: [
       "если agreement/next step отсутствуют в Store и Summary ничего не добавляет, score должен быть 100",
       "выдуманный deadline или channel — critical finding",
+      "просмотр по телефону или перенос времени статусного звонка на просмотр — critical finding",
     ],
   });
 }
@@ -225,6 +232,8 @@ export function buildFormatJudgePrompt(
     role: "Ты — независимый Format, Structure and Brevity Judge v3. Проверяй только представление Summary.",
     checks: [
       "semantic repetition и бесполезные дубли между conversationResult и keyFacts",
+      "next_step), JSON/error, служебные имена полей и незакрытые скобки",
+      "повтор label/value, повтор цены и перегрузку адресом, этажом, площадью или CRM-card data",
       "дубли keyFacts и CRM-card data",
       "многословие, покадровый пересказ и сложные формулировки",
       "лимиты 4 key facts и 2 quotes, перегрузку цитатами",
