@@ -52,4 +52,20 @@ describe("Summary Plan v3 deadline rendering", () => {
     }));
     expect(plan.meanings.some((meaning) => meaning.meaningId === "verified_legal_context")).toBe(false);
   });
+
+  it("не дублирует purchase_intent в key facts, если цель уже есть в conversation result", () => {
+    const fixture = createSummaryFixtureContext();
+    const plan = buildSummaryPlanV3({
+      ...fixture.store,
+      requirements: [{
+        id: "purchase-intent",
+        need_type: "purchase_intent",
+        value: "покупка квартиры для себя",
+        evidence: "Клиент подбирает квартиру для себя.",
+        source_turn_ids: ["turn-client"],
+      }],
+    });
+
+    expect(plan.meanings.some((meaning) => meaning.meaningId === "purchase-intent")).toBe(false);
+  });
 });
