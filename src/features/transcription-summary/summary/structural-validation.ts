@@ -7,7 +7,8 @@ export type SummaryStructuralTransformation = Readonly<{
     | "summary.exclusive-next-step.v1"
     | "summary.protected-value-restored.v1"
     | "summary.technical-residue-removed.v1"
-    | "summary.plan-block-enforced.v1";
+    | "summary.plan-block-enforced.v1"
+    | "summary.invalid-quote-removed.v1";
   fieldPath: string;
   meaningId: string | null;
   reason: string;
@@ -95,6 +96,9 @@ function meaningCovered(summary: SummaryV3, meaning: SummaryPlanMeaning): boolea
 
 function label(meaning: SummaryPlanMeaning): string {
   if (meaning.kind === "client_goal") return "Цель клиента";
+  if (/(?:бюджет|руб|₽|млн|миллион)/iu.test(meaning.text)) return "Бюджет";
+  if (/(?:ипотек|финанс|сбербанк|наличн|депозит)/iu.test(meaning.text)) return "Финансирование";
+  if (/(?:срок|месяц)/iu.test(meaning.text)) return "Срок покупки";
   return /(?:возраж|сомнен|не рассматрива|огранич)/iu.test(meaning.text) ? "Ограничение" : "Ключевой факт";
 }
 
@@ -250,9 +254,7 @@ export function applySummaryPlanAndValidate(
     key_facts: plannedFacts.length
       ? plannedFacts.map((item) => ({ label: label(item), value: item.text }))
       : generated.key_facts.filter((item) => technicalResidue(`${item.label} ${item.value}`).length === 0),
-    quotes: plannedQuotes.length
-      ? plannedQuotes.map((item) => ({ text: item.text }))
-      : generated.quotes.filter((item) => technicalResidue(item.text).length === 0),
+    quotes: plannedQuotes.map((item) => ({ text: item.text })),
     next_step: nextMeaning
       && technicalResidue(generated.next_step).length === 0
       && overlap(generated.next_step, nextMeaning.text) >= 0.5
@@ -263,6 +265,9 @@ export function applySummaryPlanAndValidate(
   };
   if (plannedFacts.length && JSON.stringify(candidate.key_facts) !== JSON.stringify(generated.key_facts)) {
     transformations.push({ ruleId: "summary.plan-block-enforced.v1", fieldPath: "key_facts", meaningId: null, reason: "Key facts were rendered from meaning IDs in Summary Plan." });
+  }
+  if (JSON.stringify(candidate.quotes) !== JSON.stringify(generated.quotes)) {
+    transformations.push({ ruleId: "summary.plan-block-enforced.v1", fieldPath: "quotes", meaningId: null, reason: "Quotes were rendered only from quote meanings selected by Summary Plan." });
   }
   if (nextMeaning && normalized(generated.next_step) !== normalized(nextMeaning.text)) {
     transformations.push({ ruleId: "summary.protected-value-restored.v1", fieldPath: "next_step", meaningId: nextMeaning.meaningId, reason: "Primary next step was restored from its canonical meaning." });

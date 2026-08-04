@@ -37,14 +37,20 @@ describe("Summary exact output", () => {
     });
   });
 
-  it("проверяет цитату по полной транскрипции", () => {
+  it("удаляет необязательную цитату без точного источника и продолжает pipeline", () => {
     const { fixture, input } = context();
-    expect(processSummaryOutput(input, {
+    const result = processSummaryOutput(input, {
       ...fixture.output,
       quotes: [{ text: "Этой фразы в звонке нет." }],
-    })).toMatchObject({
-      ok: false,
-      error: { errorCode: "SUMMARY_QUOTE_SOURCE_INVALID" },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { quotes: [] },
+      quoteDiagnostics: [{
+        summary_quote: "Этой фразы в звонке нет.",
+        matched_source_quote_id: null,
+        mismatch_reason: "NOT_EXACT_SOURCE_SUBSTRING",
+      }],
     });
   });
 

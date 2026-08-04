@@ -14,6 +14,11 @@ import {
 } from "../contracts/outcome/v3/contract";
 import { stableStringify } from "../contracts/schema-utils";
 import {
+  applyFactsAgentOutputPolicyV3,
+  applyNeedsAgentOutputPolicyV3,
+  applyOutcomeAgentOutputPolicyV3,
+} from "../runtime/agent-output-policy";
+import {
   TranscriptV3Schema,
   type TranscriptV3,
 } from "../contracts/transcript/v3/contract";
@@ -202,21 +207,21 @@ export function buildConversationStoreV3(
     ...(!needs.success ? ["needs" as const] : []),
     ...(!outcome.success ? ["outcome" as const] : []),
   ];
-  const safeFacts = facts.success ? facts.data : {
+  const safeFacts = facts.success ? applyFactsAgentOutputPolicyV3(facts.data).value : {
     confirmed_facts: [],
     quotes: [],
     client_questions: [],
     contextual_statements: [],
     rejected_assumptions: [],
   };
-  const safeNeeds = needs.success ? needs.data : {
+  const safeNeeds = needs.success ? applyNeedsAgentOutputPolicyV3(needs.data).value : {
     business_needs: [],
     property_requirements: [],
     structured_crm_attributes: {},
     communication_preferences: [],
     client_questions: [],
   };
-  const safeOutcome = outcome.success ? outcome.data : EMPTY_OUTCOME_V3;
+  const safeOutcome = outcome.success ? applyOutcomeAgentOutputPolicyV3(outcome.data).value : EMPTY_OUTCOME_V3;
   const sourceQuality = {
     facts: facts.success ? "valid" : "technical_error",
     needs: needs.success ? "valid" : "technical_error",

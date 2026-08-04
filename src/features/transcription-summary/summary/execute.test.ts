@@ -33,6 +33,7 @@ describe("Summary Agent v3", () => {
       value: {
         ...fixture.output,
         conversation_result: "Клиент уточнил условия покупки. Отправка материалов согласована.",
+        quotes: [],
       },
       diagnostic: {
         sourceValidationStatus: "valid",

@@ -5,6 +5,11 @@ import {
 } from "../contracts/summary/v3/contract";
 import type { SummaryPlanV3 } from "./summary-plan";
 import {
+  matchSummaryQuoteV3,
+  type QuoteMatchDiagnosticV3,
+  type QuoteSourceV3,
+} from "../runtime/quote-policy";
+import {
   applySummaryPlanAndValidate,
   type SummaryFinalDiagnosticsV3,
   type SummaryStructuralTransformation,
@@ -26,6 +31,7 @@ export type ProcessSummaryResult =
       repetitionGuardStatus: "unchanged" | "transformed";
       transformations: readonly RepetitionTransformation[];
       finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
+      quoteDiagnostics: readonly QuoteMatchDiagnosticV3[];
     }>
   | Readonly<{
       ok: false;
@@ -36,11 +42,16 @@ export type ProcessSummaryResult =
       };
       sourceValidationStatus: "invalid";
       repetitionGuardStatus: "not_run";
-      transformations: readonly [];
+      transformations: readonly RepetitionTransformation[];
       finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
+      quoteDiagnostics: readonly QuoteMatchDiagnosticV3[];
     }>;
 
-function fail(errorCode: SummarySourceErrorCode, message: string): ProcessSummaryResult {
+function fail(
+  errorCode: SummarySourceErrorCode,
+  message: string,
+  quoteDiagnostics: readonly QuoteMatchDiagnosticV3[] = [],
+): ProcessSummaryResult {
   return {
     ok: false,
     error: { status: "TECHNICAL_ERROR", errorCode, message },
@@ -48,11 +59,16 @@ function fail(errorCode: SummarySourceErrorCode, message: string): ProcessSummar
     repetitionGuardStatus: "not_run",
     transformations: [],
     finalDiagnostics: null,
+    quoteDiagnostics,
   };
 }
 
-function normalized(value: string): string {
-  return value.normalize("NFKC").trim().toLocaleLowerCase("ru-RU").replace(/\s+/g, " ");
+function quoteSources(input: SummaryAgentInputV3): readonly QuoteSourceV3[] {
+  const values: QuoteSourceV3[] = [
+    ...input.conversationStore.quotes.map((quote) => ({ id: String(quote.id), text: String(quote.text) })),
+    ...input.transcriptContext.turns.map((turn) => ({ id: turn.turnId, text: turn.text })),
+  ];
+  return values.filter((source, index) => values.findIndex((item) => item.id === source.id && item.text === source.text) === index);
 }
 
 export function processSummaryOutput(
@@ -65,7 +81,21 @@ export function processSummaryOutput(
     return fail("SUMMARY_OUTPUT_SCHEMA_INVALID", parsed.error.message);
   }
 
-  const structural = plan ? applySummaryPlanAndValidate(parsed.data, plan) : null;
+  const allowedQuotes = quoteSources(input);
+  const quoteDiagnostics = parsed.data.quotes.map((quote) => matchSummaryQuoteV3(quote.text, allowedQuotes));
+  const quoteTransformations: RepetitionTransformation[] = quoteDiagnostics.flatMap((diagnostic, index) =>
+    diagnostic.matched_source_quote_id ? [] : [{
+      ruleId: "summary.invalid-quote-removed.v1" as const,
+      fieldPath: `quotes.${index}`,
+      meaningId: null,
+      reason: JSON.stringify(diagnostic),
+    }]);
+  const quoteSafeOutput: SummaryV3 = {
+    ...parsed.data,
+    quotes: parsed.data.quotes.filter((_, index) => quoteDiagnostics[index].matched_source_quote_id !== null),
+  };
+
+  const structural = plan ? applySummaryPlanAndValidate(quoteSafeOutput, plan) : null;
   if (structural && !structural.ok) {
     return {
       ok: false,
@@ -76,21 +106,12 @@ export function processSummaryOutput(
       },
       sourceValidationStatus: "invalid",
       repetitionGuardStatus: "not_run",
-      transformations: [],
+      transformations: structural.transformations,
       finalDiagnostics: structural.diagnostics,
+      quoteDiagnostics,
     };
   }
-  const finalValue = structural?.value ?? parsed.data;
-  const transcriptTexts = input.transcriptContext.turns.map((turn) => normalized(turn.text));
-  for (const quote of finalValue.quotes) {
-    const quoteText = normalized(quote.text);
-    if (!transcriptTexts.some((turnText) => turnText.includes(quoteText))) {
-      return fail(
-        "SUMMARY_QUOTE_SOURCE_INVALID",
-        "Summary quote is not present in the full transcript",
-      );
-    }
-  }
+  const finalValue = structural?.value ?? quoteSafeOutput;
 
   const userText = [
     finalValue.conversation_result,
@@ -99,15 +120,16 @@ export function processSummaryOutput(
     finalValue.next_step,
   ].join(" ");
   if (/\b(?:store[_ ]?id|manifest[_ ]?hash|confidence|verification_status|technical_error)\b/iu.test(userText)) {
-    return fail("SUMMARY_SOURCE_MISMATCH", "Summary contains technical fields");
+    return fail("SUMMARY_SOURCE_MISMATCH", "Summary contains technical fields", quoteDiagnostics);
   }
 
   return {
     ok: true,
     value: finalValue,
     sourceValidationStatus: "valid",
-    repetitionGuardStatus: structural?.status ?? "unchanged",
-    transformations: structural?.transformations ?? [],
+    repetitionGuardStatus: structural?.status === "transformed" || quoteTransformations.length ? "transformed" : "unchanged",
+    transformations: [...quoteTransformations, ...(structural?.transformations ?? [])],
     finalDiagnostics: structural?.diagnostics ?? null,
+    quoteDiagnostics,
   };
 }

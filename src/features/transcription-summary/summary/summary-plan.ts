@@ -1,4 +1,5 @@
 import type { ConversationStoreV3 } from "../contracts/conversation-store/v3/contract";
+import { selectUsefulClientQuotesV3 } from "../runtime/quote-policy";
 
 export const SUMMARY_PLAN_VERSION = "summary-plan-v3.1.0" as const;
 
@@ -63,8 +64,11 @@ function primaryNextStep(store: ConversationStoreV3): string {
   const step = store.primary_next_step;
   if (step.status === "not_defined" || !text(step.action)) return "Следующий шаг не согласован.";
   const owner = text(step.owner).toLocaleLowerCase("ru-RU");
-  const actor = owner === "agent" || owner === "агент" ? "Агент" : text(step.owner);
+  const actor = /(?:^|\s)(?:agent|агент|operator|оператор)(?:\s|$)/u.test(owner) ? "Агент"
+    : /(?:^|\s)(?:client|клиент)(?:\s|$)/u.test(owner) ? "Клиент"
+      : text(step.owner);
   const action = text(step.action)
+    .replace(/^провести\s+просмотр(?:\s+объекта)?(?=\s|$)/iu, "проведёт просмотр")
     .replace(/^отправить(?=\s|$)/iu, "отправит")
     .replace(/^позвонить(?=\s|$)/iu, "позвонит")
     .replace(/^перезвонить(?=\s|$)/iu, "перезвонит")
@@ -80,9 +84,11 @@ function primaryNextStep(store: ConversationStoreV3): string {
       parts.push(normalized);
     }
   };
-  add(step.deadline);
+  const deadline = text(step.deadline)
+    .replace(/^пятница,?\s*(\d+)-(?:е|ое),?\s*(\d{1,2}:\d{2})$/iu, "в пятницу, $1-го, в $2");
+  add(deadline);
   const channel = text(step.channel);
-  add(/^(?:e-?mail|электронная почта)$/iu.test(channel)
+  if (!/(?:личн|на объекте|in_person)/iu.test(channel)) add(/^(?:e-?mail|электронная почта)$/iu.test(channel)
     ? "по электронной почте"
     : /^(?:phone|телефон|звонок)$/iu.test(channel)
       ? "по телефону"
@@ -94,6 +100,29 @@ function primaryNextStep(store: ConversationStoreV3): string {
 
 function factType(item: Record<string, unknown>): string {
   return text(item.predicate ?? item.type ?? item.kind).toLocaleLowerCase("ru-RU");
+}
+
+function outcomeMeaning(item: Record<string, unknown>): boolean {
+  return /(?:осмотр|просмотр|встреч|показ|позвон|перезвон|звонок|созвон|отправ|пришл|направ|договоренн|appointment|meeting|viewing)/iu.test(
+    `${text(item.need_type)} ${text(item.value)}`,
+  );
+}
+
+function keyPriority(item: Record<string, unknown>): number {
+  const value = `${text(item.need_type)} ${text(item.value)} ${factType(item)}`.toLocaleLowerCase("ru-RU");
+  if (/(?:бюджет|budget|руб|₽|млн|миллион)/u.test(value)) return 0;
+  if (/(?:ипотек|funding|финанс|средств|депозит|наличн)/u.test(value)) return 1;
+  if (/(?:срок|term|месяц|покупк)/u.test(value)) return 2;
+  if (/(?:возраж|огранич|юрид|не рассматрива|критич)/u.test(value)) return 3;
+  return 4;
+}
+
+function coveredByCrm(item: Record<string, unknown>, coverage: SummaryPlanV3["crmCoverage"]): boolean {
+  const value = `${text(item.need_type)} ${text(item.value)} ${factType(item)}`.toLocaleLowerCase("ru-RU");
+  if (coverage.fundingSource && /(?:ипотек|funding|финанс|средств|депозит|наличн)/u.test(value)) return true;
+  if (coverage.purchaseTerm && /(?:срок|term|месяц)/u.test(value)) return true;
+  if (coverage.interest && /(?:интерес|interest)/u.test(value)) return true;
+  return false;
 }
 
 /**
@@ -110,9 +139,17 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     meanings.push(meaning);
   };
 
+  const attributes = record(store.attributes);
+  const interest = attributes.interested_in ?? attributes.interest;
+  const crmCoverage: SummaryPlanV3["crmCoverage"] = {
+    fundingSource: definedAttribute(attributes.funding_source),
+    purchaseTerm: definedAttribute(attributes.purchase_term),
+    interest: definedAttribute(interest),
+  };
+
   store.facts.map(record).forEach((fact, index) => {
     const type = factType(fact);
-    if (!/(?:client_goal|client goal|goal|цель обращения)/u.test(type)) return;
+    if (!/(?:client_goal|client goal|goal|цель обращения|interest|интерес)/u.test(type)) return;
     const meaningId = id(fact, `client_goal_${index + 1}`);
     add({
       meaningId,
@@ -141,15 +178,19 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     ...store.requirements.map(record),
     ...store.facts.map(record).filter((fact) =>
       /(?:objection|constraint|legal|requirement|возраж|огранич|юрид|отриц)/u.test(factType(fact))),
-  ];
-  keyCandidates.slice(0, 4).forEach((item, index) => {
+  ]
+    .filter((item) => !outcomeMeaning(item))
+    .filter((item, index, values) => values.findIndex((candidate) => id(candidate, `key_fact_${index + 1}`) === id(item, `key_fact_${index + 1}`)) === index)
+    .sort((left, right) => keyPriority(left) - keyPriority(right))
+    .slice(0, crmCoverage.fundingSource && crmCoverage.purchaseTerm && crmCoverage.interest ? 3 : 4);
+  keyCandidates.forEach((item, index) => {
     const meaningId = id(item, `key_fact_${index + 1}`);
     add({
       meaningId,
       kind: "key_fact",
       block: "key_facts",
       text: text(item),
-      required: true,
+      required: !coveredByCrm(item, crmCoverage),
       exclusive: false,
       sourceIds: sourceIds(item, meaningId),
     });
@@ -165,7 +206,12 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     sourceIds: ["primary_next_step"],
   });
 
-  store.quotes.map(record).slice(0, 2).forEach((quote, index) => {
+  const selectedQuotes = selectUsefulClientQuotesV3(store.quotes.map(record).map((quote) => ({
+    quote,
+    speaker: text(quote.speaker),
+    text: text(quote.text),
+  })));
+  selectedQuotes.map((item) => item.quote).forEach((quote, index) => {
     const meaningId = id(quote, `quote_${index + 1}`);
     add({
       meaningId,
@@ -178,15 +224,9 @@ export function buildSummaryPlanV3(store: ConversationStoreV3): SummaryPlanV3 {
     });
   });
 
-  const attributes = record(store.attributes);
-  const interest = attributes.interested_in ?? attributes.interest;
   return Object.freeze({
     version: SUMMARY_PLAN_VERSION,
     meanings: Object.freeze(meanings),
-    crmCoverage: Object.freeze({
-      fundingSource: definedAttribute(attributes.funding_source),
-      purchaseTerm: definedAttribute(attributes.purchase_term),
-      interest: definedAttribute(interest),
-    }),
+    crmCoverage: Object.freeze(crmCoverage),
   });
 }

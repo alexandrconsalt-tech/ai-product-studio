@@ -12,7 +12,9 @@ type Case = Readonly<{
   requirements: readonly string[];
   callResult: string;
   next: Readonly<{ action: string; deadline: string; channel: string }>;
-  funding?: "наличные / депозит";
+  funding?: "наличные / депозит" | "ипотека одобрена";
+  purchaseTerm?: "2–3 месяца";
+  interest?: "Новостройки";
 }>;
 
 const cases: readonly Case[] = [
@@ -119,6 +121,26 @@ const cases: readonly Case[] = [
     callResult: "Согласован подбор тихих вариантов.",
     next: { action: "отправить подборку", deadline: "завтра", channel: "WhatsApp" },
   },
+  {
+    id: "tatiana_exact_production_regression",
+    turns: [
+      { speaker: "agent", text: "Добрый день, агентство недвижимости, Анна." },
+      { speaker: "client", text: "Здравствуйте, меня Татьяна зовут. Я по объявлению, интересуют новостройки в центре." },
+      { speaker: "agent", text: "Какой у вас бюджет?" },
+      { speaker: "client", text: "До 8 миллионов, ипотека уже одобрена в Сбербанке." },
+      { speaker: "agent", text: "В какой срок планируете покупку?" },
+      { speaker: "client", text: "В ближайшие 2–3 месяца." },
+      { speaker: "agent", text: "Предлагаю посмотреть варианты в пятницу, 15-го, в 14:00." },
+      { speaker: "client", text: "Да, договорились." },
+    ],
+    goal: "Клиент ищет новостройку в центре",
+    requirements: ["Бюджет до 8 миллионов", "Ипотека одобрена в Сбербанке", "Покупка в ближайшие 2–3 месяца"],
+    callResult: "Просмотр согласован.",
+    next: { action: "Провести просмотр", deadline: "в пятницу, 15-го, в 14:00", channel: "личная встреча" },
+    funding: "ипотека одобрена",
+    purchaseTerm: "2–3 месяца",
+    interest: "Новостройки",
+  },
 ];
 
 function transcript(item: Case) {
@@ -149,9 +171,9 @@ function extracted(item: Case) {
       business_needs: [],
       property_requirements: item.requirements.map((value, index) => ({ ...base(`requirement-${index + 1}`), need_type: "client_requirement", value })),
       structured_crm_attributes: {
-        interested_in: [],
+        interested_in: item.interest ? [{ ...base("interest"), value: item.interest }] : [],
         funding_source: { ...base("funding-source"), value: item.funding ?? "не определено" },
-        purchase_term: { ...base("purchase-term"), value: "не определено" },
+        purchase_term: { ...base("purchase-term"), value: item.purchaseTerm ?? "не определено" },
       },
       communication_preferences: [], client_questions: [],
     },
@@ -231,7 +253,11 @@ describe("nine audited scenarios through production typed v3 orchestrator", () =
     expect(result.report.stages).toHaveLength(13);
     expect(result.report.status, JSON.stringify({ capturedErrors, stages: result.report.stages.map((stage) => ({ id: stage.stage_id, status: stage.status, error: stage.error_code, issues: stage.validation_result.issues })) })).toBe("SUCCESS");
     expect(result.report.crm_status).toBe("DRY_RUN");
-    expect(summary.conversation_result).toContain(item.goal);
+    if (item.id === "repeat_viewing") {
+      expect(summary.conversation_result).not.toContain(item.goal);
+    } else {
+      expect(summary.conversation_result).toContain(item.goal);
+    }
     expect([
       item.callResult.replace(/[.]$/u, ""),
       expectedConversationOutcome(item),

@@ -1,12 +1,18 @@
 import type { ContractDefinition, ContractRole } from "../contracts/contract-types";
-import { FactsV3Contract } from "../contracts/facts/v3/contract";
+import { FactsV3Contract, FactsV3Schema } from "../contracts/facts/v3/contract";
 import { NeedsV3Contract } from "../contracts/needs/v3/contract";
 import { NeedsV3Schema } from "../contracts/needs/v3/contract";
-import { OutcomeV3Contract } from "../contracts/outcome/v3/contract";
+import { OutcomeV3Contract, OutcomeV3Schema } from "../contracts/outcome/v3/contract";
 import type { PipelineStageReportV3 } from "../contracts/pipeline-report/v3/contract";
 import { SUMMARY_CRITERIA } from "../contracts/canonical-enums";
 import type { SummaryCriterionV3 } from "../contracts/summary-judge-input/v3/contract";
 import { buildStructuredPrompt, type ResolvedPrompt } from "../runtime/prompt-builder";
+import {
+  applyFactsAgentOutputPolicyV3,
+  applyNeedsAgentOutputPolicyV3,
+  applyOutcomeAgentOutputPolicyV3,
+  type AgentOutputPolicyTransformationV3,
+} from "../runtime/agent-output-policy";
 import {
   executeStructuredCompletion,
   type SafeProviderDiagnostic,
@@ -51,15 +57,15 @@ const SUMMARY_JUDGE_CRITERION = {
 } as const satisfies Partial<Record<TranscriptionSummaryV3StageId, SummaryCriterionV3>>;
 
 const BUSINESS_INSTRUCTIONS = {
-  facts_agent: "Извлеки только явно подтверждённые факты и цитаты. verification_status каждого валидного элемента должен быть extracted.",
-  needs_agent: "Используй ctx.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check. Разделяй потребности, требования и CRM-атрибуты. verification_status каждого валидного элемента должен быть extracted.",
-  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_result, agreements и primary_next_step строго по JSON Schema. call_result всегда строка. Не используй call_results, agreement_id, outcome_meta или text.",
+  facts_agent: "Извлеки только явно подтверждённые рабочие факты. Не включай имя клиента и действия Outcome (просмотр, встречу, звонок, отправку) в confirmed_facts. Цитаты: только клиент, максимум две, только мотив, сомнение, ограничение, возражение или важная позиция; не цитируй приветствие, имя, обычную цель, бюджет, финансирование, срок, время или договорённость. verification_status каждого валидного элемента должен быть extracted.",
+  needs_agent: "Используй ctx.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check. Разделяй потребности, требования и CRM-атрибуты. Просмотры, встречи, звонки, отправки и другие действия относятся к Outcome и запрещены в business_needs/property_requirements. verification_status каждого валидного элемента должен быть extracted.",
+  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_result, agreements и primary_next_step строго по JSON Schema. call_result всегда строка: только короткий результат разговора без Facts/Needs и точных деталей primary_next_step. agreements содержит только подтверждённые клиентом договорённости; не создавай status=not_defined. owner задавай ролью, без имени. Не используй call_results, agreement_id, outcome_meta или text.",
 } as const;
 
 const PROMPT_VERSION_BY_STAGE = {
-  facts_agent: "facts_agent-v3.0.0",
-  needs_agent: "needs_agent-v3.2.0",
-  outcome_agent: "outcome_agent-v3.2.0",
+  facts_agent: "facts_agent-v3.1.0",
+  needs_agent: "needs_agent-v3.3.0",
+  outcome_agent: "outcome_agent-v3.3.0",
 } as const;
 
 function remainingTimeout(context: PipelineExecutionContext, stageLimitMs: number): number {
@@ -195,6 +201,31 @@ function structuredAudit(
   };
 }
 
+function policyAuditTransformations(
+  transformations: readonly AgentOutputPolicyTransformationV3[],
+): PipelineStageReportV3["transformations"] {
+  return transformations.map((item, index) => ({
+    operation_id: `${item.ruleId}:${index + 1}`,
+    operation_type: "normalized" as const,
+    field_path: item.fieldPath,
+    old_value: JSON.parse(JSON.stringify(item.originalValue)) as never,
+    new_value: JSON.parse(JSON.stringify(item.normalizedValue)) as never,
+    rule_id: item.ruleId,
+    reason: item.reason,
+    source_refs: [],
+    timestamp: new Date(0).toISOString(),
+  }));
+}
+
+function applyAgentPolicy(
+  stageId: keyof typeof CONTRACT_BY_AGENT_STAGE,
+  value: unknown,
+): Readonly<{ value: unknown; transformations: readonly AgentOutputPolicyTransformationV3[] }> {
+  if (stageId === "facts_agent") return applyFactsAgentOutputPolicyV3(FactsV3Schema.parse(value));
+  if (stageId === "needs_agent") return applyNeedsAgentOutputPolicyV3(NeedsV3Schema.parse(value));
+  return applyOutcomeAgentOutputPolicyV3(OutcomeV3Schema.parse(value));
+}
+
 function codeAudit(
   context: PipelineExecutionContext,
   role: ContractRole,
@@ -282,8 +313,14 @@ implements TranscriptionSummaryV3StageExecutor {
       transport: this.#transport,
       timeoutMs: remainingTimeout(context, 60_000),
     });
+    const policy = completion.ok ? applyAgentPolicy(stageId, completion.value) : null;
+    const structured = structuredAudit(contract, prompt, completion.diagnostic, stageId);
     const audit = {
-      ...structuredAudit(contract, prompt, completion.diagnostic, stageId),
+      ...structured,
+      transformations: [
+        ...(structured.transformations ?? []),
+        ...policyAuditTransformations(policy?.transformations ?? []),
+      ],
       rawProviderResponse: completion.ok ? null : completion.rawResponse ?? null,
     };
     if (!completion.ok && stageId === "needs_agent") {
@@ -306,7 +343,7 @@ implements TranscriptionSummaryV3StageExecutor {
       };
     }
     return completion.ok
-      ? { status: "SUCCESS", value: completion.value, audit }
+      ? { status: policy?.transformations.length ? "SUCCESS_WITH_WARNING" : "SUCCESS", value: policy?.value ?? completion.value, audit }
       : {
           status: "TECHNICAL_ERROR",
           value: null,
@@ -388,6 +425,11 @@ implements TranscriptionSummaryV3StageExecutor {
             code: "POST_FINAL_DIAGNOSTICS",
             message: JSON.stringify(result.diagnostic.finalDiagnostics),
           }] : []),
+          ...result.diagnostic.quoteDiagnostics.map((diagnostic) => ({
+            path: "summary.quotes",
+            code: "SUMMARY_QUOTE_SOURCE_DIAGNOSTIC",
+            message: JSON.stringify(diagnostic),
+          })),
         ],
         errorType: result.ok ? null : result.diagnostic.errorType === "provider_error" ? "provider" : "schema",
         errorCode: result.diagnostic.errorCode,

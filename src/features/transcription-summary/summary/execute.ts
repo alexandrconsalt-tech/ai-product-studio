@@ -17,6 +17,7 @@ import {
 } from "./source-validation";
 import { buildSummaryPlanV3, type SummaryPlanV3 } from "./summary-plan";
 import type { SummaryFinalDiagnosticsV3 } from "./structural-validation";
+import type { QuoteMatchDiagnosticV3 } from "../runtime/quote-policy";
 
 export type SummaryExecutionErrorCode =
   | "SUMMARY_STORE_MISSING"
@@ -50,6 +51,7 @@ export type SummaryAgentV3Diagnostic = Readonly<{
   repetitionTransformations: readonly RepetitionTransformation[];
   summaryPlan: SummaryPlanV3 | null;
   finalDiagnostics: SummaryFinalDiagnosticsV3 | null;
+  quoteDiagnostics: readonly QuoteMatchDiagnosticV3[];
   validationStatus: "valid" | "invalid" | "not_run";
   providerDiagnostic: SafeProviderDiagnostic | null;
   rawProviderResponse: unknown | null;
@@ -119,6 +121,7 @@ export async function executeSummaryAgentV3(input: {
     repetitionTransformations: [] as readonly RepetitionTransformation[],
     summaryPlan: null,
     finalDiagnostics: null,
+    quoteDiagnostics: [] as readonly QuoteMatchDiagnosticV3[],
     validationStatus: "not_run" as const,
     providerDiagnostic: null,
     rawProviderResponse: null,
@@ -203,6 +206,7 @@ export async function executeSummaryAgentV3(input: {
         promptHash: prompt.promptHash,
         summaryPlan,
         finalDiagnostics: processed.finalDiagnostics,
+        quoteDiagnostics: processed.quoteDiagnostics,
         structuredOutputRequested: completion.diagnostic.structuredOutputRequested,
         structuredOutputApplied: completion.diagnostic.structuredOutputApplied,
         attemptCount: completion.diagnostic.attemptCount,
@@ -236,6 +240,7 @@ export async function executeSummaryAgentV3(input: {
       repetitionTransformations: processed.transformations,
       summaryPlan,
       finalDiagnostics: processed.finalDiagnostics,
+      quoteDiagnostics: processed.quoteDiagnostics,
       validationStatus: "valid",
       providerDiagnostic: completion.diagnostic.providerDiagnostic,
       errorType: null,
