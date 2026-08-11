@@ -3,6 +3,52 @@ import { createSummaryFixtureContext } from "./fixtures";
 import { buildSummaryPlanV3 } from "./summary-plan";
 
 describe("Summary Plan v3 deadline rendering", () => {
+  it("ранжирует P0 перед P1 и не включает P2 без рабочей необходимости", () => {
+    const fixture = createSummaryFixtureContext();
+    const plan = buildSummaryPlanV3({
+      ...fixture.store,
+      call_result: "Клиент отказался продолжать из-за цены и расходов на ремонт.",
+      requirements: [
+        { id: "blocking", need_type: "deal_constraint", value: "Выход на сделку возможен после получения разрешения на продажу", evidence: "Разрешение ещё не получено.", source_turn_ids: ["turn-1"] },
+        { id: "budget", need_type: "budget", value: "Бюджет до 9 млн", evidence: "Бюджет до 9 млн.", source_turn_ids: ["turn-2"] },
+        { id: "context", need_type: "additional_context", value: "Клиент давно изучает рынок", evidence: "Давно смотрю предложения.", source_turn_ids: ["turn-3"] },
+      ],
+    });
+
+    expect(plan.version).toBe("summary-plan-v3.2.0");
+    const keyMeanings = plan.meanings.filter((meaning) => meaning.block === "key_facts");
+    expect(keyMeanings[0]?.priority).toBe("P0");
+    expect(keyMeanings.slice(1).every((meaning) => meaning.priority === "P1")).toBe(true);
+    expect(keyMeanings.map((meaning) => meaning.meaningId)).not.toContain("context");
+    expect(plan.meanings.filter((meaning) => meaning.priority === "P0").every((meaning) => meaning.required)).toBe(true);
+  });
+
+  it("не теряет самостоятельный юридический P0 после удаления legacy-агрегатора", () => {
+    const fixture = createSummaryFixtureContext();
+    const plan = buildSummaryPlanV3({
+      ...fixture.store,
+      requirements: [],
+      facts: [
+        ...fixture.store.facts,
+        {
+          id: "legal-risk",
+          type: "legal_or_document_status",
+          value: "На квартире сохраняется обременение, блокирующее сделку",
+          evidence: "Снять обременение до сделки пока невозможно.",
+          source_turn_ids: ["turn-legal"],
+        },
+      ],
+    });
+
+    expect(plan.meanings).toContainEqual(expect.objectContaining({
+      meaningId: "legal-risk",
+      block: "key_facts",
+      priority: "P0",
+      required: true,
+      label: "Юридический статус",
+    }));
+  });
+
   it("рендерит подтверждённую пятницу с датой и временем грамматически корректно", () => {
     const fixture = createSummaryFixtureContext();
     const plan = buildSummaryPlanV3({
@@ -84,6 +130,6 @@ describe("Summary Plan v3 deadline rendering", () => {
     });
 
     expect(plan.meanings.some((meaning) => meaning.meaningId === "generic-purchase")).toBe(false);
-    expect(plan.meanings.some((meaning) => meaning.meaningId === "interest")).toBe(true);
+    expect(plan.meanings.some((meaning) => meaning.meaningId === "interest")).toBe(false);
   });
 });

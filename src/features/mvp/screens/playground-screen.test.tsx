@@ -188,4 +188,25 @@ describe("PlaygroundScreen", () => {
     expect(iframeUrl.searchParams.get("productId")).toBe(project.id);
     expect(iframeUrl.searchParams.has("preset")).toBe(false);
   });
+
+  it("opens AI Атрибуты в Заявке with its recovered nine-stage preset", () => {
+    const project = {
+      ...demoSnapshot.projects[0],
+      id: "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f",
+      name: "AI Атрибуты в Заявке",
+      pipelineId: undefined,
+      architectureId: undefined,
+    };
+    useRepositoryStore.setState({
+      snapshot: { ...demoSnapshot, projects: [project], pipelines: [] },
+      selectedProjectId: project.id,
+    });
+
+    render(<PlaygroundScreen />);
+
+    const iframe = screen.getByTitle("Pipeline Lab v3") as HTMLIFrameElement;
+    const iframeUrl = new URL(iframe.src);
+    expect(iframeUrl.searchParams.get("productId")).toBe(project.id);
+    expect(iframeUrl.searchParams.has("preset")).toBe(false);
+  });
 });

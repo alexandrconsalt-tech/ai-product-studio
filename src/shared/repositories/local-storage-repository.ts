@@ -24,6 +24,14 @@ const TRANSCRIPTION_SUMMARY_CREATED_AT = "2026-07-08T00:00:00.000Z";
 const SUMMARY_V2_PROJECT_ID = "project_summary_pipeline_v2";
 const SUMMARY_V2_PRODUCT_ID = "product_summary_pipeline_v2";
 const SUMMARY_V2_CREATED_AT = "2026-07-28T00:00:00.000Z";
+const APPLICATION_ATTRIBUTES_PROJECT_ID = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
+const APPLICATION_ATTRIBUTES_PRODUCT_ID = "product_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
+const APPLICATION_ATTRIBUTES_NAME = "AI Атрибуты в Заявке";
+const APPLICATION_ATTRIBUTES_CREATED_AT = "2026-08-06T00:00:00.000Z";
+export const AI_SUMMARY_TEN_AUGUST_PROJECT_ID = "project_ai_summary_2026_08_10";
+export const AI_SUMMARY_TEN_AUGUST_PRODUCT_ID = "product_ai_summary_2026_08_10";
+const AI_SUMMARY_TEN_AUGUST_NAME = "AI Summary 10.08";
+const AI_SUMMARY_TEN_AUGUST_CREATED_AT = "2026-08-10T00:00:00.000Z";
 
 export const RepositorySnapshotSchema = z.object({
   projects: z.array(ProjectSchema).readonly(),
@@ -164,7 +172,7 @@ function migrateLegacyRepositorySnapshot(value: unknown): unknown {
 // import demoSnapshot directly are unaffected. Applied on every load() (not
 // just first-time seeding) so browsers with an already-persisted snapshot
 // from before this change also converge to the reduced product list.
-const RETIRED_DEMO_PROJECT_IDS = ["project_demo_call_analysis", "project_demo_lead_qualification", "project_demo_chat_classification", "project_ad_copy_generation"];
+const RETIRED_DEMO_PROJECT_IDS = ["project_demo_call_analysis", "project_demo_lead_qualification", "project_demo_chat_classification", "project_ad_copy_generation", "project_demo_pipeline_lab_v3"];
 
 function cascadeDeleteProject(snapshot: RepositorySnapshot, projectId: string): RepositorySnapshot {
   const removedProducts = snapshot.products.filter((product) => product.projectId === projectId);
@@ -326,31 +334,122 @@ function withTranscriptionSummaryModule(snapshot: RepositorySnapshot): Repositor
     version: "2.0.0",
   };
 
+  const applicationAttributesProject = {
+    id: APPLICATION_ATTRIBUTES_PROJECT_ID,
+    name: APPLICATION_ATTRIBUTES_NAME,
+    description: "Извлечение и независимая проверка атрибутов заявки: интерес клиента, источник средств и срок покупки.",
+    status: "testing" as const,
+    productId: APPLICATION_ATTRIBUTES_PRODUCT_ID,
+    playgroundRunIds: [],
+    reviewIds: [],
+    createdAt: APPLICATION_ATTRIBUTES_CREATED_AT,
+    updatedAt: APPLICATION_ATTRIBUTES_CREATED_AT,
+    version: "1.0.0",
+  };
+
+  const applicationAttributesProduct = {
+    id: APPLICATION_ATTRIBUTES_PRODUCT_ID,
+    projectId: APPLICATION_ATTRIBUTES_PROJECT_ID,
+    status: "ready" as const,
+    idea: {
+      statement: "Автоматически формировать проверенные атрибуты заявки из транскрипции входящего звонка.",
+      source: "AI Product Studio",
+    },
+    discovery: "Менеджеру нужны подтверждённые значения интереса клиента, источника средств и срока покупки без ручного разбора звонка.",
+    problem: {
+      statement: "Непроверенные или ошибочно классифицированные атрибуты заявки ухудшают дальнейшую работу с клиентом.",
+      evidenceIds: [],
+    },
+    users: [{ id: "user_application_attributes_manager", name: "Менеджер", segment: "Недвижимость" }],
+    jtbd: [{
+      statement: "После входящего звонка получить три проверенных атрибута заявки, чтобы продолжить работу с корректными данными.",
+      context: "После клиентского звонка",
+      desiredOutcome: "Атрибуты готовы к безопасной передаче в CRM",
+    }],
+    features: [
+      { id: "feature_application_interest", name: "Интерес клиента", description: "Извлечение и независимая проверка интереса.", priority: "high" as const },
+      { id: "feature_application_funding", name: "Источник средств", description: "Каноническая классификация финансирования.", priority: "high" as const },
+      { id: "feature_application_purchase_term", name: "Срок покупки", description: "Определение срока покупки без подмены датами просмотра или сделки.", priority: "high" as const },
+    ],
+    mvp: "Девять этапов: три Extractor, три Judge, объединение атрибутов, Quality Gate и формирование результата для CRM.",
+    metrics: [
+      { name: "Точность атрибутов", target: ">= 95%", category: "quality" as const },
+      { name: "Schema validity", target: "100%", category: "quality" as const },
+    ],
+    prd: "Пайплайн принимает транскрипцию и независимо извлекает, проверяет и объединяет interest, funding_source и purchase_term.",
+    frameworkIds: ["framework_evaluation"],
+    valueProposition: "Три проверенных атрибута заявки без ручного прослушивания звонка.",
+    targetAudience: "Менеджеры и команды качества агентства недвижимости.",
+    acceptanceCriteria: "Каждый атрибут проверяется независимо, ошибка одного атрибута не блокирует остальные, а результат проходит Quality Gate перед CRM.",
+    aiModels: "gpt-5-mini через AI Tunnel",
+    aiAgents: "3 Extractor + 3 Judge + Merger + Quality Gate + CRM Result",
+    createdAt: APPLICATION_ATTRIBUTES_CREATED_AT,
+    updatedAt: APPLICATION_ATTRIBUTES_CREATED_AT,
+    version: "1.0.0",
+  };
+
+  const existingAiSummaryProject = snapshot.projects.find(
+    (item) => item.id === AI_SUMMARY_TEN_AUGUST_PROJECT_ID || item.name.trim().toLocaleLowerCase("ru-RU") === AI_SUMMARY_TEN_AUGUST_NAME.toLocaleLowerCase("ru-RU"),
+  );
+  const aiSummaryProjectId = existingAiSummaryProject?.id ?? AI_SUMMARY_TEN_AUGUST_PROJECT_ID;
+  const existingAiSummaryProduct = snapshot.products.find(
+    (item) => item.id === AI_SUMMARY_TEN_AUGUST_PRODUCT_ID || item.projectId === aiSummaryProjectId,
+  );
+  const aiSummaryProductId = existingAiSummaryProduct?.id ?? AI_SUMMARY_TEN_AUGUST_PRODUCT_ID;
+  const aiSummaryProject = {
+    id: aiSummaryProjectId,
+    name: AI_SUMMARY_TEN_AUGUST_NAME,
+    description: "Восстановленный пользовательский pipeline Facts Extractor из проверенного pipeline report от 10.08.",
+    status: "testing" as const,
+    productId: aiSummaryProductId,
+    playgroundRunIds: [],
+    reviewIds: [],
+    createdAt: AI_SUMMARY_TEN_AUGUST_CREATED_AT,
+    updatedAt: AI_SUMMARY_TEN_AUGUST_CREATED_AT,
+    version: "1.0.0",
+  };
+  const aiSummaryProduct = {
+    id: aiSummaryProductId,
+    projectId: aiSummaryProjectId,
+    status: "ready" as const,
+    users: [],
+    jtbd: [],
+    features: [],
+    metrics: [],
+    frameworkIds: [],
+    notes: "Recovery-конфигурация. Пользовательские изменения pipeline имеют приоритет над встроенным восстановлением.",
+    createdAt: AI_SUMMARY_TEN_AUGUST_CREATED_AT,
+    updatedAt: AI_SUMMARY_TEN_AUGUST_CREATED_AT,
+    version: "1.0.0",
+  };
+
   const projectsWithV1 = hasProject
     ? snapshot.projects.map((item) => (item.id === targetProjectId ? { ...item, name: TRANSCRIPTION_SUMMARY_NAME, productId: TRANSCRIPTION_SUMMARY_PRODUCT_ID } : item))
     : [project, ...snapshot.projects];
   const projectsWithModule = projectsWithV1.some((item) => item.id === SUMMARY_V2_PROJECT_ID)
     ? projectsWithV1.map((item) => (item.id === SUMMARY_V2_PROJECT_ID ? { ...item, name: summaryV2Project.name, productId: SUMMARY_V2_PRODUCT_ID } : item))
     : [...projectsWithV1, summaryV2Project];
+  const projectsWithAttributes = projectsWithModule.some((item) => item.id === APPLICATION_ATTRIBUTES_PROJECT_ID)
+    ? projectsWithModule.map((item) => (item.id === APPLICATION_ATTRIBUTES_PROJECT_ID ? { ...item, name: APPLICATION_ATTRIBUTES_NAME, productId: APPLICATION_ATTRIBUTES_PRODUCT_ID } : item))
+    : [...projectsWithModule, applicationAttributesProject];
+  const projectsWithAiSummary = projectsWithAttributes.some((item) => item.id === aiSummaryProjectId)
+    ? projectsWithAttributes.map((item) => (item.id === aiSummaryProjectId ? { ...item, productId: aiSummaryProductId } : item))
+    : [...projectsWithAttributes, aiSummaryProject];
   const productsWithV1 = hasProduct ? snapshot.products : [product, ...snapshot.products];
   const productsWithModule = productsWithV1.some((item) => item.id === SUMMARY_V2_PRODUCT_ID)
     ? productsWithV1
     : [...productsWithV1, summaryV2Product];
-  const hydratedSnapshot: RepositorySnapshot = {
-    ...snapshot,
-    projects: projectsWithModule,
-    products: productsWithModule,
-  };
-
-  const allowedProjectIds = new Set([targetProjectId, SUMMARY_V2_PROJECT_ID]);
-  const productSnapshot = hydratedSnapshot.projects.reduce<RepositorySnapshot>(
-    (current, item) => (allowedProjectIds.has(item.id) ? current : cascadeDeleteProject(current, item.id)),
-    hydratedSnapshot,
-  );
+  const productsWithAttributes = productsWithModule.some((item) => item.id === APPLICATION_ATTRIBUTES_PRODUCT_ID)
+    ? productsWithModule
+    : [...productsWithModule, applicationAttributesProduct];
+  const productsWithAiSummary = productsWithAttributes.some((item) => item.id === aiSummaryProductId)
+    ? productsWithAttributes
+    : [...productsWithAttributes, aiSummaryProduct];
 
   return {
-    ...productSnapshot,
-    products: productSnapshot.products.filter((item) => item.id === TRANSCRIPTION_SUMMARY_PRODUCT_ID || item.id === SUMMARY_V2_PRODUCT_ID),
+    ...snapshot,
+    projects: projectsWithAiSummary,
+    products: productsWithAiSummary,
   };
 }
 

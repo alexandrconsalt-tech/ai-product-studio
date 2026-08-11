@@ -4,8 +4,8 @@ import * as React from "react";
 import { ArrowLeft, Check, Clipboard, FileJson, Search, Upload } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Input, Panel, Select, Textarea } from "@/shared/ui";
-import { normalizePlaygroundRun } from "./importer";
-import { buildReview, createDefaultCriteria, getAllBlockScores, getHumanDecision, getHumanScore, reviewBlocks, reviewerRoles } from "./scoring";
+import { formatSummarySections, getSummarySections, normalizePlaygroundRun } from "./importer";
+import { buildReview, createDefaultCriteria, getAllBlockScores, getHumanDecision, getHumanScore, normalizeCriteria, reviewBlocks, reviewerRoles } from "./scoring";
 import { sampleRun } from "./sample-data";
 import { getReview, getRun, saveReview, saveRun } from "./storage";
 import type { CriterionValue, ReviewerRole, SummaryRun } from "./types";
@@ -15,18 +15,12 @@ type ReviewWorkspaceProps = {
   embedded?: boolean;
 };
 
-const optionLabels: Record<CriterionValue, string> = {
-  yes: "Да",
-  partial: "Частично",
-  no: "Нет",
-  na: "Не обсуждалось",
-};
-
 const optionClasses: Record<CriterionValue, string> = {
-  yes: "border-green-600 bg-green-50 text-green-800 dark:bg-green-950/40 dark:text-green-200",
-  partial: "border-yellow-500 bg-yellow-50 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-200",
-  no: "border-red-600 bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200",
-  na: "border-border bg-muted text-text-muted",
+  0: "border-red-600 bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200",
+  1: "border-orange-500 bg-orange-50 text-orange-800 dark:bg-orange-950/40 dark:text-orange-200",
+  2: "border-yellow-500 bg-yellow-50 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-200",
+  3: "border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200",
+  4: "border-green-600 bg-green-50 text-green-800 dark:bg-green-950/40 dark:text-green-200",
 };
 
 function decodePayload(payload: string | null): unknown | null {
@@ -90,7 +84,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
         setRun(stored);
         const review = getReview(effectiveRunId);
         if (review) {
-          setCriteria(review.criteriaJson);
+          setCriteria(normalizeCriteria(review.criteriaJson));
           setReviewerName(review.reviewerName);
           setReviewerRole(review.reviewerRole);
           setComment(review.comment);
@@ -103,6 +97,8 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
   const humanScore = getHumanScore(criteria);
   const humanDecision = getHumanDecision(humanScore);
   const transcriptLines = run ? extractSpeakerLines(run.transcript, query, visibleRoles) : [];
+  const summarySections = run ? getSummarySections(run.sourceRunJson, run.summary) : null;
+  const fullSummary = summarySections ? formatSummarySections(summarySections) : "";
 
   const importFile = async (file: File | undefined) => {
     if (!file) return;
@@ -178,32 +174,51 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
         </div>
       </div>
 
-      <div className="grid min-h-[680px] grid-cols-1 gap-4 xl:grid-cols-[1.05fr_0.85fr_1.15fr]">
-        <Panel className="flex min-h-0 flex-col overflow-hidden">
-          <div className="border-b border-border p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <Search className="size-4 text-text-muted" aria-hidden="true" />
-              <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по транскрибации" />
+      <Panel className="overflow-hidden">
+        <details>
+          <summary className="cursor-pointer px-4 py-3 font-semibold">
+            Транскрибация <span className="font-normal text-text-muted">· {transcriptLines.length} реплик · нажмите, чтобы развернуть</span>
+          </summary>
+          <div className="border-t border-border">
+            <div className="border-b border-border p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Search className="size-4 text-text-muted" aria-hidden="true" />
+                <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по транскрибации" />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {Object.keys(visibleRoles).map((role) => (
+                  <Button key={role} size="sm" variant={visibleRoles[role] ? "secondary" : "ghost"} onClick={() => setVisibleRoles((prev) => ({ ...prev, [role]: !prev[role] }))}>
+                    {role}
+                  </Button>
+                ))}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {Object.keys(visibleRoles).map((role) => (
-                <Button key={role} size="sm" variant={visibleRoles[role] ? "secondary" : "ghost"} onClick={() => setVisibleRoles((prev) => ({ ...prev, [role]: !prev[role] }))}>
-                  {role}
-                </Button>
+            <div className="max-h-96 space-y-2 overflow-auto p-3 text-sm leading-6">
+              {transcriptLines.map((line, index) => (
+                <p key={`${line}-${index}`} className="rounded-md bg-muted/50 px-3 py-2">{line}</p>
               ))}
             </div>
           </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3 text-sm leading-6">
-            {transcriptLines.map((line, index) => (
-              <p key={`${line}-${index}`} className="rounded-md bg-muted/50 px-3 py-2">{line}</p>
-            ))}
-          </div>
-        </Panel>
+        </details>
+      </Panel>
 
+      <div className="grid min-h-[680px] grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <Panel className="flex min-h-0 flex-col gap-3 overflow-auto p-4">
           <div>
             <h2 className="text-lg font-semibold">Итоговое саммари</h2>
-            <p className="mt-3 whitespace-pre-wrap rounded-md bg-muted/50 p-3 text-sm leading-6">{run.summary}</p>
+            <div className="mt-3 space-y-3">
+              {summarySections ? [
+                ["Итог разговора", summarySections.conversationResult || "Не указано"],
+                ["Ключевые факты", summarySections.keyFacts.length ? summarySections.keyFacts.map((item) => `• ${item}`).join("\n") : "Не указаны"],
+                ["Цитаты", summarySections.quotes.length ? summarySections.quotes.map((item) => `• «${item.replace(/^«|»$/g, "")}»`).join("\n") : "Не указаны"],
+                ["Договорённости и следующий шаг", summarySections.nextSteps.length ? summarySections.nextSteps.map((item) => `• ${item}`).join("\n") : "Не указаны"],
+              ].map(([title, content]) => (
+                <section key={title} className="rounded-md bg-muted/50 p-3">
+                  <h3 className="text-sm font-semibold">{title}</h3>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{content}</p>
+                </section>
+              )) : null}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div className="rounded-md border border-border p-3">AI Score<br /><span className="text-xl font-semibold">{run.aiScore}</span></div>
@@ -216,7 +231,7 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void navigator.clipboard.writeText(run.summary)}><Clipboard className="size-4" />Скопировать саммари</Button>
+            <Button onClick={() => void navigator.clipboard.writeText(fullSummary)}><Clipboard className="size-4" />Скопировать саммари</Button>
           </div>
           <details className="rounded-md border border-border p-3 text-sm">
             <summary className="flex cursor-pointer items-center gap-2 font-medium"><FileJson className="size-4" />Открыть полный JSON</summary>
@@ -234,31 +249,28 @@ export function ReviewWorkspace({ runId, embedded = false }: ReviewWorkspaceProp
               const scoreKey = `${block.id}Score` as keyof typeof blockScores;
               return (
                 <section key={block.id} className="rounded-md border border-border p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold">{block.title}</h3>
-                    <span className="text-sm text-text-muted">{Number(blockScores[scoreKey]).toFixed(1)} · {Math.round(block.weight * 100)}%</span>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold">{block.title}</h3>
+                      <p className="mt-1 text-xs leading-5 text-text-muted">{block.description}</p>
+                    </div>
+                    <span className="shrink-0 text-sm text-text-muted">{Math.round(block.weight * 100)}%</span>
                   </div>
-                  <div className="space-y-3">
-                    {block.criteria.map((criterion) => {
-                      const options: CriterionValue[] = criterion.allowNa ? ["yes", "partial", "no", "na"] : ["yes", "partial", "no"];
-                      return (
-                        <div key={criterion.id} className="space-y-2">
-                          <p className="text-sm">{criterion.label}</p>
-                          <div className="flex flex-wrap gap-2">
-                            {options.map((option) => (
-                              <button
-                                key={option}
-                                type="button"
-                                onClick={() => setCriteria((prev) => ({ ...prev, [criterion.id]: option }))}
-                                className={`h-8 rounded-full border px-3 text-xs font-medium ${criteria[criterion.id] === option ? optionClasses[option] : "border-border bg-background text-text-muted"}`}
-                              >
-                                {option === "na" ? criterion.naLabel : optionLabels[option]}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex gap-2" role="group" aria-label={`${block.title}: оценка от 0 до 4`}>
+                      {([0, 1, 2, 3, 4] as CriterionValue[]).map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          aria-label={`${block.title}: ${option} из 4`}
+                          onClick={() => setCriteria((prev) => ({ ...prev, [block.id]: option }))}
+                          className={`size-9 rounded-full border text-sm font-semibold ${criteria[block.id] === option ? optionClasses[option] : "border-border bg-background text-text-muted"}`}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-sm font-medium">{criteria[block.id] ?? 4} / 4 · {Number(blockScores[scoreKey]).toFixed(0)}%</span>
                   </div>
                 </section>
               );

@@ -6,6 +6,7 @@ import { SUMMARY_QUALITY_GATE_POLICY_VERSION } from "../../quality-gate-input/v3
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const SummaryCriterionSchema = z.enum(SUMMARY_CRITERIA);
+const RuntimeDecisionSchema = z.enum(["QUALITY_RECORDED", "TECHNICAL_ERROR"]);
 
 const CriterionResultSchema = z.object({
   criterion: SummaryCriterionSchema,
@@ -22,8 +23,8 @@ const FindingSchema = z.object({
 }).strict();
 
 export const SummaryQualityGateResultV3Schema = z.object({
-  decision: z.literal("QUALITY_RECORDED"),
-  blocking: z.literal(false),
+  decision: RuntimeDecisionSchema,
+  blocking: z.boolean(),
   qualityScore: z.number().min(0).max(100).nullable(),
   qualityStatus: z.enum(["EXCELLENT", "GOOD", "NEEDS_ATTENTION", "LOW_QUALITY", "NOT_EVALUATED"]),
   evaluationStatus: z.enum(["complete", "partial", "technical_error"]),
@@ -61,6 +62,13 @@ export const SummaryQualityGateResultV3Schema = z.object({
   }
   if ((evaluated.length === 0) !== (result.qualityScore === null)) {
     context.addIssue({ code: "custom", path: ["qualityScore"], message: "qualityScore availability mismatch" });
+  }
+  if (result.decision === "TECHNICAL_ERROR" && (!result.blocking || result.qualityScore !== null)) {
+    context.addIssue({
+      code: "custom",
+      path: ["decision"],
+      message: "TECHNICAL_ERROR must be blocking and must not expose a Quality Score",
+    });
   }
 });
 
@@ -101,7 +109,7 @@ export const QualityGateV3Contract = defineContract({
   stageId: "summary_quality_gate_v3",
   description: "Неблокирующая аналитическая оценка пяти Summary Judge.",
   validator: SummaryQualityGateResultV3Schema,
-  canonicalEnums: [...QUALITY_GATE_DECISIONS, ...SUMMARY_CRITERIA],
+  canonicalEnums: [...QUALITY_GATE_DECISIONS, "TECHNICAL_ERROR", ...SUMMARY_CRITERIA],
   structuredOutput: false,
   repairPolicyId: "repair.none.v1",
   fixtures: {
@@ -109,7 +117,7 @@ export const QualityGateV3Contract = defineContract({
     missing_required: { decision: valid.decision },
     extra_legacy_field: { ...valid, blockers: [] },
     invalid_enum: { ...valid, decision: "AUTO_SAVE" },
-    invalid_nested_type: { ...valid, blocking: true },
+    invalid_nested_type: { ...valid, blocking: "yes" },
   },
   backwardCompatibility: {
     reads: ["summary.quality-gate.v3@3.1.0", "summary.quality-gate.v3@3.2.0"],

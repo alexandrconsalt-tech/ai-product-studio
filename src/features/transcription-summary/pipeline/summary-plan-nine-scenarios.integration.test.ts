@@ -141,6 +141,34 @@ const cases: readonly Case[] = [
     purchaseTerm: "2–3 месяца",
     interest: "Новостройки",
   },
+  {
+    id: "prazhskaya_priority_target",
+    turns: [
+      { speaker: "client", text: "Хочу посмотреть квартиру для себя, покупаю за наличные. Поздний выход на сделку меня устраивает." },
+      { speaker: "agent", text: "Выход на сделку возможен после получения разрешения на продажу. Сегодня позвоню и сообщу, доступна ли квартира для просмотра." },
+    ],
+    goal: "Клиент хочет посмотреть квартиру для себя",
+    requirements: ["выход на сделку возможен после получения разрешения на продажу"],
+    callResult: "Клиент ожидает подтверждения возможности просмотра.",
+    next: { action: "позвонить клиенту и сообщить, доступна ли квартира для просмотра", deadline: "сегодня", channel: "телефон" },
+    funding: "наличные / депозит",
+  },
+  {
+    id: "bolshevikov_priority_target",
+    turns: [
+      { speaker: "client", text: "Хочу понять документы и схему подготовки квартиры к сделке." },
+      { speaker: "agent", text: "До сделки объединим доли и снимем зарегистрированных жильцов. Задаток нужен для погашения коммунального долга и подготовки документов. Продажа прямая." },
+      { speaker: "client", text: "8,8 миллиона с учётом ремонта мне не подходит, продолжать не буду." },
+    ],
+    goal: "Клиент запросил разъяснения по документам и схеме подготовки квартиры к сделке",
+    requirements: [
+      "до сделки планируется объединить доли и снять зарегистрированных жильцов",
+      "задаток нужен для погашения коммунального долга и подготовки документов",
+      "продажа прямая",
+    ],
+    callResult: "Клиент отказался продолжать из-за цены и расходов на ремонт.",
+    next: { action: "", deadline: "", channel: "" },
+  },
 ];
 
 function transcript(item: Case) {
@@ -184,8 +212,12 @@ function extracted(item: Case) {
     },
     outcome: {
       call_result: item.callResult,
-      agreements: [{ id: "agreement-1", action: item.next.action, owner: "Агент", deadline: item.next.deadline, channel: item.next.channel, status: "confirmed", evidence: item.turns.at(-1)?.text ?? evidence }],
-      primary_next_step: { action: item.next.action, owner: "Агент", deadline: item.next.deadline, channel: item.next.channel, status: "confirmed" },
+      agreements: item.next.action
+        ? [{ id: "agreement-1", action: item.next.action, owner: "Агент", deadline: item.next.deadline, channel: item.next.channel, status: "confirmed", evidence: item.turns.at(-1)?.text ?? evidence }]
+        : [],
+      primary_next_step: item.next.action
+        ? { action: item.next.action, owner: "Агент", deadline: item.next.deadline, channel: item.next.channel, status: "confirmed" }
+        : { action: "", owner: "", deadline: "", channel: "", status: "not_defined" },
     },
   };
 }
@@ -198,11 +230,24 @@ function transportFor(item: Case): StructuredProviderTransport {
     else if (request.schemaId === "needs.agent.output.v3") structuredValue = values.needs;
     else if (request.schemaId === "outcome.agent.output.v3") structuredValue = values.outcome;
     else if (request.schemaId === "summary.content.v3") {
+      const serializedPlan = request.prompt.match(/SUMMARY PLAN\n(\{.*\})\n\nFULL TRANSCRIPT CONTEXT/su)?.[1];
+      if (!serializedPlan) throw new Error("Summary Plan is missing from prompt");
+      const plan = JSON.parse(serializedPlan) as {
+        meanings: Array<{ block: string; text: string; label?: string }>;
+      };
+      const sentences = plan.meanings
+        .filter((meaning) => meaning.block === "conversation_result")
+        .map((meaning) => meaning.text.replace(/[.!?\s]+$/u, ""));
       structuredValue = {
-        conversation_result: `${item.goal}. ${item.callResult} {\"error\":\"provider residue\"}`,
-        key_facts: item.requirements.map(() => ({ label: "Требование", value: "не объект м²" })),
-        quotes: [],
-        next_step: "Агент выполнит действие объект:00.",
+        conversation_result: `${sentences.join(". ")}.`,
+        key_facts: plan.meanings
+          .filter((meaning) => meaning.block === "key_facts")
+          .map((meaning) => ({ label: meaning.label ?? "Требование", value: meaning.text })),
+        quotes: plan.meanings
+          .filter((meaning) => meaning.block === "quotes")
+          .map((meaning) => ({ text: meaning.text })),
+        next_step: plan.meanings.find((meaning) => meaning.block === "next_step")?.text
+          ?? "Следующий шаг не согласован.",
       };
     } else if (request.schemaId === "summary.judge.verdict.v3") {
       const criterion = request.prompt.match(/ONLY CRITERION: (\w+)/u)?.[1] as SummaryCriterionV3;
@@ -236,7 +281,7 @@ function expectedConversationOutcome(item: Case): string {
   return item.callResult.replace(/[.]$/u, "");
 }
 
-describe("nine audited scenarios through production typed v3 orchestrator", () => {
+describe("audited priority scenarios through production typed v3 orchestrator", () => {
   it.each(cases)("$id has clean post-final diagnostics and reaches CRM DRY_RUN", async (item) => {
     const executor = new RuntimeTranscriptionSummaryV3StageExecutor({
       provider: "openai-direct",
@@ -253,11 +298,14 @@ describe("nine audited scenarios through production typed v3 orchestrator", () =
       runId: `run-${item.id}`,
       now: () => new Date("2026-08-03T12:00:00.000Z"),
     });
-    const summary = result.outputs.summary_agent as { conversation_result: string; key_facts: { value: string }[]; next_step: string };
+    const summary = result.outputs.summary_agent as { conversation_result: string; key_facts: { label: string; value: string }[]; next_step: string };
     const gate = result.outputs.quality_gate as { qualityScore: number; decision: string; criticalIssues: unknown[] };
     const summaryStage = result.report.stages.find((stage) => stage.stage_id === "summary_agent");
     const gateStage = result.report.stages.find((stage) => stage.stage_id === "quality_gate");
     const diagnostics = JSON.parse(summaryStage?.validation_result.issues.find((issue) => issue.code === "POST_FINAL_DIAGNOSTICS")?.message ?? "null");
+    const summaryPlan = JSON.parse(summaryStage?.validation_result.issues.find((issue) => issue.code === "SUMMARY_PLAN")?.message ?? "null") as {
+      meanings: Array<{ block: string; text: string; priority?: string }>;
+    };
     expect(result.report.stages).toHaveLength(13);
     expect(result.report.status, JSON.stringify({ capturedErrors, stages: result.report.stages.map((stage) => ({ id: stage.stage_id, status: stage.status, error: stage.error_code, issues: stage.validation_result.issues })) })).toBe("SUCCESS");
     expect(result.report.crm_status).toBe("DRY_RUN");
@@ -269,15 +317,49 @@ describe("nine audited scenarios through production typed v3 orchestrator", () =
     expect([
       item.callResult.replace(/[.]$/u, ""),
       expectedConversationOutcome(item),
+      ...(/(?:отправ|пришл|направ)/iu.test(item.next.action) ? ["Отправка согласована"] : []),
     ].some((outcome) => summary.conversation_result.includes(outcome)), JSON.stringify(summary)).toBe(true);
-    expect(summary.conversation_result).not.toContain(item.next.deadline);
-    expect(summary.next_step).toContain(item.next.deadline);
+    if (item.next.deadline) {
+      expect(summary.conversation_result).not.toContain(item.next.deadline);
+      expect(summary.next_step).toContain(item.next.deadline);
+    } else {
+      expect(summary.next_step).toBe("Следующий шаг не согласован.");
+    }
     const visibleSummary = [summary.conversation_result, ...summary.key_facts.map((entry) => entry.value), summary.next_step].join(" ");
     expect(visibleSummary).not.toMatch(/объект:00|не объект|\berror\b|[{]["']?/iu);
-    item.requirements.forEach((requirement) => expect(summary.key_facts.map((entry) => entry.value)).toContain(requirement));
-    expect(diagnostics).toMatchObject({ missingMeaningIds: [], duplicatedMeaningIds: [], protectedValueViolations: [], technicalResidue: [], nextStepDuplicationCount: 0 });
+    summaryPlan.meanings
+      .filter((meaning) => meaning.block === "key_facts")
+      .forEach((meaning) => expect(
+        summary.key_facts.map((entry) => entry.value),
+        JSON.stringify({ caseId: item.id, summary }),
+      ).toContain(meaning.text));
+    expect(diagnostics).toMatchObject({ missingMeaningIds: [], missingP0MeaningIds: [], duplicatedMeaningIds: [], semanticRepetitionCount: 0, invalidQuoteCount: 0, protectedValueViolations: [], technicalResidue: [], nextStepDuplicationCount: 0 });
+    if (item.id === "prazhskaya_priority_target") {
+      expect(summary.key_facts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: "Ограничение сделки", value: item.requirements[0] }),
+        expect.objectContaining({ label: "Финансирование", value: "наличные / собственные средства" }),
+      ]));
+      expect(summary.next_step).toBe("Агент позвонит клиенту и сообщит, доступна ли квартира для просмотра сегодня по телефону.");
+    }
+    if (item.id === "bolshevikov_priority_target") {
+      expect(summary.key_facts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: "Документы", value: item.requirements[0] }),
+        expect.objectContaining({ label: "Задаток", value: item.requirements[1] }),
+        expect.objectContaining({ label: "Продажа", value: item.requirements[2] }),
+      ]));
+      expect(summary.conversation_result).toContain("Клиент отказался продолжать из-за цены и расходов на ремонт");
+    }
     expect(gate).toMatchObject({ qualityScore: 100, decision: "QUALITY_RECORDED", criticalIssues: [] });
     expect(gateStage?.validation_result.issues.find((issue) => issue.code === "POST_FINAL_DIAGNOSTICS")).toBeTruthy();
+    const effectiveScores = result.report.stages
+      .filter((stage) => stage.stage_id.startsWith("summary_judge_"))
+      .map((stage) => JSON.parse(
+        stage.validation_result.issues.find((issue) => issue.code === "JUDGE_SCORE_AUDIT")?.message ?? "null",
+      ) as { effective_score: number } | null)
+      .map((audit) => audit?.effective_score ?? 0);
+    expect(effectiveScores).toHaveLength(5);
+    expect(effectiveScores.every((score) => score >= 95)).toBe(true);
+    expect(effectiveScores.reduce((sum, score) => sum + score, 0) / effectiveScores.length).toBeGreaterThanOrEqual(95);
     const llmStages = result.report.stages.filter((stage) => stage.model !== null);
     expect(llmStages.every((stage) => stage.provider === "openai-direct" && stage.structured_output.requested && stage.structured_output.applied)).toBe(true);
     if (item.funding) {

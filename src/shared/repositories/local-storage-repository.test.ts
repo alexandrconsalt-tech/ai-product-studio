@@ -16,6 +16,10 @@ const TRANSCRIPTION_SUMMARY_PRODUCT_ID = "product_transcription_summary_module";
 const TRANSCRIPTION_SUMMARY_NAME = "Модуль транскрибации и AI-саммари звонков";
 const SUMMARY_V2_PROJECT_ID = "project_summary_pipeline_v2";
 const SUMMARY_V2_PRODUCT_ID = "product_summary_pipeline_v2";
+const APPLICATION_ATTRIBUTES_PROJECT_ID = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
+const APPLICATION_ATTRIBUTES_PRODUCT_ID = "product_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
+const AI_SUMMARY_TEN_AUGUST_PROJECT_ID = "project_ai_summary_2026_08_10";
+const AI_SUMMARY_TEN_AUGUST_PRODUCT_ID = "product_ai_summary_2026_08_10";
 
 function emptySnapshot(): RepositorySnapshot {
   return {
@@ -118,10 +122,10 @@ describe("LocalStorageProjectRepository.deleteProject", () => {
 });
 
 describe("LocalStorageProjectRepository retired demo project pruning", () => {
-  it("removes the 4 retired demo projects (and their products/architectures/pipelines/runs/reviews) from an already-persisted snapshot on load", () => {
+  it("removes retired demo projects (and their products/architectures/pipelines/runs/reviews) from an already-persisted snapshot on load", () => {
     const repo = new LocalStorageProjectRepository();
 
-    const retiredIds = ["project_demo_call_analysis", "project_demo_lead_qualification", "project_demo_chat_classification", "project_ad_copy_generation"];
+    const retiredIds = ["project_demo_call_analysis", "project_demo_lead_qualification", "project_demo_chat_classification", "project_ad_copy_generation", "project_demo_pipeline_lab_v3"];
     const retiredProjects = retiredIds.map((id) => createProject({ name: id, id }));
     const retiredProducts = retiredProjects.map((project) => createProduct({ projectId: project.id }));
     const retiredArchitectures = retiredProjects.map((project, i) => createArchitecture({ projectId: project.id, productId: retiredProducts[i].id }));
@@ -155,17 +159,36 @@ describe("LocalStorageProjectRepository retired demo project pruning", () => {
     expect(loaded.reviews).toHaveLength(0);
   });
 
-  it("replaces a persisted unrelated product with the two supported Summary products", () => {
+  it("preserves a persisted user product and adds recovery products without duplicates", () => {
     const repo = new LocalStorageProjectRepository();
     const userProject = createProject({ name: "My Own Product" });
-    const legacySnapshot: RepositorySnapshot = { ...emptySnapshot(), projects: [userProject] };
+    const userProduct = createProduct({ projectId: userProject.id, notes: "user metadata" });
+    const userArchitecture = createArchitecture({ projectId: userProject.id, productId: userProduct.id });
+    const userPipeline = createPipeline({ projectId: userProject.id, architectureId: userArchitecture.id });
+    const userRun = createRun({ pipelineId: userPipeline.id, input: "saved transcript" });
+    const legacySnapshot: RepositorySnapshot = { ...emptySnapshot(), projects: [{ ...userProject, productId: userProduct.id }], products: [userProduct], architectures: [userArchitecture], pipelines: [userPipeline], runs: [userRun] };
 
     stubLocalStorage({ [STORAGE_KEY]: JSON.stringify(legacySnapshot) });
 
     const loaded = repo.load();
 
-    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID]);
-    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID]);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, userProject.id, SUMMARY_V2_PROJECT_ID, APPLICATION_ATTRIBUTES_PROJECT_ID, AI_SUMMARY_TEN_AUGUST_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, userProduct.id, SUMMARY_V2_PRODUCT_ID, APPLICATION_ATTRIBUTES_PRODUCT_ID, AI_SUMMARY_TEN_AUGUST_PRODUCT_ID]);
+    expect(loaded.architectures).toEqual([userArchitecture]);
+    expect(loaded.pipelines).toEqual([userPipeline]);
+    expect(loaded.runs).toEqual([userRun]);
+    expect(loaded.projects.find((project) => project.id === APPLICATION_ATTRIBUTES_PROJECT_ID)?.name).toBe("AI Атрибуты в Заявке");
+    expect(loaded.projects.find((project) => project.id === AI_SUMMARY_TEN_AUGUST_PROJECT_ID)?.name).toBe("AI Summary 10.08");
+
+    repo.save({
+      ...loaded,
+      projects: loaded.projects.map((project) => (project.id === userProject.id ? { ...project, name: "Renamed User Product" } : project)),
+    });
+    const reloaded = repo.load();
+    expect(reloaded.projects.find((project) => project.id === userProject.id)?.name).toBe("Renamed User Product");
+    expect(reloaded.projects.filter((project) => project.id === AI_SUMMARY_TEN_AUGUST_PROJECT_ID)).toHaveLength(1);
+    expect(reloaded.products.filter((product) => product.id === AI_SUMMARY_TEN_AUGUST_PRODUCT_ID)).toHaveLength(1);
+    expect(reloaded.pipelines).toEqual([userPipeline]);
   });
 });
 
@@ -204,8 +227,8 @@ describe("LocalStorageProjectRepository transcription products seed", () => {
       name: "Модуль транскрибации и AI-саммари звонков",
     });
     expect(loaded.products.find((product) => product.id === originalProduct.id)).toEqual(originalProduct);
-    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID]);
-    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID]);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, summaryNewProject.id, otherProject.id, SUMMARY_V2_PROJECT_ID, APPLICATION_ATTRIBUTES_PROJECT_ID, AI_SUMMARY_TEN_AUGUST_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, summaryNewProduct.id, otherProduct.id, SUMMARY_V2_PRODUCT_ID, APPLICATION_ATTRIBUTES_PRODUCT_ID, AI_SUMMARY_TEN_AUGUST_PRODUCT_ID]);
   });
 });
 
@@ -394,8 +417,8 @@ describe("LocalStorageProjectRepository.load", () => {
     const loaded = repo.load();
 
     expect(stored.get(BACKUP_STORAGE_KEY)).toBe(JSON.stringify(invalidSnapshot));
-    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID]);
-    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID]);
+    expect(loaded.projects.map((project) => project.id)).toEqual([TRANSCRIPTION_SUMMARY_PROJECT_ID, SUMMARY_V2_PROJECT_ID, APPLICATION_ATTRIBUTES_PROJECT_ID, AI_SUMMARY_TEN_AUGUST_PROJECT_ID]);
+    expect(loaded.products.map((product) => product.id)).toEqual([TRANSCRIPTION_SUMMARY_PRODUCT_ID, SUMMARY_V2_PRODUCT_ID, APPLICATION_ATTRIBUTES_PRODUCT_ID, AI_SUMMARY_TEN_AUGUST_PRODUCT_ID]);
     expect(loaded.pipelines).toHaveLength(0);
   });
 });

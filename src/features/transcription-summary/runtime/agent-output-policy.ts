@@ -1,6 +1,7 @@
 import type { FactsV3 } from "../contracts/facts/v3/contract";
 import type { NeedsV3 } from "../contracts/needs/v3/contract";
 import type { OutcomeV3 } from "../contracts/outcome/v3/contract";
+import type { TranscriptV3 } from "../contracts/transcript/v3/contract";
 import { selectUsefulClientQuotesV3 } from "./quote-policy";
 
 export type AgentOutputPolicyTransformationV3 = Readonly<{
@@ -53,12 +54,99 @@ function isObjectCardFact(fact: FactsV3["confirmed_facts"][number]): boolean {
     || /(?:номер\s+телефона|последн\S*\s+цифр\S*\s+телефон)/iu.test(normalized(`${fact.value} ${fact.evidence}`));
 }
 
-export function applyFactsAgentOutputPolicyV3(value: FactsV3): AgentOutputPolicyResultV3<FactsV3> {
+type FactPriorityV3 = "critical" | "important" | "secondary" | "noise";
+
+function factPriority(fact: FactsV3["confirmed_facts"][number]): FactPriorityV3 {
+  if (isNameFact(fact) || isNonWorkingContactFact(fact) || isOutcomeFact(fact) || isObjectCardFact(fact)) return "noise";
+  const source = normalized(`${fact.predicate} ${fact.value} ${fact.evidence}`);
+  if (/(?:client_goal|explicit_objection|цель|мотив|возраж|отказ|юрид|огранич|источник\s+средств|funding|финанс|наличн|депозит|деньг\S*\s+на\s+счет|бюджет|budget|срок|term|препятств|услови\S*\s+продолж|позици\S*\s+клиент)/u.test(source)) return "critical";
+  if (/(?:документ|собствен|обремен|дду|ипотек|задат|аванс|ремонт|прям\S*\s+отказ)/u.test(source)) return "important";
+  return "secondary";
+}
+
+function recoveredFact(
+  turn: TranscriptV3["turns"][number],
+  category: string,
+  kind: FactsV3["confirmed_facts"][number]["kind"],
+  subject: FactsV3["confirmed_facts"][number]["subject"],
+  predicate: string,
+  value: string,
+): FactsV3["confirmed_facts"][number] {
+  return {
+    id: `recovered-${category}-${turn.id}`,
+    kind,
+    subject,
+    predicate,
+    value,
+    source_turn_ids: [turn.id],
+    evidence: turn.text,
+    confidence: 1,
+    verification_status: "extracted",
+  };
+}
+
+function recoverCriticalFacts(
+  transcript: Pick<TranscriptV3, "turns"> | undefined,
+  current: readonly FactsV3["confirmed_facts"][number][],
+): FactsV3["confirmed_facts"][number][] {
+  if (!transcript) return [];
+  const existing = new Set(current.flatMap((fact) =>
+    fact.source_turn_ids.map((turnId) => `${turnId}:${normalized(fact.predicate)}`)));
+  const recovered: FactsV3["confirmed_facts"][number][] = [];
+  const add = (turn: TranscriptV3["turns"][number], category: string, fact: FactsV3["confirmed_facts"][number]) => {
+    const key = `${turn.id}:${normalized(fact.predicate)}`;
+    if (existing.has(key)) return;
+    existing.add(key);
+    recovered.push(fact);
+  };
+  transcript.turns.forEach((turn) => {
+    const text = normalized(turn.text);
+    if (turn.speaker === "client") {
+      if (/(?:ищу|подбираю|хочу\s+купить|покупаю)[^.!?]{0,100}(?:квартир|дом|участ|недвижим)/u.test(text)) {
+        add(turn, "goal", recoveredFact(turn, "goal", "client_fact", "client", "client_goal", turn.text));
+      }
+      if (/(?:наличн|без\s+ипотек|деньг\S*\s+(?:на\s+счет|на\s+депозит)|свои\s+деньг)/u.test(text)) {
+        add(turn, "funding", recoveredFact(turn, "funding", "client_fact", "client", "funding_source", "наличные / депозит"));
+      }
+      if (/(?:бюджет[^.!?]{0,50}(?:до|около|не\s+более|\d)|готов\S*\s+(?:потратить|заплатить)|рассматрива\S*\s+до)/u.test(text)) {
+        add(turn, "budget", recoveredFact(turn, "budget", "client_fact", "client", "client_budget", turn.text));
+      }
+      if (/(?:хочу|планирую|нужно|надо)[^.!?]{0,80}(?:купить|выйти\s+на\s+сделк)[^.!?]{0,60}(?:до|через|в\s+течение|месяц|недел|год)/u.test(text)) {
+        add(turn, "term", recoveredFact(turn, "term", "client_fact", "client", "purchase_term", turn.text));
+      }
+      if (/(?:дорог|высок\S*\s+цен|не\s+устраива\S*\s+цен|отказыва|не\s+буду|не\s+готов)[^.!?]{0,120}(?:цен|ремонт|расход)|(?:цен|ремонт|расход)[^.!?]{0,120}(?:отказыва|не\s+буду|не\s+готов|не\s+подход)/u.test(text)) {
+        add(turn, "objection", recoveredFact(turn, "objection", "requirement_signal", "client", "explicit_objection", turn.text));
+      }
+      if (/(?:для\s+себя|для\s+родител|для\s+ребенк|для\s+инвестиц|под\s+сдач)/u.test(text)) {
+        add(turn, "purpose", recoveredFact(turn, "purpose", "client_fact", "client", "purchase_purpose", turn.text));
+      }
+    }
+    if (turn.speaker === "agent" && (
+      /(?:\b(?:\d+|один|два|две|три|четыре|несколько)\s+собственник|приобретен\S*\s+по\s+дду|находит\S*\s+в\s+ипотек|есть\s+обременен|никто\s+не\s+прописан|прописан\S*\s+нет|задаток\S*\s+(?:состав|нужен|необходим)|документ\S*[^.!?]{0,30}(?:готов|подготов))/u.test(text)
+    )) {
+      add(turn, "legal", recoveredFact(turn, "legal", "property_fact", "property", "legal_or_document_status", turn.text));
+    }
+  });
+  return recovered;
+}
+
+export function applyFactsAgentOutputPolicyV3(
+  value: FactsV3,
+  transcript?: Pick<TranscriptV3, "turns">,
+): AgentOutputPolicyResultV3<FactsV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
-  const facts = value.confirmed_facts.filter((fact) => !isNameFact(fact) && !isNonWorkingContactFact(fact) && !isOutcomeFact(fact) && !isObjectCardFact(fact));
+  const filteredFacts = value.confirmed_facts.filter((fact) => factPriority(fact) !== "noise");
+  const recoveredFacts = recoverCriticalFacts(transcript, filteredFacts);
+  const priorityOrder: Record<FactPriorityV3, number> = { critical: 0, important: 1, secondary: 2, noise: 3 };
+  const facts = [...filteredFacts, ...recoveredFacts]
+    .map((fact, index) => ({ fact, index }))
+    .sort((left, right) => priorityOrder[factPriority(left.fact)] - priorityOrder[factPriority(right.fact)] || left.index - right.index)
+    .map(({ fact }) => fact);
   const quotes = [...selectUsefulClientQuotesV3(value.quotes)];
   changed(transformations, "facts.remove-nonbusiness-name.v1", "confirmed_facts", "Client names are not working facts.", value.confirmed_facts, facts);
   changed(transformations, "facts.remove-object-card-data.v1", "confirmed_facts", "Phone fragments and object-card parameters are not confirmed business facts.", value.confirmed_facts, facts);
+  changed(transformations, "facts.recover-critical-source-meanings.v1", "confirmed_facts", "Explicit critical client and legal meanings are restored deterministically from their original turns.", filteredFacts, facts);
+  changed(transformations, "facts.rank-working-meanings.v1", "confirmed_facts", "Working facts are ordered critical, important, secondary; noise is excluded.", [...filteredFacts, ...recoveredFacts], facts);
   changed(transformations, "facts.select-useful-client-quotes.v1", "quotes", "Quotes are limited to two client motives, objections or constraints that add meaning beyond ordinary facts.", value.quotes, quotes);
   return { value: { ...value, confirmed_facts: facts, quotes }, transformations };
 }
@@ -74,7 +162,30 @@ function isNonWorkingContactNeed(item: NeedsV3["business_needs"][number]): boole
 
 function isObjectCardNeed(item: NeedsV3["business_needs"][number]): boolean {
   const value = normalized(`${item.need_type} ${item.value}`);
+  if (/(?:budget|бюджет|financial_constraint|финансов\S*\s+огранич)/u.test(value)
+    || /(?:мой\s+бюджет|готов\S*\s+(?:потратить|заплатить)|рассматрива\S*\s+до)/iu.test(item.evidence)) return false;
   return /(?:property_detail|specific\s+(?:apartment|property)|конкретн\S*\s+(?:квартир|объект)|цена\s*:|адрес\s*:|этаж\s*:|площадь\s*:|комплекс\s*:|жк\s+|\d+(?:[.,]\d+)?\s*(?:m|млн|м²|кв\.?)|ипотек\S*\s+у\s+сбер)/iu.test(value);
+}
+
+function isSpecificObjectInterestNeed(item: NeedsV3["business_needs"][number]): boolean {
+  const value = normalized(`${item.need_type} ${item.value} ${item.evidence}`);
+  return /(?:двухкомнатн\S*\s+квартир\S*\s*\(?интерес\)?|интерес\S*\s+(?:к|по)\s+(?:эт|конкретн)|покупк\S*\s+(?:эт|конкретн)\S*\s+(?:объект|квартир)|параметр\S*\s+(?:объявлен|текущ\S*\s+объект)|обычн\S*\s+покупк\S*\s+конкретн)/u.test(value);
+}
+
+function addsWorkingSpecificity(item: NeedsV3["business_needs"][number]): boolean {
+  return /(?:огранич|проблем|не\s+хвата|невозмож|зависит|критич|обязательн|лимит|бюджет|не\s+может|требует\s+реш)/iu.test(`${item.need_type} ${item.value} ${item.evidence}`);
+}
+
+function duplicatesStructuredAttribute(item: NeedsV3["business_needs"][number], value: NeedsV3): boolean {
+  const source = normalized(`${item.need_type} ${item.value} ${item.evidence}`);
+  const attributes = value.structured_crm_attributes;
+  if (attributes.funding_source.value !== "не определено"
+    && /(?:funding|финанс|ипотек|наличн|депозит|деньг\S*\s+на\s+счет|свои\s+деньг)/u.test(source)) return !addsWorkingSpecificity(item);
+  if (attributes.purchase_term.value !== "не определено"
+    && /(?:purchase_term|срок\S*\s+покуп|месяц|недел)/u.test(source)) return !addsWorkingSpecificity(item);
+  if (attributes.interested_in.length > 0
+    && /(?:interested|интерес\S*\s+к|новострой|ипотек|строительств)/u.test(source)) return !addsWorkingSpecificity(item);
+  return false;
 }
 
 function hasExplicitPurchaseTermEvidence(item: NeedsV3["structured_crm_attributes"]["purchase_term"]): boolean {
@@ -86,7 +197,12 @@ function hasExplicitPurchaseTermEvidence(item: NeedsV3["structured_crm_attribute
 
 export function applyNeedsAgentOutputPolicyV3(value: NeedsV3): AgentOutputPolicyResultV3<NeedsV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
-  const businessNeeds = value.business_needs.filter((item) => !isOutcomeNeed(item) && !isNonWorkingContactNeed(item) && !isObjectCardNeed(item));
+  const businessNeeds = value.business_needs.filter((item) =>
+    !isOutcomeNeed(item)
+    && !isNonWorkingContactNeed(item)
+    && !isObjectCardNeed(item)
+    && !isSpecificObjectInterestNeed(item)
+    && !duplicatesStructuredAttribute(item, value));
   const explicitClientCriterion = (item: NeedsV3["property_requirements"][number]) =>
     /(?:нужн\S*|важн\S*|(?:^|\s)только(?:\s|$)|не\s+рассматрива\S*|не\s+менее|не\s+более|хоч\S*\s+(?:не\s+)?(?:менее|более)|обязательн\S*|требован\S*|критери\S*)/iu.test(item.evidence);
   const propertyRequirements = value.property_requirements.filter((item) =>
@@ -98,6 +214,8 @@ export function applyNeedsAgentOutputPolicyV3(value: NeedsV3): AgentOutputPolicy
     : { ...value.structured_crm_attributes.purchase_term, value: "не определено" as const };
   changed(transformations, "needs.remove-outcome-actions.v1", "business_needs", "Meetings, viewings, calls and deliveries belong to Outcome, not Needs.", value.business_needs, businessNeeds);
   changed(transformations, "needs.remove-object-card-data.v1", "business_needs", "A concrete listing parameter is not a client need.", value.business_needs, businessNeeds);
+  changed(transformations, "needs.remove-specific-object-interest.v1", "business_needs", "Ordinary interest in the current listing is not a business need.", value.business_needs, businessNeeds);
+  changed(transformations, "needs.deduplicate-structured-attributes.v1", "business_needs", "A CRM attribute is the canonical representation when the business need adds no separate working constraint.", value.business_needs, businessNeeds);
   changed(transformations, "needs.remove-outcome-actions.v1", "property_requirements", "Meetings, viewings, calls and deliveries belong to Outcome, not property requirements.", value.property_requirements, propertyRequirements);
   changed(transformations, "needs.explicit-client-criteria-only.v1", "property_requirements", "Object-card facts are not client requirements without explicit client criterion language.", value.property_requirements, propertyRequirements);
   changed(transformations, "needs.direct-interest-evidence.v1", "structured_crm_attributes.interested_in", "A residential complex or DDU mention is not direct evidence of a new-build interest.", value.structured_crm_attributes.interested_in, interestedIn);
@@ -161,7 +279,7 @@ function deadlineWithConfirmedWeekday(deadline: string, evidence: string): strin
 }
 
 function isOperationalAgreement(action: string): boolean {
-  return /(?:^|\s)(?:просмотр|показ|встреча|звонок|отправка|провести|посмотреть|показать|осмотреть|встретиться|приехать|позвонить|перезвонить|созвониться|связаться|отправить|прислать|направить|передать|подготовить|уточнить|подтвердить|забронировать|внести|подписать)(?:ся)?(?:\s|$)/iu.test(normalized(action));
+  return /(?:^|\s)(?:просмотр|показ|встреча|звонок|отправка|провести|посмотреть|показать|осмотреть|встретиться|приехать|позвонить|перезвонить|созвониться|связаться|сообщить|отправить|прислать|направить|передать|подготовить|уточнить|подтвердить|забронировать|внести|подписать)(?:ся)?(?:\s|$)/iu.test(normalized(action));
 }
 
 function isPhoneConfirmationAgreement(action: string, evidence: string): boolean {
@@ -179,7 +297,37 @@ function compactCallResult(outcome: OutcomeV3): string {
   return outcome.call_result.trim();
 }
 
-export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPolicyResultV3<OutcomeV3> {
+function terminalPriceRefusal(transcript: Pick<TranscriptV3, "turns"> | undefined): boolean {
+  return transcript?.turns.some((turn) => turn.speaker === "client" && (
+    /(?:отказыва|не\s+буду\s+продолжа|не\s+готов\S*\s+покуп|не\s+подход)/iu.test(turn.text)
+    && /(?:цен|дорог|расход\S*\s+на\s+ремонт|ремонт)/iu.test(turn.text)
+  )) ?? false;
+}
+
+function transcriptConfirmsViewingWait(transcript: Pick<TranscriptV3, "turns"> | undefined): boolean {
+  const source = transcript?.turns.map((turn) => turn.text).join(" ") ?? "";
+  return /(?:ожида|жд\S*)[^.!?]{0,100}(?:подтвержден|звон|ответ)[^.!?]{0,100}(?:просмотр|показ)|(?:уточн|провер|подтверд)[^.!?]{0,100}(?:возможност|доступн)[^.!?]{0,80}(?:просмотр|показ)/iu.test(source);
+}
+
+function primaryMatchesAgreement(primary: OutcomeV3["primary_next_step"], agreements: OutcomeV3["agreements"]): boolean {
+  if (primary.status !== "confirmed") return false;
+  const action = normalized(normalizedViewingAction(primary.action));
+  return agreements.some((agreement) => {
+    const agreementAction = normalized(normalizedViewingAction(agreement.action));
+    const sameViewingStatusMeaning = [action, agreementAction].every((candidate) =>
+      /(?:просмотр|показ)/u.test(candidate)
+      && /(?:позвон|сообщ|уточн|подтверд|доступн|возможност)/u.test(candidate));
+    return agreementAction === action
+      || agreementAction.includes(action)
+      || action.includes(agreementAction)
+      || sameViewingStatusMeaning;
+  });
+}
+
+export function applyOutcomeAgentOutputPolicyV3(
+  value: OutcomeV3,
+  transcript?: Pick<TranscriptV3, "turns">,
+): AgentOutputPolicyResultV3<OutcomeV3> {
   const transformations: AgentOutputPolicyTransformationV3[] = [];
   let agreements = value.agreements
     .filter((agreement) => agreement.status === "confirmed"
@@ -203,11 +351,23 @@ export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPo
     deadline: deadlineWithConfirmedWeekday(value.primary_next_step.deadline, primaryEvidence),
     channel: normalizedChannel(value.primary_next_step.channel, value.primary_next_step.action),
   };
+  if (!primaryMatchesAgreement(primary, agreements)) {
+    const originalPrimary = primary;
+    primary = {
+      action: "",
+      owner: "",
+      deadline: "",
+      channel: "",
+      status: "not_defined",
+    };
+    changed(transformations, "outcome.require-confirmed-agreement-for-next-step.v1", "primary_next_step", "A primary next step must be backed by the same confirmed operational agreement.", originalPrimary, primary);
+  }
   let callResult = compactCallResult({ ...value, agreements, primary_next_step: primary });
   const viewingByPhone = isViewingExecutionAction(primary.action)
     && /(?:phone|телефон|звон)/iu.test(normalized(primary.channel));
   const evidence = agreements.map((item) => item.evidence).join(" ");
-  const conditionalViewing = /(?:если[^.!?]{0,80}(?:показ|просмотр|смож\S*\s+показ)|при\s+подтвержден[^.!?]{0,80}(?:показ|просмотр)|возможност\S*\s+просмотр\S*\s+(?:пока\s+)?не\s+подтвержден)/iu.test(normalized(evidence));
+  const conditionalViewing = /(?:если[^.!?]{0,80}(?:показ|просмотр|смож\S*\s+показ)|при\s+подтвержден[^.!?]{0,80}(?:показ|просмотр)|возможност\S*\s+просмотр\S*\s+(?:пока\s+)?не\s+подтвержден)/iu.test(normalized(evidence))
+    || transcriptConfirmsViewingWait(transcript);
   if (viewingByPhone || (isViewingExecutionAction(primary.action) && conditionalViewing)) {
     const originalAgreements = agreements;
     const originalPrimary = primary;
@@ -242,6 +402,11 @@ export function applyOutcomeAgentOutputPolicyV3(value: OutcomeV3): AgentOutputPo
     callResult = "Клиент ожидает подтверждения возможности просмотра.";
     changed(transformations, "outcome.canonical-viewing-status-call.v1", "agreements", "A confirmed availability update is rendered as a phone contact, not as a viewing.", originalAgreements, agreements);
     changed(transformations, "outcome.canonical-viewing-status-call.v1", "primary_next_step", "The primary action preserves the confirmed availability call semantics.", originalPrimary, primary);
+  }
+  if (terminalPriceRefusal(transcript)) {
+    const originalCallResult = callResult;
+    callResult = "Клиент отказался продолжать из-за цены и расходов на ремонт.";
+    changed(transformations, "outcome.terminal-price-refusal.v1", "call_result", "A terminal client refusal caused by price and repair costs must remain explicit.", originalCallResult, callResult);
   }
   changed(transformations, "outcome.compact-call-result.v1", "call_result", "call_result contains only the confirmed conversation outcome and excludes Facts/Needs/next-step details.", value.call_result, callResult);
   changed(transformations, "outcome.confirmed-agreements-only.v1", "agreements", "Unconfirmed proposals with status=not_defined are not agreements.", value.agreements, agreements);

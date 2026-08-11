@@ -35,6 +35,11 @@ import type {
   TranscriptionSummaryV3StageExecutor,
   TranscriptionSummaryV3StageId,
 } from "./types";
+import {
+  buildCompactFactsInputV3,
+  estimateFactsPromptTokensV3,
+  type FactsInputCompactionV3,
+} from "./facts-input";
 
 const ROLE_BY_AGENT_STAGE = {
   facts_agent: "facts",
@@ -57,15 +62,15 @@ const SUMMARY_JUDGE_CRITERION = {
 } as const satisfies Partial<Record<TranscriptionSummaryV3StageId, SummaryCriterionV3>>;
 
 const BUSINESS_INSTRUCTIONS = {
-  facts_agent: "Извлеки только явно подтверждённые рабочие факты. Не включай имя, телефон или его части, полный адрес, цену, площадь, этаж, ЖК, код объекта и прочие параметры карточки объявления. Не включай действия Outcome (просмотр, встречу, звонок, отправку) в confirmed_facts. Цитаты: только клиент, максимум две, только мотив, сомнение, ограничение, возражение или важная позиция; не цитируй приветствие, имя, обычную цель, бюджет, финансирование, срок, время или договорённость. verification_status каждого валидного элемента должен быть extracted.",
-  needs_agent: "Используй ctx.facts, ctx.facts.quotes и полную транскрипцию. Не ожидай fact_check. Разделяй потребности, требования и CRM-атрибуты. Параметр конкретного объекта не является требованием клиента. property_requirements допустим только при прямой формулировке клиента: нужно, важно, только, не рассматриваю без, хочу не менее или равнозначной. ЖК и ДДУ не означают interested_in=Новостройки без прямого клиентского критерия. Просмотры, встречи, звонки, отправки и другие действия относятся к Outcome и запрещены в business_needs/property_requirements. verification_status каждого валидного элемента должен быть extracted.",
-  outcome_agent: "Используй ctx.facts, ctx.needs и полную транскрипцию. Не ожидай fact_check или need_check. Верни только call_result, agreements и primary_next_step строго по JSON Schema. call_result всегда строка: только короткий результат разговора без Facts/Needs и точных деталей primary_next_step. agreements содержит только подтверждённые клиентом договорённости; не создавай status=not_defined. Условная возможность просмотра не является согласованным просмотром. Если агент обещал сначала подтвердить доступность объекта, primary_next_step — звонок/сообщение с ответом; не переноси время и канал этого контакта на просмотр. Просмотр нельзя проводить по телефону. owner задавай ролью, без имени. Не используй call_results, agreement_id, outcome_meta или text.",
+  facts_agent: "Извлеки только подтверждённые рабочие смыслы и выведи их в порядке critical, important, secondary; noise не выводи. Critical: цель обращения, возражение/отказ, юридическое ограничение, источник средств, бюджет клиента, срок клиента, результат существенного вопроса, препятствие, условие продолжения, подтверждённая позиция клиента. Important: ответы агента на ключевые вопросы, документы, собственники, обременения, задаток, влияющий на решение ремонт, прямой отказ. Не включай карточечные параметры без рабочего значения, имя, телефон, адрес, соединение, число звонков, мнение о других клиентах и Outcome-действия. Не путай цену объявления с бюджетом. Цитаты: только клиент, максимум две, только рабочий мотив, возражение или ограничение. verification_status=extracted.",
+  needs_agent: "Не ожидай fact_check. Разделяй строго: business_needs — цель покупки, мотивация, финансовое ограничение, решаемая проблема или существенное условие решения; property_requirements — только прямо сформулированные критерии поиска; structured_crm_attributes — только funding_source, purchase_term, interested_in. Параметры текущего объявления, интерес к конкретному объекту, цель звонка, просмотр и результат разговора не являются Needs. Не дублируй один meaning в business_needs и CRM-атрибуте: если дополнительной рабочей проблемы нет, оставь CRM-атрибут. Цена объявления не является бюджетом клиента. ЖК/ДДУ не означают интерес к новостройкам. verification_status=extracted.",
+  outcome_agent: "Верни только call_result, agreements и primary_next_step по JSON Schema; call_result всегда строка. agreements — только подтверждённые будущие действия; факты, финансирование, цель покупки, атрибуты и согласие с характеристикой объекта запрещены. call_result — терминальный результат разговора без деталей next step: при отказе из-за цены и ремонта явно зафиксируй отказ; при ожидании подтверждения просмотра явно зафиксируй ожидание. primary_next_step содержит только каноническое действие, роль owner, deadline и channel и должен соответствовать подтверждённому agreement. Условный просмотр не является согласованным. Не используй legacy-поля.",
 } as const;
 
 const PROMPT_VERSION_BY_STAGE = {
-  facts_agent: "facts_agent-v3.2.0",
-  needs_agent: "needs_agent-v3.4.0",
-  outcome_agent: "outcome_agent-v3.4.0",
+  facts_agent: "facts_agent-v3.4.0",
+  needs_agent: "needs_agent-v3.5.0",
+  outcome_agent: "outcome_agent-v3.5.0",
 } as const;
 
 function remainingTimeout(context: PipelineExecutionContext, stageLimitMs: number): number {
@@ -143,6 +148,33 @@ function sourceReferences(context: PipelineExecutionContext) {
     speaker: turn.speaker,
     text: turn.text,
   }));
+}
+
+function factsSourceUnavailable(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const store = value as Record<string, unknown>;
+  const quality = store.source_quality && typeof store.source_quality === "object"
+    ? store.source_quality as Record<string, unknown>
+    : {};
+  return quality.facts === "technical_error"
+    || (Array.isArray(store.source_errors) && store.source_errors.includes("facts"));
+}
+
+function factsCompactionTransformation(
+  input: FactsInputCompactionV3,
+): PipelineStageReportV3["transformations"] {
+  if (!input.removedTurnIds.length) return [];
+  return [{
+    operation_id: "facts-transcript-compaction-v1",
+    operation_type: "normalized",
+    field_path: "facts_agent.input.turns",
+    old_value: { removed_turn_ids: input.removedTurnIds } as never,
+    new_value: { retained_turns: input.turns.length } as never,
+    rule_id: "facts.deterministic-transcript-compaction.v1",
+    reason: "Removed only non-client greetings, acknowledgements and technical noise; protected agent answers and original turn IDs were retained.",
+    source_refs: [...input.removedTurnIds],
+    timestamp: new Date(0).toISOString(),
+  }];
 }
 
 function providerAudit(
@@ -258,10 +290,11 @@ function policyAuditTransformations(
 function applyAgentPolicy(
   stageId: keyof typeof CONTRACT_BY_AGENT_STAGE,
   value: unknown,
+  context: PipelineExecutionContext,
 ): Readonly<{ value: unknown; transformations: readonly AgentOutputPolicyTransformationV3[] }> {
-  if (stageId === "facts_agent") return applyFactsAgentOutputPolicyV3(FactsV3Schema.parse(value));
+  if (stageId === "facts_agent") return applyFactsAgentOutputPolicyV3(FactsV3Schema.parse(value), context.transcript);
   if (stageId === "needs_agent") return applyNeedsAgentOutputPolicyV3(NeedsV3Schema.parse(value));
-  return applyOutcomeAgentOutputPolicyV3(OutcomeV3Schema.parse(value));
+  return applyOutcomeAgentOutputPolicyV3(OutcomeV3Schema.parse(value), context.transcript);
 }
 
 function codeAudit(
@@ -312,6 +345,122 @@ implements TranscriptionSummaryV3StageExecutor {
     return this.#models[stageId] ?? this.#models.default ?? "gpt-5-mini-2025-08-07";
   }
 
+  async #factsAgent(context: PipelineExecutionContext): Promise<PipelineStageExecution> {
+    const stageId = "facts_agent" as const;
+    const contract = FactsV3Contract;
+    const inputCompactions: FactsInputCompactionV3[] = [
+      buildCompactFactsInputV3(context.transcript, "initial"),
+    ];
+    const prompts: ResolvedPrompt[] = [buildStructuredPrompt({
+      systemRole: "Structured facts stage for transcription summary v3.",
+      businessInstruction: BUSINESS_INSTRUCTIONS.facts_agent,
+      promptVersion: PROMPT_VERSION_BY_STAGE.facts_agent,
+      contract,
+      inputData: { turns: inputCompactions[0].turns },
+    })];
+    const attemptTimeouts: number[] = [];
+    const providerLatencies: number[] = [];
+    const completions: Awaited<ReturnType<typeof executeStructuredCompletion<typeof FactsV3Contract>>>[] = [];
+    const executeAttempt = async (prompt: ResolvedPrompt) => {
+      const timeoutMs = remainingTimeout(context, 55_000);
+      attemptTimeouts.push(timeoutMs);
+      const completion = await executeStructuredCompletion({
+        stageId,
+        manifestHash: context.manifest.manifestHash,
+        contract,
+        prompt: prompt.resolvedPrompt,
+        promptHash: prompt.promptHash,
+        provider: this.#provider,
+        model: this.#model(stageId),
+        transport: this.#transport,
+        timeoutMs,
+        validationRepairEnabled: false,
+      });
+      providerLatencies.push(completion.diagnostic.providerDiagnostic?.durationMs ?? completion.diagnostic.durationMs);
+      completions.push(completion);
+      return completion;
+    };
+
+    let completion = await executeAttempt(prompts[0]);
+    const retryReason = !completion.ok && completion.error.errorCode === "OPENAI_TIMEOUT"
+      ? "timeout" as const
+      : !completion.ok && completion.error.errorCode === "OPENAI_NETWORK_ERROR"
+        ? "network" as const
+        : null;
+    if (retryReason && context.deadlineAtMs - Date.now() > 3_000) {
+      inputCompactions.push(buildCompactFactsInputV3(context.transcript, "retry"));
+      prompts.push(buildStructuredPrompt({
+        systemRole: "Structured facts stage for transcription summary v3.",
+        businessInstruction: BUSINESS_INSTRUCTIONS.facts_agent,
+        promptVersion: PROMPT_VERSION_BY_STAGE.facts_agent,
+        contract,
+        inputData: { turns: inputCompactions[1].turns },
+      }));
+      completion = await executeAttempt(prompts[1]);
+    }
+
+    const finalPrompt = prompts.at(-1) ?? prompts[0];
+    const finalCompaction = inputCompactions.at(-1) ?? inputCompactions[0];
+    const totalAttempts = completions.reduce((sum, item) => sum + item.diagnostic.attemptCount, 0);
+    const totalDuration = completions.reduce((sum, item) => sum + item.diagnostic.durationMs, 0);
+    const policy = completion.ok ? applyFactsAgentOutputPolicyV3(FactsV3Schema.parse(completion.value), context.transcript) : null;
+    const structured = structuredAudit(contract, finalPrompt, completion.diagnostic, stageId);
+    const providerInputTokens = completions
+      .map((item) => item.diagnostic.providerDiagnostic?.usage?.inputTokens)
+      .filter((value): value is number => typeof value === "number");
+    const providerOutputTokens = completions
+      .map((item) => item.diagnostic.providerDiagnostic?.usage?.outputTokens)
+      .filter((value): value is number => typeof value === "number");
+    const instructionTokens = Math.max(
+      0,
+      estimateFactsPromptTokensV3(finalPrompt.resolvedPrompt) - finalCompaction.transcriptTokens,
+    );
+    const audit: PipelineStageAudit = {
+      ...structured,
+      attempts: totalAttempts,
+      repairAttempted: false,
+      durationMs: totalDuration,
+      transformations: [
+        ...factsCompactionTransformation(finalCompaction),
+        ...policyAuditTransformations(policy?.transformations ?? []),
+      ],
+      rawProviderResponse: completion.ok ? null : completion.rawResponse ?? null,
+      inputDiagnostic: {
+        input_tokens_estimate: estimateFactsPromptTokensV3(finalPrompt.resolvedPrompt),
+        transcript_tokens: finalCompaction.transcriptTokens,
+        instruction_tokens: instructionTokens,
+        duplicated_context_tokens_removed: finalCompaction.duplicatedContextTokensRemoved,
+        input_turns_count: finalCompaction.turns.length,
+        payload_bytes: new TextEncoder().encode(finalPrompt.resolvedPrompt).length,
+        attempt_timeouts_ms: attemptTimeouts,
+        provider_latencies_ms: providerLatencies,
+        input_tokens: providerInputTokens.length
+          ? providerInputTokens.reduce((sum, value) => sum + value, 0)
+          : null,
+        output_tokens: providerOutputTokens.length
+          ? providerOutputTokens.reduce((sum, value) => sum + value, 0)
+          : null,
+        retry_reason: retryReason,
+        final_source_quality: completion.ok ? "valid" : "technical_error",
+      },
+    };
+    return completion.ok
+      ? {
+          status: policy?.transformations.length ? "SUCCESS_WITH_WARNING" : "SUCCESS",
+          value: policy?.value ?? completion.value,
+          audit,
+        }
+      : {
+          status: "TECHNICAL_ERROR",
+          value: null,
+          audit: {
+            ...audit,
+            errorCode: completion.error.errorCode,
+            blocking: false,
+          },
+        };
+  }
+
   async #structuredAgent(
     stageId: keyof typeof CONTRACT_BY_AGENT_STAGE,
     context: PipelineExecutionContext,
@@ -351,7 +500,7 @@ implements TranscriptionSummaryV3StageExecutor {
       transport: this.#transport,
       timeoutMs: remainingTimeout(context, 60_000),
     });
-    const policy = completion.ok ? applyAgentPolicy(stageId, completion.value) : null;
+    const policy = completion.ok ? applyAgentPolicy(stageId, completion.value, context) : null;
     const structured = structuredAudit(contract, prompt, completion.diagnostic, stageId);
     const audit = {
       ...structured,
@@ -399,6 +548,7 @@ implements TranscriptionSummaryV3StageExecutor {
     stageId: Exclude<TranscriptionSummaryV3StageId, "transcript_validation">,
     context: PipelineExecutionContext,
   ): Promise<PipelineStageExecution> {
+    if (stageId === "facts_agent") return this.#factsAgent(context);
     if (stageId in CONTRACT_BY_AGENT_STAGE) {
       return this.#structuredAgent(stageId as keyof typeof CONTRACT_BY_AGENT_STAGE, context);
     }
@@ -417,6 +567,25 @@ implements TranscriptionSummaryV3StageExecutor {
         : { status: "TECHNICAL_ERROR", value: null, audit: codeAudit(context, "conversationStore", { validationStatus: "invalid", errorType: "invariant", errorCode: result.error.errorCode, blocking: true, durationMs: result.diagnostic.durationMs }) };
     }
     if (stageId === "summary_agent") {
+      if (factsSourceUnavailable(outputs.conversation_store)) {
+        return {
+          status: "SUCCESS_WITH_WARNING",
+          value: {
+            conversation_result: "Диагностический preview: источник Facts недоступен; содержательный Summary не сформирован.",
+            key_facts: [],
+            quotes: [],
+            next_step: "Требуется повторный запуск Fact Agent перед публикацией результата.",
+          },
+          audit: codeAudit(context, "summary", {
+            validationIssues: [{
+              path: "summary_agent",
+              code: "DIAGNOSTIC_PREVIEW_FACTS_UNAVAILABLE",
+              message: "Only a diagnostic preview is allowed because the critical Facts source is unavailable.",
+            }],
+            blocking: false,
+          }),
+        };
+      }
       const result = await executeSummaryAgentV3({
         manifest: context.manifest,
         conversationStore: outputs.conversation_store,
@@ -482,6 +651,31 @@ implements TranscriptionSummaryV3StageExecutor {
     }
     if (stageId in SUMMARY_JUDGE_CRITERION) {
       const criterion = SUMMARY_JUDGE_CRITERION[stageId as keyof typeof SUMMARY_JUDGE_CRITERION];
+      if (factsSourceUnavailable(outputs.conversation_store)) {
+        return {
+          status: "TECHNICAL_ERROR",
+          value: {
+            criterion,
+            verdict: "technical_error",
+            score: null,
+            confidence: null,
+            issues: [],
+            evidence: [],
+            payload: null,
+          },
+          audit: codeAudit(context, "summaryJudges", {
+            validationStatus: "not_run",
+            validationIssues: [{
+              path: `summary_judge.${criterion}`,
+              code: "FACTS_SOURCE_UNAVAILABLE",
+              message: "Semantic Judge score is not allowed without the critical Facts source.",
+            }],
+            errorType: "dependency",
+            errorCode: "FACTS_SOURCE_UNAVAILABLE",
+            blocking: false,
+          }),
+        };
+      }
       const result = await executeSummaryJudgeV3({
         manifest: context.manifest,
         conversationStore: outputs.conversation_store,
@@ -561,7 +755,9 @@ implements TranscriptionSummaryV3StageExecutor {
         verdicts,
       });
       return {
-            status: result.value.partialEvaluation
+            status: result.value.decision === "TECHNICAL_ERROR"
+              ? "TECHNICAL_ERROR"
+              : result.value.partialEvaluation
               || result.value.qualityStatus === "NEEDS_ATTENTION"
               || result.value.qualityStatus === "LOW_QUALITY"
               ? "SUCCESS_WITH_WARNING"
@@ -581,9 +777,11 @@ implements TranscriptionSummaryV3StageExecutor {
                   message: JSON.stringify(result.diagnostic.postFinalDiagnostics),
                 }] : []),
               ],
-              errorType: result.diagnostic.errorCode ? "invariant" : null,
+              errorType: result.diagnostic.errorCode === "FACTS_SOURCE_UNAVAILABLE"
+                ? "dependency"
+                : result.diagnostic.errorCode ? "invariant" : null,
               errorCode: result.diagnostic.errorCode,
-              blocking: false,
+              blocking: result.value.blocking,
               durationMs: result.diagnostic.durationMs,
             }),
           };

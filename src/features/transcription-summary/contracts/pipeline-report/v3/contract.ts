@@ -69,6 +69,21 @@ const ProviderDiagnosticSchema = z.object({
   }).strict().nullable(),
 }).strict();
 
+const FactsInputDiagnosticSchema = z.object({
+  input_tokens_estimate: z.number().int().nonnegative(),
+  transcript_tokens: z.number().int().nonnegative(),
+  instruction_tokens: z.number().int().nonnegative(),
+  duplicated_context_tokens_removed: z.number().int().nonnegative(),
+  input_turns_count: z.number().int().nonnegative(),
+  payload_bytes: z.number().int().nonnegative(),
+  attempt_timeouts_ms: z.array(z.number().int().positive()).max(2),
+  provider_latencies_ms: z.array(z.number().int().nonnegative()).max(2),
+  input_tokens: z.number().int().nonnegative().nullable(),
+  output_tokens: z.number().int().nonnegative().nullable(),
+  retry_reason: z.enum(["timeout", "network"]).nullable(),
+  final_source_quality: z.enum(["valid", "technical_error"]),
+}).strict();
+
 const TransformationSchema = z.object({
   operation_id: IdentifierSchema,
   operation_type: z.enum([
@@ -110,6 +125,7 @@ export const PipelineStageReportV3Schema = z.object({
     applied: z.boolean(),
   }).strict(),
   provider_diagnostic: ProviderDiagnosticSchema.nullable(),
+  input_diagnostic: FactsInputDiagnosticSchema.nullable(),
   attempts: z.number().int().nonnegative(),
   repair_attempted: z.boolean(),
   raw_provider_response: z.json().nullable(),
@@ -151,7 +167,10 @@ export const PipelineReportV3Schema = z.object({
   status: z.enum(["SUCCESS", "SUCCESS_WITH_WARNING", "BUSINESS_REJECTION", "TECHNICAL_ERROR"]),
   stages: z.array(PipelineStageReportV3Schema),
   quality_score: z.number().min(0).max(100).nullable(),
-  quality_decision: z.literal("QUALITY_RECORDED").nullable(),
+  quality_decision: z.enum(["QUALITY_RECORDED", "TECHNICAL_ERROR"]).nullable(),
+  degraded_sources: z.array(z.enum(["facts", "needs", "outcome"])),
+  semantic_evaluation_allowed: z.boolean(),
+  quality_score_valid: z.boolean(),
   crm_status: z.enum([
     "PUBLISHED",
     "SKIPPED",
@@ -183,6 +202,7 @@ const validStage = {
   provider: null,
   structured_output: { required: false, requested: false, applied: false },
   provider_diagnostic: null,
+  input_diagnostic: null,
   attempts: 0,
   repair_attempted: false,
   raw_provider_response: null,
@@ -213,6 +233,9 @@ const valid = {
   stages: [validStage],
   quality_score: 100,
   quality_decision: "QUALITY_RECORDED",
+  degraded_sources: [],
+  semantic_evaluation_allowed: true,
+  quality_score_valid: true,
   crm_status: "DRY_RUN",
   started_at: "2026-07-30T00:00:00.000Z",
   finished_at: "2026-07-30T00:00:01.000Z",

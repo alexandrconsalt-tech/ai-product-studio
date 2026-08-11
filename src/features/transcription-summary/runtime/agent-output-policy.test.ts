@@ -139,4 +139,59 @@ describe("agent output policy v3", () => {
       deadline: "сегодня вечером", channel: "телефон", status: "confirmed",
     });
   });
+
+  it("восстанавливает критичные funding, отказ и юридический статус из исходных turns", () => {
+    const facts = FactsV3Schema.parse({
+      confirmed_facts: [], client_questions: [], contextual_statements: [], rejected_assumptions: [], quotes: [],
+    });
+    const result = applyFactsAgentOutputPolicyV3(facts, {
+      turns: [
+        { id: "turn-funding", sequence: 0, speaker: "client", text: "Покупаю без ипотеки, деньги на счёте.", started_at_ms: null, ended_at_ms: null },
+        { id: "turn-legal", sequence: 1, speaker: "agent", text: "У квартиры три собственника, документы ещё готовятся.", started_at_ms: null, ended_at_ms: null },
+        { id: "turn-refusal", sequence: 2, speaker: "client", text: "Не готов покупать: цена высокая и ремонт слишком дорогой.", started_at_ms: null, ended_at_ms: null },
+        { id: "turn-card", sequence: 3, speaker: "agent", text: "Адрес Пражская, площадь 60 м².", started_at_ms: null, ended_at_ms: null },
+      ],
+    }).value;
+    expect(result.confirmed_facts.map((item) => item.predicate)).toEqual([
+      "funding_source",
+      "explicit_objection",
+      "legal_or_document_status",
+    ]);
+    expect(result.confirmed_facts.flatMap((item) => item.source_turn_ids)).not.toContain("turn-card");
+  });
+
+  it("оставляет CRM funding без дубля и отбрасывает интерес к текущей двухкомнатной квартире", () => {
+    const needs = NeedsV3Schema.parse({
+      business_needs: [
+        { id: "mortgage", need_type: "financial_context", value: "Ипотека не нужна", ...evidence, evidence: "Покупаю без ипотеки." },
+        { id: "listing", need_type: "interest", value: "двухкомнатная квартира (интерес)", ...evidence, evidence: "Звоню по этой двухкомнатной квартире." },
+        { id: "budget", need_type: "financial_constraint", value: "Бюджет до 15 млн", ...evidence, evidence: "Мой бюджет до 15 млн." },
+      ],
+      property_requirements: [],
+      structured_crm_attributes: {
+        interested_in: [],
+        funding_source: { id: "funding", value: "наличные / депозит", ...evidence, evidence: "Покупаю без ипотеки." },
+        purchase_term: { id: "term", value: "не определено", ...evidence },
+      },
+      communication_preferences: [], client_questions: [],
+    });
+    expect(applyNeedsAgentOutputPolicyV3(needs).value.business_needs.map((item) => item.id)).toEqual(["budget"]);
+  });
+
+  it("фиксирует терминальный отказ и запрещает факты как agreements", () => {
+    const outcome = OutcomeV3Schema.parse({
+      call_result: "Обсудили квартиру.",
+      agreements: [
+        { id: "funding", action: "Финансирование наличными", owner: "Клиент", deadline: "", channel: "", status: "confirmed", evidence: "Покупаю за наличные." },
+        { id: "purpose", action: "Покупка для себя", owner: "Клиент", deadline: "", channel: "", status: "confirmed", evidence: "Покупаю для себя." },
+      ],
+      primary_next_step: { action: "Обсудить условия", owner: "Клиент", deadline: "", channel: "", status: "confirmed" },
+    });
+    const result = applyOutcomeAgentOutputPolicyV3(outcome, {
+      turns: [{ id: "turn-refusal", sequence: 0, speaker: "client", text: "Не буду продолжать: цена высокая и слишком большие расходы на ремонт.", started_at_ms: null, ended_at_ms: null }],
+    }).value;
+    expect(result.call_result).toBe("Клиент отказался продолжать из-за цены и расходов на ремонт.");
+    expect(result.agreements).toEqual([]);
+    expect(result.primary_next_step.status).toBe("not_defined");
+  });
 });

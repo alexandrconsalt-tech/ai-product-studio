@@ -66,12 +66,16 @@ export const useRepositoryStore = create<RepositoryState>((set, get) => ({
         if (!body?.configured) return;
         if (!hadLocalData && body.snapshot) {
           // Fresh browser (cleared storage, new device, first deploy visit)
-          // recovers real data from the server instead of keeping the demo
-          // seed load() already wrote synchronously above.
+          // recovers real data from the server, then passes it through the
+          // same non-destructive migrations/recovery seeds as local data.
+          // Applying the raw server snapshot directly used to replace a valid
+          // local seed with an empty or stale product list.
           projectRepository.save(body.snapshot);
-          const recoveredProjectId = body.snapshot.projects.some((project) => project.id === get().selectedProjectId) ? get().selectedProjectId : body.snapshot.projects[0]?.id ?? null;
+          const recoveredSnapshot = projectRepository.load();
+          const recoveredProjectId = recoveredSnapshot.projects.some((project) => project.id === get().selectedProjectId) ? get().selectedProjectId : recoveredSnapshot.projects[0]?.id ?? null;
           if (recoveredProjectId) writeSelectedProjectId(recoveredProjectId);
-          set({ snapshot: body.snapshot, selectedProjectId: recoveredProjectId });
+          set({ snapshot: recoveredSnapshot, selectedProjectId: recoveredProjectId });
+          if (JSON.stringify(recoveredSnapshot) !== JSON.stringify(body.snapshot)) pushSnapshotToServer(recoveredSnapshot);
         } else if (!body.snapshot) {
           // Database provisioned but empty (first time it's been connected
           // to a browser that already has real local data) -- seed it.
@@ -102,4 +106,3 @@ export const useRepositoryStore = create<RepositoryState>((set, get) => ({
     set({ selectedProjectId: projectId });
   },
 }));
-

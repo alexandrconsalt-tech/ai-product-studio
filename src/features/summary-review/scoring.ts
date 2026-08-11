@@ -3,8 +3,10 @@ import type {
   DifferenceStatus,
   HumanDecision,
   HumanReview,
+  LegacyCriterionValue,
   ReviewBlockId,
   ReviewerRole,
+  StoredCriterionValue,
   SummaryRun,
 } from "./types";
 
@@ -12,90 +14,104 @@ export const reviewBlocks: Array<{
   id: ReviewBlockId;
   title: string;
   weight: number;
-  criteria: Array<{ id: string; label: string; allowNa?: boolean; naLabel?: string }>;
+  description: string;
+  legacyCriterionIds: string[];
 }> = [
   {
     id: "truth",
     title: "Проверка достоверности",
-    weight: 0.3,
-    criteria: [
-      { id: "truth_no_fiction", label: "Нет выдуманных фактов" },
-      { id: "truth_not_distorted", label: "Факты не искажены" },
-      { id: "truth_roles", label: "Роли клиента/агента/оператора не перепутаны" },
-    ],
+    weight: 0.2,
+    description: "Проверьте, нет ли выдуманных или искажённых фактов и не перепутаны ли роли участников.",
+    legacyCriterionIds: ["truth_no_fiction", "truth_not_distorted", "truth_roles"],
   },
   {
     id: "criticalFacts",
     title: "Проверка критически важных фактов",
-    weight: 0.25,
-    criteria: [
-      { id: "critical_goal", label: "Отражена главная цель клиента", allowNa: true, naLabel: "Не обсуждалось" },
-      { id: "critical_motivation", label: "Отражена главная мотивация клиента", allowNa: true, naLabel: "Не обсуждалось" },
-      { id: "critical_needs", label: "Отражены ключевые потребности", allowNa: true, naLabel: "Не обсуждалось" },
-      { id: "critical_objections", label: "Отражены возражения / ограничения", allowNa: true, naLabel: "Не обсуждалось" },
-      { id: "critical_deal_terms", label: "Отражены важные условия сделки", allowNa: true, naLabel: "Не обсуждалось" },
-    ],
+    weight: 0.2,
+    description: "Сверьте цель, потребности, ограничения, мотивацию и важные условия сделки с транскрибацией.",
+    legacyCriterionIds: ["critical_goal", "critical_motivation", "critical_needs", "critical_objections", "critical_deal_terms"],
   },
   {
     id: "utility",
     title: "Проверка полезности для агента",
     weight: 0.2,
-    criteria: [
-      { id: "utility_continue", label: "Агент может продолжить работу без прослушивания записи" },
-      { id: "utility_context", label: "Контекст клиента понятен за 5-10 секунд" },
-      { id: "utility_no_noise", label: "В саммари нет лишней информации" },
-    ],
+    description: "Оцените, понятен ли рабочий контекст за несколько секунд и можно ли продолжить работу без прослушивания звонка.",
+    legacyCriterionIds: ["utility_continue", "utility_context", "utility_no_noise"],
   },
   {
     id: "action",
     title: "Проверка договоренностей и следующего шага",
-    weight: 0.15,
-    criteria: [
-      { id: "action_result", label: "Итог звонка отражен корректно", allowNa: true, naLabel: "Не было в звонке" },
-      { id: "action_agreements", label: "Договоренности отражены корректно", allowNa: true, naLabel: "Не было в звонке" },
-      { id: "action_next_step", label: "Следующий шаг отражен корректно", allowNa: true, naLabel: "Не было в звонке" },
-      { id: "action_no_fiction", label: "Нет выдуманных действий или завышенного статуса", allowNa: true, naLabel: "Не было в звонке" },
-    ],
+    weight: 0.2,
+    description: "Проверьте итог звонка, подтверждённые договорённости, действие, ответственного, срок и канал следующего шага.",
+    legacyCriterionIds: ["action_result", "action_agreements", "action_next_step", "action_no_fiction"],
   },
   {
     id: "format",
     title: "Проверка формата и правил",
-    weight: 0.1,
-    criteria: [
-      { id: "format_readable", label: "Саммари краткое и читаемое" },
-      { id: "format_no_object_duplicates", label: "Нет дублей карточки объекта: адрес, цена, площадь, этаж, телефон" },
-      { id: "format_facts", label: "Саммари написано фактами, а не пересказом диалога" },
-      { id: "format_no_forbidden", label: "Нет запрещенных формулировок и лишней воды" },
-    ],
+    weight: 0.2,
+    description: "Оцените структуру, краткость и читаемость: без дублей карточки, пересказа диалога, лишней воды и запрещённых формулировок.",
+    legacyCriterionIds: ["format_readable", "format_no_object_duplicates", "format_facts", "format_no_forbidden"],
   },
 ];
 
 export const reviewerRoles: ReviewerRole[] = ["Агент", "РОП", "Продакт", "QA", "Другое"];
 
-export const criterionScores: Record<CriterionValue, number | null> = {
+const legacyCriterionScores: Record<LegacyCriterionValue, number | null> = {
   yes: 100,
   partial: 50,
   no: 0,
   na: null,
 };
 
+export const criterionScores: Record<CriterionValue, number> = {
+  0: 0,
+  1: 50,
+  2: 70,
+  3: 90,
+  4: 100,
+};
+
 export function createDefaultCriteria(): Record<string, CriterionValue> {
-  return Object.fromEntries(reviewBlocks.flatMap((block) => block.criteria.map((criterion) => [criterion.id, "yes"])));
+  return Object.fromEntries(reviewBlocks.map((block) => [block.id, 4]));
 }
 
-export function getBlockScore(blockId: ReviewBlockId, criteria: Record<string, CriterionValue>): number {
+function isCriterionValue(value: unknown): value is CriterionValue {
+  return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 4;
+}
+
+function closestCriterionValue(score: number): CriterionValue {
+  return (Object.entries(criterionScores) as Array<[`${CriterionValue}`, number]>)
+    .reduce<CriterionValue>((closest, [value, criterionScore]) => {
+      return Math.abs(criterionScore - score) < Math.abs(criterionScores[closest] - score)
+        ? Number(value) as CriterionValue
+        : closest;
+    }, 4);
+}
+
+export function normalizeCriteria(criteria: Record<string, StoredCriterionValue>): Record<string, CriterionValue> {
+  return Object.fromEntries(reviewBlocks.map((block) => {
+    const blockValue = criteria[block.id];
+    if (isCriterionValue(blockValue)) return [block.id, blockValue];
+
+    const legacyValues = block.legacyCriterionIds
+      .map((id) => criteria[id])
+      .filter((value): value is LegacyCriterionValue => typeof value === "string")
+      .map((value) => legacyCriterionScores[value])
+      .filter((value): value is number => value !== null);
+    const legacyScore = legacyValues.length
+      ? legacyValues.reduce((sum, value) => sum + value, 0) / legacyValues.length
+      : 100;
+    return [block.id, closestCriterionValue(legacyScore)];
+  }));
+}
+
+export function getBlockScore(blockId: ReviewBlockId, criteria: Record<string, StoredCriterionValue>): number {
   const block = reviewBlocks.find((item) => item.id === blockId);
   if (!block) return 0;
-
-  const values = block.criteria
-    .map((criterion) => criterionScores[criteria[criterion.id] ?? "yes"])
-    .filter((value): value is number => value !== null);
-
-  if (values.length === 0) return 100;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  return criterionScores[normalizeCriteria(criteria)[block.id] ?? 4];
 }
 
-export function getAllBlockScores(criteria: Record<string, CriterionValue>) {
+export function getAllBlockScores(criteria: Record<string, StoredCriterionValue>) {
   return {
     truthScore: getBlockScore("truth", criteria),
     criticalFactsScore: getBlockScore("criticalFacts", criteria),
@@ -105,7 +121,7 @@ export function getAllBlockScores(criteria: Record<string, CriterionValue>) {
   };
 }
 
-export function getHumanScore(criteria: Record<string, CriterionValue>): number {
+export function getHumanScore(criteria: Record<string, StoredCriterionValue>): number {
   const score = reviewBlocks.reduce((sum, block) => sum + getBlockScore(block.id, criteria) * block.weight, 0);
   return Math.round(score * 10) / 10;
 }
@@ -130,9 +146,8 @@ export function hasAiCriticalErrors(aiJudgesJson: unknown): boolean {
 
 export function isGoldenDataset(run: SummaryRun, review?: HumanReview): boolean {
   if (!review) return false;
-  const criteria = review.criteriaJson;
-  const hasTruthNo =
-    criteria.truth_no_fiction === "no" || criteria.truth_not_distorted === "no" || criteria.truth_roles === "no";
+  const criteria = normalizeCriteria(review.criteriaJson);
+  const hasTruthNo = criteria.truth === 0;
 
   return run.aiScore >= 95 && review.humanScore >= 95 && !hasAiCriticalErrors(run.aiJudgesJson) && !hasTruthNo;
 }
@@ -160,4 +175,3 @@ export function buildReview(params: {
     createdAt: new Date().toISOString(),
   };
 }
-

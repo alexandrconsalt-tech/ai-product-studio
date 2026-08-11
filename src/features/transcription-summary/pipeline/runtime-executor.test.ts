@@ -71,6 +71,95 @@ describe("v3 runtime executor dependencies", () => {
     expect(prompts[0]).not.toContain("facts_verified");
   });
 
+  it("Facts использует компактный input и повторяет только timeout один раз", async () => {
+    const requests: Parameters<NonNullable<ConstructorParameters<typeof RuntimeTranscriptionSummaryV3StageExecutor>[0]["transport"]>>[0][] = [];
+    const runtime = new RuntimeTranscriptionSummaryV3StageExecutor({
+      provider: "openai-direct",
+      models: { default: "gpt-5-mini" },
+      transport: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) return {
+          ok: false,
+          errorCode: "OPENAI_TIMEOUT",
+          message: "controlled timeout",
+          attestation: { requested: true, forwarded: true, accepted: false, structuredResponseReturned: false },
+        };
+        return {
+          ok: true,
+          structuredValue: FactsV3Contract.fixtures.valid,
+          rawResponse: { id: "facts-retry-success" },
+          attestation: { requested: true, forwarded: true, accepted: true, structuredResponseReturned: true },
+        };
+      },
+      crmRepository: new InMemoryCrmPublicationRepositoryV3(),
+      crmClient: { async publishSummary() { throw new Error("must not run"); } },
+    });
+
+    const result = await runtime.execute("facts_agent", context({}));
+
+    expect(result.status).not.toBe("TECHNICAL_ERROR");
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => (request.timeoutMs ?? 0) <= 55_000)).toBe(true);
+    expect(requests[0].prompt).toContain('INPUT DATA\n{"turns":[');
+    expect(requests[0].prompt).not.toMatch(/source_references|validation_warnings|sha256|started_at_ms/);
+    expect(result.audit.attempts).toBe(2);
+    expect(result.audit.inputDiagnostic).toMatchObject({
+      retry_reason: "timeout",
+      final_source_quality: "valid",
+      input_turns_count: 1,
+    });
+  });
+
+  it("Facts не повторяет provider 4xx/auth error", async () => {
+    let calls = 0;
+    const runtime = new RuntimeTranscriptionSummaryV3StageExecutor({
+      provider: "openai-direct",
+      models: { default: "gpt-5-mini" },
+      transport: async () => {
+        calls += 1;
+        return {
+          ok: false,
+          errorCode: "OPENAI_AUTH_FAILED",
+          message: "controlled auth error",
+          attestation: { requested: true, forwarded: true, accepted: false, structuredResponseReturned: false },
+        };
+      },
+      crmRepository: new InMemoryCrmPublicationRepositoryV3(),
+      crmClient: { async publishSummary() { throw new Error("must not run"); } },
+    });
+
+    const result = await runtime.execute("facts_agent", context({}));
+    expect(result.status).toBe("TECHNICAL_ERROR");
+    expect(result.audit.errorCode).toBe("OPENAI_AUTH_FAILED");
+    expect(calls).toBe(1);
+  });
+
+  it("Facts не повторяет schema validation error", async () => {
+    let calls = 0;
+    const runtime = new RuntimeTranscriptionSummaryV3StageExecutor({
+      provider: "openai-direct",
+      models: { default: "gpt-5-mini" },
+      transport: async () => {
+        calls += 1;
+        return {
+          ok: true,
+          structuredValue: { facts: "invalid-shape" },
+          rawResponse: { id: "controlled-invalid-facts" },
+          attestation: { requested: true, forwarded: true, accepted: true, structuredResponseReturned: true },
+        };
+      },
+      crmRepository: new InMemoryCrmPublicationRepositoryV3(),
+      crmClient: { async publishSummary() { throw new Error("must not run"); } },
+    });
+
+    const result = await runtime.execute("facts_agent", context({}));
+    expect(result.status).toBe("TECHNICAL_ERROR");
+    expect(result.audit.errorCode).toBe("SCHEMA_VALIDATION_ERROR");
+    expect(calls).toBe(1);
+    expect(result.audit.attempts).toBe(1);
+    expect(result.audit.inputDiagnostic?.retry_reason).toBeNull();
+  });
+
   it("Outcome Agent получает raw facts, needs и точный объектный контракт", async () => {
     const prompts: string[] = [];
     await executor(prompts).execute("outcome_agent", context({

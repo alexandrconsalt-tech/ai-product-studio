@@ -121,4 +121,28 @@ describe("Summary Quality Gate — только аналитика", () => {
       "CRM_DATA_IN_REQUIREMENTS",
     ]));
   });
+
+  it("запрещает Quality Score при недоступном источнике Facts", () => {
+    const fixture = createSummaryQualityGateFixture();
+    fixture.conversationStore = {
+      ...fixture.conversationStore,
+      source_quality: { ...fixture.conversationStore.source_quality, facts: "technical_error" },
+      partial: true,
+      source_errors: ["facts"],
+    };
+
+    const result = executeSummaryQualityGateV3(fixture);
+
+    expect(result.value).toMatchObject({
+      decision: "TECHNICAL_ERROR",
+      blocking: true,
+      qualityScore: null,
+      qualityStatus: "NOT_EVALUATED",
+      evaluationStatus: "partial",
+      evaluatedChecks: 0,
+      technicalErrors: 5,
+      partialEvaluation: true,
+    });
+    expect(result.diagnostic.decisionReasons).toEqual(["FACTS_SOURCE_UNAVAILABLE"]);
+  });
 });

@@ -209,6 +209,7 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
   transport: StructuredProviderTransport;
   timeoutMs?: number;
   transportOutputOnly?: boolean;
+  validationRepairEnabled?: boolean;
 }): Promise<StructuredCompletionResult<z.infer<TContract["validator"]>>> {
   const startedAt = Date.now();
   const completionDeadlineAt = input.timeoutMs ? startedAt + input.timeoutMs : null;
@@ -277,7 +278,8 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
     };
   }
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const maximumAttempts = input.validationRepairEnabled === false ? 1 : 2;
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
     attemptCount += 1;
     repairAttempted = attempt === 1;
     const prompt = attempt === 0
@@ -324,7 +326,7 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
     const decoded = decode(response);
     if (!decoded.ok) {
       lastIssues = [{ path: "", expected: "JSON", received: "text", issueCode: "invalid_json", message: decoded.message }];
-      if (attempt === 0) continue;
+      if (attempt + 1 < maximumAttempts) continue;
       return {
         ok: false,
         error: { status: "TECHNICAL_ERROR", errorType: errorType("JSON_DECODE_ERROR"), errorCode: "JSON_DECODE_ERROR", message: decoded.message },
@@ -368,7 +370,7 @@ export async function executeStructuredCompletion<TContract extends ContractDefi
       };
     }
     lastIssues = validationIssues(transportParsed.error);
-    if (attempt === 0) continue;
+    if (attempt + 1 < maximumAttempts) continue;
     return {
       ok: false,
       error: { status: "TECHNICAL_ERROR", errorType: errorType("SCHEMA_VALIDATION_ERROR"), errorCode: "SCHEMA_VALIDATION_ERROR", message: transportParsed.error.message },

@@ -97,6 +97,11 @@
     .runbar .prog{order:3;flex-basis:100%}
     .stage-h .st-type{display:none}
   }
+  /* The application-attributes playground is embedded next to the MVP mobile
+     navigation, so its iframe can be narrower than a regular phone viewport.
+     Let both grid columns shrink below their contents' intrinsic width without
+     changing the shared desktop layout or another product's playground. */
+  body.application-attributes-project .grid > div{min-width:0}
 
   /* панель прогона */
   .runbar{display:flex;gap:10px;align-items:center;padding:12px 16px;background:var(--panel);
@@ -287,6 +292,7 @@
             <span class="n">П</span> Пайплайн<span class="chev">▶</span>
           </span>
           <div class="spacer"></div>
+          <span class="status" id="pipelineSaveState" aria-live="polite">сохранено</span>
           <select id="preset" style="width:auto;padding:5px 10px;font-size:12px">
             <option value="default">Полный пайплайн VT</option>
             <option value="blank">Пустой (свой продукт)</option>
@@ -330,6 +336,16 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<script src="/ai-application-attributes-pipeline-v14.js"></script>
+<script src="/ai-application-attributes-pipeline-v15.js"></script>
+<script src="/ai-application-attributes-pipeline-v16.js"></script>
+<script src="/ai-application-attributes-pipeline-v17.js"></script>
+<script src="/ai-application-attributes-pipeline-v18.js"></script>
+<script src="/ai-summary-10-08-pipeline-v1.js"></script>
+<script src="/ai-summary-10-08-store-cleaner.js"></script>
+<script src="/ai-summary-10-08-conversation-judge-v5.js"></script>
+<script src="/ai-summary-10-08-summary-judge-recovery-v1.js"></script>
+<script src="/ai-summary-10-08-finalization-v1.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 //  МОДЕЛИ / ТИПЫ ШАГОВ
@@ -364,7 +380,7 @@ const LLM_PROVIDER_OPTIONS = [
   {v:'anthropic-direct',t:'Anthropic Direct'},
   {v:'mock',t:'Mock LLM Provider'},
 ];
-const CODE_FN_LIST = ['stt','validate','store','factCheckCode','needCheckCode','outcomeCheckCode','conversationStore','presentationCheck','gate','summaryQualityGate','crm'];
+const CODE_FN_LIST = ['stt','validate','store','factCheckCode','needCheckCode','outcomeCheckCode','conversationStore','presentationCheck','gate','summaryQualityGate','crm','aiSummaryQualityGate','aiSummaryCrmResult'];
 
 const MODULE_SUMMARY_PROMPT = `Ты — Summary Agent для CRM агентства недвижимости.
 
@@ -1366,8 +1382,347 @@ const PIPELINE_CONFIG_STORAGE='pipelineLabV3.pipelineConfig';
 // using the original global key unchanged -- fully backward compatible.
 const PRODUCT_ID = new URLSearchParams(location.search).get('productId') || null;
 const SUMMARY_NEW_PROJECT_ID = 'project_summary_new';
+const APPLICATION_ATTRIBUTES_PROJECT_ID = 'project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f';
+const AI_SUMMARY_TEN_AUGUST_PROJECT_ID = 'project_ai_summary_2026_08_10';
 const PROJECT_SCOPE_ID = PRODUCT_ID || new URLSearchParams(location.search).get('projectId') || null;
 const IS_SUMMARY_NEW_PROJECT = PROJECT_SCOPE_ID === SUMMARY_NEW_PROJECT_ID;
+const IS_APPLICATION_ATTRIBUTES_PROJECT = PROJECT_SCOPE_ID === APPLICATION_ATTRIBUTES_PROJECT_ID;
+const IS_AI_SUMMARY_TEN_AUGUST_PROJECT = PROJECT_SCOPE_ID === AI_SUMMARY_TEN_AUGUST_PROJECT_ID;
+if(IS_APPLICATION_ATTRIBUTES_PROJECT) document.body.classList.add('application-attributes-project');
+const AI_SUMMARY_FACTS_CONTRACT_ID='ai_summary_10_08_facts';
+const AI_SUMMARY_FACTS_CONTRACT_VERSION='v1';
+const AI_SUMMARY_FACTS_SCHEMA_ID='ai_summary_10_08_facts_v1';
+const AI_SUMMARY_FACTS_LEGACY_MAX_TOKENS=2500;
+const AI_SUMMARY_FACTS_DEFAULT_MAX_TOKENS=6000;
+const AI_SUMMARY_NEEDS_CONTRACT_ID='ai_summary_10_08_needs';
+const AI_SUMMARY_NEEDS_CONTRACT_VERSION='v1';
+const AI_SUMMARY_NEEDS_SCHEMA_ID='ai_summary_10_08_needs_v1';
+const AI_SUMMARY_OUTCOME_CONTRACT_ID='ai_summary_10_08_outcome';
+const AI_SUMMARY_OUTCOME_CONTRACT_VERSION='v1';
+const AI_SUMMARY_OUTCOME_SCHEMA_ID='ai_summary_10_08_outcome_v1';
+const AI_SUMMARY_CONVERSATION_JUDGE_CONTRACT_ID='ai_summary_10_08_conversation_judge';
+const AI_SUMMARY_CONVERSATION_JUDGE_CONTRACT_VERSION='v1';
+const AI_SUMMARY_CONVERSATION_JUDGE_SCHEMA_ID='ai_summary_10_08_conversation_judge_v1';
+const AI_SUMMARY_CONVERSATION_JUDGE_SAFETY_MARKER='AI_SUMMARY_JUDGE_ROLE_CONSISTENCY_V2';
+const AI_SUMMARY_CONVERSATION_JUDGE_SAFETY_APPENDIX=`
+
+==================================================
+15. ROLE CONSISTENCY И ЗАПРЕТ РАСШИРЕНИЯ STORE
+==================================================
+
+[${AI_SUMMARY_CONVERSATION_JUDGE_SAFETY_MARKER}]
+
+Speaker label не является абсолютной истиной. Для каждого факта локально сопоставь label, соседние реплики, роль участника и смысл действия.
+
+Если реплика с label «Клиент» по смыслу явно описывает seller-side или agent-side действие — например, обновление фотографий объявления, фотографирование объекта, действия собственника, нотариуса, подготовку альтернативного жилья или выписку к сделке — не записывай это как факт клиента автоматически.
+
+При сильном semantic contradiction:
+1. не переноси сомнительный факт в verified_facts как факт клиента;
+2. сохрани нейтральную роль только если смысл важен и роль надёжно подтверждена контекстом;
+3. удали факт, если роль определить нельзя;
+4. добавь issue строго в формате: "ROLE_INCONSISTENCY: <краткий смысл сомнительного или удалённого факта>".
+
+Это локальная safety-проверка конкретного факта. Не переопределяй глобально всю диаризацию и не придумывай новую роль без сильного контекста. При semantic ambiguity лучше удалить факт, чем сохранить его с неверной ролью.
+
+Judge проверяет Extractors, но не становится дополнительным Facts Extractor. Не расширяй verified_facts CRM-данными текущего объекта, если Extractor их не выдал и они не несут нового рабочего смысла.
+
+Не добавляй самостоятельно:
+- точный адрес;
+- название ЖК как identifier;
+- цену текущего объекта;
+- площадь, этаж или комнатность текущего объекта;
+- код объекта;
+- имя агента или телефон;
+- источник объявления или сайт;
+- обычную локацию текущего объекта.
+
+Исключение — реальное требование, ограничение или полезная мотивация клиента. Сохраняй "Клиенту принципиально нужен второй этаж" и подтверждённую причину "клиенту тяжело подниматься на пятый этаж, поэтому нужен второй". Не сохраняй нейтральную карточную характеристику "объект на втором этаже".
+
+Не создавай verified_fact о согласованном показе, звонке или другом next step только для дублирования verified_outcome. Outcome остаётся source of truth для договорённости. Сильный интерес клиента и полезную причину требования можно сохранить отдельно, если они подтверждены.
+
+Если сумма или число повреждены STT и не критичны, удали их полностью. Не создавай meta-fact "сумма повреждена", "значение нечитабельно", "цена требует уточнения".
+
+verified_quotes должны быть только клиентскими, читаемыми и полезными. Не включай цитаты с повреждёнными словами/числами, CRM-object identifiers или seller/agent-side содержанием при сомнительной роли. Если качественных цитат нет, верни [].
+
+Перед ответом дополнительно проверь:
+17. Нет seller/agent-side действий, ошибочно приписанных клиенту.
+18. Нет новых CRM-object facts, отсутствовавших у Extractors.
+19. Причина подтверждённого требования сохранена.
+20. ROLE_INCONSISTENCY отражён в issues для каждого удалённого сомнительного факта.
+21. Повреждённые STT meta-facts и некачественные quotes отсутствуют.
+`;
+const AI_SUMMARY_CONVERSATION_JUDGE_SELLER_SCOPE_MARKER='AI_SUMMARY_JUDGE_SELLER_SCOPE_V3';
+const AI_SUMMARY_CONVERSATION_JUDGE_SELLER_SCOPE_APPENDIX=`
+
+==================================================
+16. SELLER-SIDE SCOPE SAFETY
+==================================================
+
+[${AI_SUMMARY_CONVERSATION_JUDGE_SELLER_SCOPE_MARKER}]
+
+VERIFIED CONVERSATION STORE описывает клиента и следующий рабочий шаг, а не полную карточку продавца. Даже если seller-side сведения произнесены участником с label «Агент» и формально подтверждены транскрибацией, не добавляй их в verified_facts без прямого влияния на решение клиента.
+
+Удаляй как низкоценный seller/CRM context:
+- возраст, имя и биографию собственника;
+- основание права и историю приватизации как справочную карточную информацию;
+- родственников/отказников;
+- цель переезда или покупки другого дома собственником;
+- визит собственника к нотариусу;
+- наличие альтернативного жилья;
+- обещание выписаться к сделке, если клиент не сформулировал это как требование, возражение или критичный незакрытый вопрос.
+
+Не переноси эти сведения в needs автоматически. Сохраняй только конкретный client-side requirement, objection или unresolved question, явно выраженный клиентом и влияющий на продолжение работы.
+
+Если в локальном фрагменте есть признаки смены ролей — например, «Клиент» говорит, что фотографировал объявление, а «Агент» начинает задавать buyer-side вопросы, — считай seller-side факты этого фрагмента ненадёжными для client store. Удали их и добавь отдельный ROLE_INCONSISTENCY issue с кратким смыслом удалённого блока.
+`;
+const AI_SUMMARY_CONVERSATION_JUDGE_V5=window.__AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__||null;
+const AI_SUMMARY_SUMMARY_CONTRACT_ID='ai_summary_10_08_summary';
+const AI_SUMMARY_SUMMARY_CONTRACT_VERSION='v1';
+const AI_SUMMARY_SUMMARY_SCHEMA_ID='ai_summary_10_08_summary_v1';
+const AI_SUMMARY_FACTS_JSON_SCHEMA={
+  type:'object',additionalProperties:false,required:['facts','quotes'],properties:{
+    facts:{type:'array',items:{type:'object',additionalProperties:false,required:['fact','evidence'],properties:{fact:{type:'string'},evidence:{type:'string'}}}},
+    quotes:{type:'array',items:{type:'string'}}
+  }
+};
+const AI_SUMMARY_NEEDS_JSON_SCHEMA={
+  type:'object',additionalProperties:false,
+  required:['primary_need','requirements','preferences','objections','unresolved_questions'],
+  properties:{
+    primary_need:{type:'string'},
+    requirements:{type:'array',items:{type:'string'}},
+    preferences:{type:'array',items:{type:'string'}},
+    objections:{type:'array',items:{type:'string'}},
+    unresolved_questions:{type:'array',items:{type:'string'}}
+  }
+};
+const AI_SUMMARY_OUTCOME_JSON_SCHEMA={
+  type:'object',additionalProperties:false,
+  required:['call_result','agreement','next_step','responsible_party','deadline','channel'],
+  properties:{
+    call_result:{type:'string'},agreement:{type:'string'},next_step:{type:'string'},
+    responsible_party:{type:'string',enum:['agent','client','operator','both','']},
+    deadline:{type:'string'},channel:{type:'string'}
+  }
+};
+const AI_SUMMARY_CONVERSATION_JUDGE_JSON_SCHEMA={
+  type:'object',additionalProperties:false,
+  required:['verified_facts','verified_quotes','verified_needs','verified_outcome','decisions','issues'],
+  properties:{
+    verified_facts:{type:'array',items:{type:'object',additionalProperties:false,required:['fact','evidence'],properties:{fact:{type:'string'},evidence:{type:'string'}}}},
+    verified_quotes:{type:'array',items:{type:'string'}},
+    verified_needs:{type:'object',additionalProperties:false,required:['primary_need','requirements','preferences','objections','unresolved_questions'],properties:{
+      primary_need:{type:'string'},requirements:{type:'array',items:{type:'string'}},preferences:{type:'array',items:{type:'string'}},objections:{type:'array',items:{type:'string'}},unresolved_questions:{type:'array',items:{type:'string'}}
+    }},
+    verified_outcome:AI_SUMMARY_OUTCOME_JSON_SCHEMA,
+    decisions:{type:'object',additionalProperties:false,required:['facts','needs','outcome'],properties:{
+      facts:{type:'string',enum:['approve','correct','reject','technical_error']},
+      needs:{type:'string',enum:['approve','correct','reject','technical_error']},
+      outcome:{type:'string',enum:['approve','correct','reject','technical_error']}
+    }},
+    issues:{type:'array',items:{type:'string'}}
+  }
+};
+const AI_SUMMARY_SUMMARY_JSON_SCHEMA={
+  type:'object',additionalProperties:false,
+  required:['conversation_result','key_facts','quotes','next_step'],
+  properties:{
+    conversation_result:{type:'string'},
+    key_facts:{type:'array',items:{type:'string'},maxItems:5},
+    quotes:{type:'array',items:{type:'string'},maxItems:2},
+    next_step:{type:'string'}
+  }
+};
+function validateAiSummaryFacts(value){
+  const fail=message=>{const error=new Error(message);error.name='AiSummaryFactsSchemaError';throw error;};
+  if(!value||typeof value!=='object'||Array.isArray(value)) fail('AI_SUMMARY_FACTS_ROOT_INVALID');
+  const keys=Object.keys(value).sort();if(keys.length!==2||keys[0]!=='facts'||keys[1]!=='quotes') fail('AI_SUMMARY_FACTS_ROOT_KEYS_INVALID');
+  if(!Array.isArray(value.facts)||!Array.isArray(value.quotes)) fail('AI_SUMMARY_FACTS_ARRAYS_REQUIRED');
+  value.facts.forEach((item,index)=>{
+    if(!item||typeof item!=='object'||Array.isArray(item)) fail('AI_SUMMARY_FACT_INVALID_'+index);
+    const itemKeys=Object.keys(item).sort();if(itemKeys.length!==2||itemKeys[0]!=='evidence'||itemKeys[1]!=='fact') fail('AI_SUMMARY_FACT_KEYS_INVALID_'+index);
+    if(typeof item.fact!=='string'||typeof item.evidence!=='string') fail('AI_SUMMARY_FACT_STRINGS_REQUIRED_'+index);
+  });
+  if(value.quotes.some(item=>typeof item!=='string')) fail('AI_SUMMARY_QUOTES_STRINGS_REQUIRED');
+  return value;
+}
+function validateAiSummaryNeeds(value){
+  const fail=message=>{const error=new Error(message);error.name='AiSummaryNeedsSchemaError';throw error;};
+  const keys=['primary_need','requirements','preferences','objections','unresolved_questions'];
+  if(!value||typeof value!=='object'||Array.isArray(value)) fail('AI_SUMMARY_NEEDS_ROOT_INVALID');
+  const actual=Object.keys(value).sort();
+  if(actual.length!==keys.length||keys.slice().sort().some((key,index)=>actual[index]!==key)) fail('AI_SUMMARY_NEEDS_ROOT_KEYS_INVALID');
+  if(typeof value.primary_need!=='string') fail('AI_SUMMARY_NEEDS_PRIMARY_NEED_STRING_REQUIRED');
+  for(const key of keys.slice(1)){
+    if(!Array.isArray(value[key])||value[key].some(item=>typeof item!=='string')) fail('AI_SUMMARY_NEEDS_'+key.toUpperCase()+'_STRINGS_REQUIRED');
+  }
+  return value;
+}
+function aiSummaryExactObject(value,keys,path){
+  const fail=message=>{const error=new Error(message);error.name='AiSummaryContractSchemaError';throw error;};
+  if(!value||typeof value!=='object'||Array.isArray(value)) fail(path+': expected object');
+  for(const key of keys) if(!Object.prototype.hasOwnProperty.call(value,key)) fail(path+'.'+key+': required');
+  const extra=Object.keys(value).find(key=>!keys.includes(key));
+  if(extra) fail(path+'.'+extra+': additional property');
+}
+function aiSummaryStringArray(value,path){
+  if(!Array.isArray(value)||value.some(item=>typeof item!=='string')){const error=new Error(path+': expected string array');error.name='AiSummaryContractSchemaError';throw error;}
+}
+function validateAiSummaryOutcome(value,path='outcome_extractor'){
+  const keys=['call_result','agreement','next_step','responsible_party','deadline','channel'];
+  aiSummaryExactObject(value,keys,path);
+  for(const key of keys) if(typeof value[key]!=='string'){const error=new Error(path+'.'+key+': expected string');error.name='AiSummaryContractSchemaError';throw error;}
+  if(!['agent','client','operator','both',''].includes(value.responsible_party)){const error=new Error(path+'.responsible_party: invalid enum');error.name='AiSummaryContractSchemaError';throw error;}
+  return value;
+}
+function validateAiSummaryConversationJudge(value){
+  aiSummaryExactObject(value,['verified_facts','verified_quotes','verified_needs','verified_outcome','decisions','issues'],'conversation_judge');
+  if(!Array.isArray(value.verified_facts)){const error=new Error('conversation_judge.verified_facts: expected array');error.name='AiSummaryContractSchemaError';throw error;}
+  value.verified_facts.forEach((item,index)=>{aiSummaryExactObject(item,['fact','evidence'],'conversation_judge.verified_facts['+index+']');if(typeof item.fact!=='string'||typeof item.evidence!=='string'){const error=new Error('conversation_judge.verified_facts['+index+']: expected strings');error.name='AiSummaryContractSchemaError';throw error;}});
+  aiSummaryStringArray(value.verified_quotes,'conversation_judge.verified_quotes');
+  aiSummaryExactObject(value.verified_needs,['primary_need','requirements','preferences','objections','unresolved_questions'],'conversation_judge.verified_needs');
+  if(typeof value.verified_needs.primary_need!=='string'){const error=new Error('conversation_judge.verified_needs.primary_need: expected string');error.name='AiSummaryContractSchemaError';throw error;}
+  for(const key of ['requirements','preferences','objections','unresolved_questions']) aiSummaryStringArray(value.verified_needs[key],'conversation_judge.verified_needs.'+key);
+  validateAiSummaryOutcome(value.verified_outcome,'conversation_judge.verified_outcome');
+  aiSummaryExactObject(value.decisions,['facts','needs','outcome'],'conversation_judge.decisions');
+  for(const key of ['facts','needs','outcome']) if(!['approve','correct','reject','technical_error'].includes(value.decisions[key])){const error=new Error('conversation_judge.decisions.'+key+': invalid enum');error.name='AiSummaryContractSchemaError';throw error;}
+  aiSummaryStringArray(value.issues,'conversation_judge.issues');
+  return value;
+}
+function validateAiSummarySummary(value){
+  aiSummaryExactObject(value,['conversation_result','key_facts','quotes','next_step'],'summary_generator');
+  if(typeof value.conversation_result!=='string'||typeof value.next_step!=='string'){const error=new Error('summary_generator: expected string fields');error.name='AiSummaryContractSchemaError';throw error;}
+  aiSummaryStringArray(value.key_facts,'summary_generator.key_facts');
+  aiSummaryStringArray(value.quotes,'summary_generator.quotes');
+  if(value.key_facts.length>5){const error=new Error('summary_generator.key_facts: maxItems 5');error.name='AiSummaryContractSchemaError';throw error;}
+  if(value.quotes.length>2){const error=new Error('summary_generator.quotes: maxItems 2');error.name='AiSummaryContractSchemaError';throw error;}
+  return value;
+}
+const AI_SUMMARY_CUSTOM_RESPONSE_CONTRACTS=Object.freeze({
+  facts_extractor:Object.freeze({contractId:AI_SUMMARY_FACTS_CONTRACT_ID,contractVersion:AI_SUMMARY_FACTS_CONTRACT_VERSION,schemaId:AI_SUMMARY_FACTS_SCHEMA_ID,jsonSchema:AI_SUMMARY_FACTS_JSON_SCHEMA,validate:validateAiSummaryFacts}),
+  needs_extractor:Object.freeze({contractId:AI_SUMMARY_NEEDS_CONTRACT_ID,contractVersion:AI_SUMMARY_NEEDS_CONTRACT_VERSION,schemaId:AI_SUMMARY_NEEDS_SCHEMA_ID,jsonSchema:AI_SUMMARY_NEEDS_JSON_SCHEMA,validate:validateAiSummaryNeeds}),
+  outcome_extractor:Object.freeze({contractId:AI_SUMMARY_OUTCOME_CONTRACT_ID,contractVersion:AI_SUMMARY_OUTCOME_CONTRACT_VERSION,schemaId:AI_SUMMARY_OUTCOME_SCHEMA_ID,jsonSchema:AI_SUMMARY_OUTCOME_JSON_SCHEMA,validate:validateAiSummaryOutcome}),
+  conversation_judge:Object.freeze({contractId:AI_SUMMARY_CONVERSATION_JUDGE_CONTRACT_ID,contractVersion:AI_SUMMARY_CONVERSATION_JUDGE_CONTRACT_VERSION,schemaId:AI_SUMMARY_CONVERSATION_JUDGE_SCHEMA_ID,jsonSchema:AI_SUMMARY_CONVERSATION_JUDGE_JSON_SCHEMA,validate:validateAiSummaryConversationJudge}),
+  summary_generator:Object.freeze({contractId:AI_SUMMARY_SUMMARY_CONTRACT_ID,contractVersion:AI_SUMMARY_SUMMARY_CONTRACT_VERSION,schemaId:AI_SUMMARY_SUMMARY_SCHEMA_ID,jsonSchema:AI_SUMMARY_SUMMARY_JSON_SCHEMA,validate:validateAiSummarySummary})
+});
+function aiSummaryCustomResponseContract(stage){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!stage||!['llm','check'].includes(stage.type)) return null;
+  return AI_SUMMARY_CUSTOM_RESPONSE_CONTRACTS[stage.outKey]||null;
+}
+const AI_SUMMARY_CONVERSATION_JUDGE_UPSTREAM_KEYS=Object.freeze(['facts_extractor','needs_extractor','outcome_extractor']);
+function aiSummaryConversationJudgeProvenance(ctx){
+  const expected={run_id:String(ctx&&ctx.__run_id||''),transcript_hash:String(ctx&&ctx.__transcript_hash||''),pipeline_configuration_hash:String(ctx&&ctx.__pipeline_configuration_hash||'')};
+  const sources={};const issues=[];
+  for(const key of AI_SUMMARY_CONVERSATION_JUDGE_UPSTREAM_KEYS){
+    const provenance=ctx&&ctx.__stage_provenance&&ctx.__stage_provenance[key];
+    const outputPresent=Boolean(ctx&&Object.prototype.hasOwnProperty.call(ctx,key)&&ctx[key]!==undefined);
+    const current=Boolean(outputPresent&&provenance&&provenance.run_id===expected.run_id&&provenance.transcript_hash===expected.transcript_hash&&provenance.pipeline_configuration_hash===expected.pipeline_configuration_hash);
+    sources[key]={output_present:outputPresent,current_run:current,run_id:provenance&&provenance.run_id||null,transcript_hash:provenance&&provenance.transcript_hash||null,pipeline_configuration_hash:provenance&&provenance.pipeline_configuration_hash||null};
+    if(!current) issues.push(key+': CURRENT_RUN_PROVENANCE_REQUIRED');
+  }
+  return {valid:issues.length===0,expected,sources,issues};
+}
+function aiSummarySummaryGeneratorProvenance(ctx){
+  const expected={run_id:String(ctx&&ctx.__run_id||''),transcript_hash:String(ctx&&ctx.__transcript_hash||''),pipeline_configuration_hash:String(ctx&&ctx.__pipeline_configuration_hash||'')};
+  const provenance=ctx&&ctx.__stage_provenance&&ctx.__stage_provenance.clean_conversation_store;
+  const outputPresent=Boolean(ctx&&Object.prototype.hasOwnProperty.call(ctx,'clean_conversation_store')&&ctx.clean_conversation_store!==undefined);
+  const current=Boolean(outputPresent&&provenance&&provenance.run_id===expected.run_id&&provenance.transcript_hash===expected.transcript_hash&&provenance.pipeline_configuration_hash===expected.pipeline_configuration_hash);
+  const source={output_present:outputPresent,current_run:current,run_id:provenance&&provenance.run_id||null,transcript_hash:provenance&&provenance.transcript_hash||null,pipeline_configuration_hash:provenance&&provenance.pipeline_configuration_hash||null};
+  return {valid:current,expected,sources:{clean_conversation_store:source},issues:current?[]:['clean_conversation_store: CURRENT_RUN_PROVENANCE_REQUIRED']};
+}
+function aiSummarySummaryGeneratorPromptConfigurationError(stage){
+  const prompt=String(stage&&stage.prompt||'');
+  const contextKeys=[...prompt.matchAll(/\{\{\s*ctx\.([a-zA-Z0-9_]+)/g)].map(match=>match[1]);
+  if(contextKeys.some(key=>key!=='clean_conversation_store')) return 'SUMMARY_GENERATOR_FORBIDDEN_CONTEXT_REFERENCE';
+  if(/\{\{\s*(?:transcript|__transcript)\s*\}\}/i.test(prompt)) return 'SUMMARY_GENERATOR_TRANSCRIPT_REFERENCE_FORBIDDEN';
+  if(!contextKeys.includes('clean_conversation_store')) return 'SUMMARY_GENERATOR_CLEAN_STORE_REFERENCE_REQUIRED';
+  return null;
+}
+function aiSummaryStoreCleanerStage(){
+  const contract=window.__AI_SUMMARY_10_08_STORE_CLEANER__||{};
+  return {enabled:true,type:'code',name:'Store Cleaner',outKey:'clean_conversation_store',codeFn:'aiSummaryStoreCleaner',sourceOutKey:'conversation_judge',contractId:contract.contractId||'ai_summary_10_08_clean_conversation_store',contractVersion:contract.contractVersion||'v1',schemaId:contract.schemaId||'ai_summary_10_08_clean_conversation_store_v1',stageVersion:contract.implementationVersion||'v4'};
+}
+function isAiSummaryStoreCleanerStage(stage){return Boolean(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&stage&&stage.outKey==='clean_conversation_store');}
+function ensureAiSummaryTenAugustStoreCleaner(stages,deletedOutKeys=[]){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!Array.isArray(stages)||stages.some(isAiSummaryStoreCleanerStage)||deletedOutKeys.includes('clean_conversation_store')) return false;
+  const required=['facts_extractor','needs_extractor','outcome_extractor','conversation_judge'];
+  const positions=required.map(key=>stages.findIndex(stage=>stage&&stage.outKey===key));
+  if(positions.some(index=>index<0)||positions.some((index,arrayIndex)=>arrayIndex>0&&index<=positions[arrayIndex-1])) return false;
+  stages.push({id:s(),...aiSummaryStoreCleanerStage()});
+  return true;
+}
+function ensureAiSummaryTenAugustSummaryGenerator(stages,deletedOutKeys=[]){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!Array.isArray(stages)||stages.some(stage=>stage&&stage.outKey==='summary_generator')||deletedOutKeys.includes('summary_generator')) return false;
+  const required=['facts_extractor','needs_extractor','outcome_extractor','conversation_judge','clean_conversation_store'];
+  const positions=required.map(key=>stages.findIndex(stage=>stage&&stage.outKey===key));
+  if(positions.some(index=>index<0)||positions.some((index,arrayIndex)=>arrayIndex>0&&index<=positions[arrayIndex-1])) return false;
+  const seed=window.__AI_SUMMARY_10_08_PIPELINE_CONFIG__;
+  const recoveryStage=seed&&Array.isArray(seed.stages)?seed.stages.find(stage=>stage&&stage.outKey==='summary_generator'):null;
+  if(!recoveryStage) return false;
+  stages.push({id:s(),...recoveryStage});
+  return true;
+}
+function ensureAiSummaryTenAugustSummaryJudge(stages,deletedOutKeys=[]){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!Array.isArray(stages)||stages.some(stage=>stage&&stage.outKey==='summary_judge')||deletedOutKeys.includes('summary_judge')) return false;
+  const required=['facts_extractor','needs_extractor','outcome_extractor','conversation_judge','clean_conversation_store','summary_generator'];
+  const positions=required.map(key=>stages.findIndex(stage=>stage&&stage.outKey===key));
+  if(positions.some(index=>index<0)||positions.some((index,arrayIndex)=>arrayIndex>0&&index<=positions[arrayIndex-1])) return false;
+  const recoveryStage=window.__AI_SUMMARY_10_08_SUMMARY_JUDGE_RECOVERY_V1__;
+  if(!recoveryStage) return false;
+  stages.splice(positions[positions.length-1]+1,0,{id:s(),...recoveryStage});
+  return true;
+}
+function isAiSummaryFinalizationStage(stage){
+  return Boolean(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&stage&&['summary_quality_gate','crm_summary_result'].includes(stage.outKey));
+}
+function ensureAiSummaryTenAugustFinalizationStages(stages,deletedOutKeys=[]){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!Array.isArray(stages)) return false;
+  const runtime=window.__AI_SUMMARY_10_08_FINALIZATION_V1__;
+  if(!runtime||!Array.isArray(runtime.stages)) return false;
+  const required=['facts_extractor','needs_extractor','outcome_extractor','conversation_judge','clean_conversation_store','summary_generator','summary_judge'];
+  const positions=required.map(key=>stages.findIndex(stage=>stage&&stage.outKey===key));
+  if(positions.some(index=>index<0)||positions.some((index,arrayIndex)=>arrayIndex>0&&index<=positions[arrayIndex-1])) return false;
+  let changed=false;
+  let insertionIndex=positions[positions.length-1]+1;
+  for(const recoveryStage of runtime.stages){
+    const existingIndex=stages.findIndex(stage=>stage&&stage.outKey===recoveryStage.outKey);
+    if(existingIndex>=0){insertionIndex=existingIndex+1;continue;}
+    if(deletedOutKeys.includes(recoveryStage.outKey)) continue;
+    stages.splice(insertionIndex,0,{id:s(),...recoveryStage});
+    insertionIndex+=1;changed=true;
+  }
+  return changed;
+}
+function migrateAiSummaryTenAugustRuntimeContracts(stages){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!Array.isArray(stages)) return false;
+  let migrated=false;
+  const judge=stages.find(stage=>stage&&stage.outKey==='conversation_judge');
+  if(judge&&typeof judge.prompt==='string'&&!judge.prompt.includes(AI_SUMMARY_CONVERSATION_JUDGE_SAFETY_MARKER)){
+    judge.prompt=judge.prompt.trimEnd()+AI_SUMMARY_CONVERSATION_JUDGE_SAFETY_APPENDIX;
+    migrated=true;
+  }
+  if(judge&&typeof judge.prompt==='string'&&!judge.prompt.includes(AI_SUMMARY_CONVERSATION_JUDGE_SELLER_SCOPE_MARKER)){
+    judge.prompt=judge.prompt.trimEnd()+AI_SUMMARY_CONVERSATION_JUDGE_SELLER_SCOPE_APPENDIX;
+    migrated=true;
+  }
+  if(judge&&AI_SUMMARY_CONVERSATION_JUDGE_V5&&typeof judge.prompt==='string'&&!judge.prompt.includes(AI_SUMMARY_CONVERSATION_JUDGE_V5.conversationJudgeMarker)){
+    judge.prompt=judge.prompt.trimEnd()+AI_SUMMARY_CONVERSATION_JUDGE_V5.conversationJudgeAppendix;
+    migrated=true;
+  }
+  const summaryJudge=stages.find(stage=>stage&&stage.outKey==='summary_judge');
+  if(summaryJudge&&AI_SUMMARY_CONVERSATION_JUDGE_V5&&typeof summaryJudge.prompt==='string'&&!summaryJudge.prompt.includes(AI_SUMMARY_CONVERSATION_JUDGE_V5.summaryJudgeMarker)){
+    summaryJudge.prompt=summaryJudge.prompt.trimEnd()+AI_SUMMARY_CONVERSATION_JUDGE_V5.summaryJudgeAppendix;
+    migrated=true;
+  }
+  const cleaner=stages.find(stage=>stage&&stage.outKey==='clean_conversation_store');
+  if(cleaner&&cleaner.stageVersion!=='v4'){cleaner.stageVersion='v4';migrated=true;}
+  const summary=stages.find(stage=>stage&&stage.outKey==='summary_generator');
+  if(summary){
+    const contract={contractId:AI_SUMMARY_SUMMARY_CONTRACT_ID,contractVersion:AI_SUMMARY_SUMMARY_CONTRACT_VERSION,schemaId:AI_SUMMARY_SUMMARY_SCHEMA_ID};
+    for(const [key,value] of Object.entries(contract)) if(summary[key]!==value){summary[key]=value;migrated=true;}
+  }
+  return migrated;
+}
 const TRANSCRIPTION_SUMMARY_PRODUCT_ID = 'project_transcription_summary_module';
 const IS_TRANSCRIPTION_SUMMARY_PRODUCT = PROJECT_SCOPE_ID === TRANSCRIPTION_SUMMARY_PRODUCT_ID;
 const IS_EMBEDDED_PIPELINE_RUNTIME = window.top !== window.self;
@@ -1429,7 +1784,7 @@ if(PRODUCT_NAME){
   document.title = PRODUCT_NAME + ' — AI Product Studio';
 }
 const INITIAL_PRESET = new URLSearchParams(location.search).get('preset') === 'blank' ? 'blank' : 'default';
-const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID : PIPELINE_CONFIG_STORAGE;
+const CONFIG_STORAGE_KEY = PROJECT_SCOPE_ID ? PIPELINE_CONFIG_STORAGE+'.'+PROJECT_SCOPE_ID : PIPELINE_CONFIG_STORAGE;
 // Bumped whenever a shipped default prompt/rule changes (V8.1, 2026-07-06:
 // transcript passed to step 7, budget/timeline extraction rules, Summary
 // Agent rewrite, Checker exceptions, Quality Gate hallucination override).
@@ -1499,18 +1854,40 @@ const CONFIG_STORAGE_KEY = PRODUCT_ID ? PIPELINE_CONFIG_STORAGE+'.'+PRODUCT_ID :
 const PIPELINE_VERSION = 14;
 const TRANSCRIPTION_SUMMARY_CONTRACT_VERSION='transcription_summary_v1';
 let deletedStageOutKeys = [];
+let pipelineConfigCreatedAt=null;
+let pipelineAutosaveTimer=null;
+function renderPipelineSaveState(state){
+  const el=document.getElementById('pipelineSaveState');
+  if(!el) return;
+  el.textContent=state==='saving'?'сохранение…':state==='error'?'ошибка сохранения':'сохранено';
+  el.style.color=state==='error'?'var(--bad)':state==='saving'?'var(--warn)':'var(--ok)';
+}
 function savePipelineConfig(){
-  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({
-    version:PIPELINE_VERSION,
-    deletedStageOutKeys:[...new Set(deletedStageOutKeys.filter(Boolean))],
-    stages:pipeline.map(sanitize)
-  }));
+  try{
+    const previous=localStorage.getItem(CONFIG_STORAGE_KEY);
+    if(previous) localStorage.setItem(CONFIG_STORAGE_KEY+'.previous',previous);
+    const now=new Date().toISOString();
+    pipelineConfigCreatedAt=pipelineConfigCreatedAt||now;
+    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({
+      version:PIPELINE_VERSION,
+      createdAt:pipelineConfigCreatedAt,
+      updatedAt:now,
+      deletedStageOutKeys:[...new Set(deletedStageOutKeys.filter(Boolean))],
+      stages:pipeline.map(sanitize)
+    }));
+    renderPipelineSaveState('saved');
+  }catch(error){renderPipelineSaveState('error');throw error;}
+}
+function schedulePipelineAutosave(){
+  renderPipelineSaveState('saving');
+  clearTimeout(pipelineAutosaveTimer);
+  pipelineAutosaveTimer=setTimeout(()=>{syncPipelineFromEditor();savePipelineConfig();},250);
 }
 function parsePipelineStorage(raw){
   const parsed=JSON.parse(raw);
   const stages=Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.stages) ? parsed.stages : null;
   const deleted=parsed && !Array.isArray(parsed) && Array.isArray(parsed.deletedStageOutKeys) ? parsed.deletedStageOutKeys : [];
-  return Array.isArray(stages) ? {stages, deletedStageOutKeys:deleted.filter(Boolean)} : null;
+  return Array.isArray(stages) ? {stages, deletedStageOutKeys:deleted.filter(Boolean),createdAt:parsed&&!Array.isArray(parsed)?parsed.createdAt:null,updatedAt:parsed&&!Array.isArray(parsed)?parsed.updatedAt:null} : null;
 }
 function pipelineConfigRestoreScore(key, envelope){
   const stages=envelope&&envelope.stages;
@@ -1550,10 +1927,71 @@ function restoreTranscriptionModulePipelineConfig(){
     return restored;
   }catch(e){ return null; }
 }
+function restoreApplicationAttributesPipelineConfig(){
+  if(!IS_APPLICATION_ATTRIBUTES_PROJECT) return null;
+  try{
+    const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
+    if(!seed||seed.version!==14||Number(seed.revision)<18||!Array.isArray(seed.stages)||seed.stages.length!==6) return null;
+    deletedStageOutKeys=Array.isArray(seed.deletedStageOutKeys)?seed.deletedStageOutKeys.filter(Boolean):[];
+    const restored=seed.stages.map(stage=>({id:s(),...stage}));
+    localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({
+      version:PIPELINE_VERSION,
+      restoredFrom:'built-in-ai-application-attributes-v14',
+      deletedStageOutKeys,
+      stages:restored.map(sanitize)
+    }));
+    return restored;
+  }catch(e){return null;}
+}
+function restoreAiSummaryTenAugustPipelineConfig(){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT) return null;
+  try{
+    const seed=window.__AI_SUMMARY_10_08_PIPELINE_CONFIG__;
+    if(!seed||seed.version!==14||!Array.isArray(seed.stages)||seed.stages.length!==6) return null;
+    const seedPrompt=String(seed.stages[0].prompt||'');
+    for(let i=0;i<localStorage.length;i++){
+      const key=localStorage.key(i)||'';
+      if(key===CONFIG_STORAGE_KEY||(!key.startsWith(PIPELINE_CONFIG_STORAGE+'.'))) continue;
+      const raw=localStorage.getItem(key);if(!raw) continue;
+      let envelope=null;try{envelope=parsePipelineStorage(raw);}catch(error){continue;}
+      if(!envelope||!envelope.stages.some(stage=>stage&&stage.outKey==='facts_extractor'&&stage.prompt===seedPrompt)) continue;
+      deletedStageOutKeys=envelope.deletedStageOutKeys;
+      pipelineConfigCreatedAt=envelope.createdAt||new Date().toISOString();
+      const restored=envelope.stages.map(stage=>({id:s(),...stage}));
+      migrateAiSummaryTenAugustTokenBudget(restored);
+      ensureAiSummaryTenAugustStoreCleaner(restored,deletedStageOutKeys);
+      ensureAiSummaryTenAugustSummaryGenerator(restored,deletedStageOutKeys);
+      ensureAiSummaryTenAugustSummaryJudge(restored,deletedStageOutKeys);
+      ensureAiSummaryTenAugustFinalizationStages(restored,deletedStageOutKeys);
+      migrateAiSummaryTenAugustRuntimeContracts(restored);
+      localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({version:PIPELINE_VERSION,createdAt:pipelineConfigCreatedAt,updatedAt:new Date().toISOString(),restoredFrom:key,deletedStageOutKeys,stages:restored.map(sanitize)}));
+      return restored;
+    }
+    deletedStageOutKeys=[];
+    pipelineConfigCreatedAt=new Date().toISOString();
+    const restored=seed.stages.map(stage=>({id:s(),...stage}));
+    ensureAiSummaryTenAugustSummaryJudge(restored,deletedStageOutKeys);
+    ensureAiSummaryTenAugustFinalizationStages(restored,deletedStageOutKeys);
+    migrateAiSummaryTenAugustRuntimeContracts(restored);
+    localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({version:PIPELINE_VERSION,createdAt:pipelineConfigCreatedAt,updatedAt:pipelineConfigCreatedAt,restoredFrom:'built-in-ai-summary-10-08-v1',deletedStageOutKeys,stages:restored.map(sanitize)}));
+    return restored;
+  }catch(error){return null;}
+}
+function migrateAiSummaryTenAugustTokenBudget(stages){
+  if(!IS_AI_SUMMARY_TEN_AUGUST_PROJECT||!Array.isArray(stages)) return false;
+  let migrated=false;
+  stages.forEach(stage=>{
+    if(stage&&stage.outKey==='facts_extractor'&&Number(stage.maxTokens)===AI_SUMMARY_FACTS_LEGACY_MAX_TOKENS){
+      stage.maxTokens=AI_SUMMARY_FACTS_DEFAULT_MAX_TOKENS;
+      migrated=true;
+    }
+  });
+  return migrated;
+}
 function loadPipelineConfig(){
   try{
     const raw=localStorage.getItem(CONFIG_STORAGE_KEY);
-    if(!raw) return restoreTranscriptionModulePipelineConfig();
+    if(!raw) return restoreApplicationAttributesPipelineConfig()||restoreAiSummaryTenAugustPipelineConfig()||restoreTranscriptionModulePipelineConfig();
     // User-edited configs are authoritative. Earlier builds discarded a
     // saved stage list when `PIPELINE_VERSION` changed, which protected
     // shipped defaults but also erased real user work after a deploy. From
@@ -1561,10 +1999,33 @@ function loadPipelineConfig(){
     // is loaded and then re-saved under the current version on the next save
     // or run. Legacy bare-array exports are accepted for the same reason.
     const envelope=parsePipelineStorage(raw);
-    if(!envelope) return restoreTranscriptionModulePipelineConfig();
+    if(!envelope) return restoreApplicationAttributesPipelineConfig()||restoreAiSummaryTenAugustPipelineConfig()||restoreTranscriptionModulePipelineConfig();
     deletedStageOutKeys=envelope.deletedStageOutKeys;
-    return migratePipelineConfig(envelope.stages.map(x=>({id:s(), ...x})), deletedStageOutKeys);
-  }catch(e){ return null; }
+    pipelineConfigCreatedAt=envelope.createdAt||new Date().toISOString();
+    const restored=envelope.stages.map(x=>({id:s(), ...x}));
+    const aiSummaryTokenBudgetMigrated=migrateAiSummaryTenAugustTokenBudget(restored);
+    const aiSummaryStoreCleanerAdded=ensureAiSummaryTenAugustStoreCleaner(restored,deletedStageOutKeys);
+    const aiSummarySummaryGeneratorAdded=ensureAiSummaryTenAugustSummaryGenerator(restored,deletedStageOutKeys);
+    const aiSummarySummaryJudgeAdded=ensureAiSummaryTenAugustSummaryJudge(restored,deletedStageOutKeys);
+    const aiSummaryFinalizationAdded=ensureAiSummaryTenAugustFinalizationStages(restored,deletedStageOutKeys);
+    const aiSummaryRuntimeContractsMigrated=migrateAiSummaryTenAugustRuntimeContracts(restored);
+    if(aiSummaryTokenBudgetMigrated||aiSummaryStoreCleanerAdded||aiSummarySummaryGeneratorAdded||aiSummarySummaryJudgeAdded||aiSummaryFinalizationAdded||aiSummaryRuntimeContractsMigrated){
+      localStorage.setItem(CONFIG_STORAGE_KEY+'.previous',raw);
+      localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({
+        version:PIPELINE_VERSION,
+        createdAt:pipelineConfigCreatedAt,
+        updatedAt:new Date().toISOString(),
+        restoredFrom:aiSummaryFinalizationAdded?'ai-summary-10-08-finalization-v1':aiSummarySummaryJudgeAdded?'ai-summary-10-08-summary-judge-recovery-v1':aiSummarySummaryGeneratorAdded?'ai-summary-10-08-summary-generator-v1':aiSummaryRuntimeContractsMigrated?'ai-summary-10-08-runtime-contracts-v2':aiSummaryStoreCleanerAdded?'ai-summary-10-08-store-cleaner-v1':'ai-summary-10-08-token-budget-v2',
+        deletedStageOutKeys,
+        stages:restored.map(sanitize)
+      }));
+    }
+    return migratePipelineConfig(restored, deletedStageOutKeys);
+  }catch(e){
+    const raw=localStorage.getItem(CONFIG_STORAGE_KEY);
+    if(raw) localStorage.setItem(CONFIG_STORAGE_KEY+'.invalid-backup',raw);
+    return restoreApplicationAttributesPipelineConfig()||restoreAiSummaryTenAugustPipelineConfig()||restoreTranscriptionModulePipelineConfig();
+  }
 }
 
 function blankPipeline(){
@@ -1627,6 +2088,29 @@ function insertMissingStageBefore(stages, beforeOutKey, newOutKey, factory, dele
 }
 function migratePipelineConfig(stages, deletedOutKeys){
   if(!Array.isArray(stages) || !stages.length) return stages;
+  // This recovered custom product owns its stage list completely. Generic
+  // Summary-module migrations must never inject or rewrite its user stages.
+  if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT) return stages;
+  // The recovered application-attributes product is an independent
+  // nine-stage pipeline. Summary-v3 structural migrations must never append
+  // Summary judges or Conversation Store stages to this product.
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT){
+    // Revision 18 physically replaces three legacy Judges and the Merger
+    // with one strict Attributes Judge. Preserve the three saved Extractor
+    // configurations verbatim, but always migrate the architecture itself
+    // to the six current stages so a stale Local Storage snapshot cannot
+    // reactivate legacy runtime outputs.
+    const latest=(window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__?.stages||[]);
+    deletedStageOutKeys=['interest_judge','funding_source_judge','purchase_term_judge','attributes_merger'];
+    const savedByKey=Object.fromEntries(stages.filter(Boolean).map(stage=>[stage.outKey,stage]));
+    return latest.map(stage=>{
+      const saved=savedByKey[stage.outKey];
+      if(['interest_extractor','funding_source_extractor','purchase_term_extractor'].includes(stage.outKey)&&saved){
+        return {...stage,...saved,id:saved.id||s(),enabled:true};
+      }
+      return {...stage,id:saved?.id||s(),enabled:true};
+    });
+  }
 
   let result = stages;
   if(!hasSummaryQualityArchitecture(result, deletedOutKeys)){
@@ -2248,6 +2732,10 @@ function decisionToScore(decision){
 function stageScoreFromOutput(stage, rep){
   const out=rep.output||{};
   if(isSummaryNewStage(stage)) return null;
+  if(isAiSummaryFinalizationStage(stage)){
+    const value=stage.outKey==='summary_quality_gate'?out.quality_score:out.quality&&out.quality.quality_score;
+    return typeof value==='number'&&Number.isFinite(value)?value:null;
+  }
   if(stage&&stage.codeFn==='summaryQualityGate'){
     return typeof out.summary_quality_score==='number'&&Number.isFinite(out.summary_quality_score)
       ? out.summary_quality_score
@@ -2373,6 +2861,59 @@ function buildStageMeta(stage, rep){
 
 function stageContextAudit(stage,ctx){
   const key=String(stage&&stage.outKey||'');
+  if(isAiSummaryFinalizationStage(stage)){
+    const required=key==='summary_quality_gate'?['summary_judge']:['summary_generator','summary_quality_gate'];
+    const current={run_id:String(ctx&&ctx.__run_id||''),transcript_hash:String(ctx&&ctx.__transcript_hash||''),pipeline_configuration_hash:String(ctx&&ctx.__pipeline_configuration_hash||'')};
+    const upstream={};const resolved={};
+    for(const source of required){
+      const provenance=ctx&&ctx.__stage_provenance&&ctx.__stage_provenance[source];
+      upstream[source]=provenance||null;
+      resolved[source]=Boolean(ctx&&Object.prototype.hasOwnProperty.call(ctx,source)&&provenance&&provenance.run_id===current.run_id&&provenance.transcript_hash===current.transcript_hash&&provenance.pipeline_configuration_hash===current.pipeline_configuration_hash);
+    }
+    return {required_context_keys:required,optional_context_keys:[],resolved_context_keys:resolved,...current,current_run_provenance_valid:required.every(source=>resolved[source]),upstream_provenance:upstream};
+  }
+  if(isAiSummaryStoreCleanerStage(stage)){
+    const provenance=ctx&&ctx.__stage_provenance&&ctx.__stage_provenance.conversation_judge;
+    const current=Boolean(ctx&&ctx.conversation_judge&&provenance&&provenance.run_id===ctx.__run_id&&provenance.transcript_hash===ctx.__transcript_hash&&provenance.pipeline_configuration_hash===ctx.__pipeline_configuration_hash);
+    return {required_context_keys:['conversation_judge'],optional_context_keys:[],resolved_context_keys:{conversation_judge:current},run_id:String(ctx&&ctx.__run_id||''),transcript_hash:String(ctx&&ctx.__transcript_hash||''),pipeline_configuration_hash:String(ctx&&ctx.__pipeline_configuration_hash||''),current_run_provenance_valid:current,upstream_provenance:{conversation_judge:provenance||null}};
+  }
+  if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&key==='summary_generator'){
+    const provenance=aiSummarySummaryGeneratorProvenance(ctx);
+    return {required_context_keys:['clean_conversation_store'],optional_context_keys:[],resolved_context_keys:{clean_conversation_store:provenance.valid},run_id:provenance.expected.run_id,transcript_hash:provenance.expected.transcript_hash,pipeline_configuration_hash:provenance.expected.pipeline_configuration_hash,current_run_provenance_valid:provenance.valid,upstream_provenance:provenance.sources,issues:provenance.issues};
+  }
+  if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&key==='conversation_judge'){
+    const provenance=aiSummaryConversationJudgeProvenance(ctx);
+    return {
+      required_context_keys:['transcript',...AI_SUMMARY_CONVERSATION_JUDGE_UPSTREAM_KEYS],
+      optional_context_keys:[],
+      resolved_context_keys:{transcript:Boolean(String(transcriptText(ctx)||'').trim()),...Object.fromEntries(AI_SUMMARY_CONVERSATION_JUDGE_UPSTREAM_KEYS.map(item=>[item,Boolean(provenance.sources[item]&&provenance.sources[item].current_run)]))},
+      run_id:provenance.expected.run_id,
+      transcript_hash:provenance.expected.transcript_hash,
+      pipeline_configuration_hash:provenance.expected.pipeline_configuration_hash,
+      current_run_provenance_valid:provenance.valid,
+      upstream_provenance:provenance.sources,
+      issues:provenance.issues
+    };
+  }
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT){
+    const prompt=String(stage&&stage.prompt||'');
+    const required=[...new Set([...(key==='attributes_judge'?['interest_extractor','funding_source_extractor','purchase_term_extractor']:[]),...[...prompt.matchAll(/\{\{\s*ctx\.([a-zA-Z0-9_]+)/g)].map(match=>match[1])])];
+    const transcriptRequired=/\{\{\s*transcript\s*\}\}/.test(prompt);
+    const contextKeys=transcriptRequired?['transcript',...required]:required;
+    return {
+      required_context_keys:contextKeys,
+      optional_context_keys:[],
+      resolved_context_keys:Object.fromEntries(contextKeys.map(item=>[
+        item,
+        item==='transcript'
+          ? Boolean(String(transcriptText(ctx)||'').trim())
+          : applicationAttributesContextIsCurrent(ctx,item)
+      ])),
+      run_id:String(ctx&&ctx.__run_id||''),
+      transcript_hash:String(ctx&&ctx.__transcript_hash||''),
+      pipeline_configuration_hash:String(ctx&&ctx.__pipeline_configuration_hash||'')
+    };
+  }
   const groups={
     facts:['transcript'],needs:['transcript','facts'],outcome:['transcript','facts'],
     conversation_store:['facts','needs','outcome'],summary:['conversation','transcript'],
@@ -2453,9 +2994,24 @@ function uniqTextList(list){
 
 function ctxValue(ctx, key){
   if(!ctx) return undefined;
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT&&Object.prototype.hasOwnProperty.call(ctx,key)){
+    return applicationAttributesContextIsCurrent(ctx,key)?ctx[key]:undefined;
+  }
   if(key==='context_utility_check') return ctx.agent_utility_check || ctx.context_check || ctx.context_utility_check;
   if(key==='summary_quality_gate') return currentSummaryGate(ctx);
   return ctx[key];
+}
+
+function applicationAttributesContextIsCurrent(ctx,key){
+  if(!ctx||!Object.prototype.hasOwnProperty.call(ctx,key)) return false;
+  if(String(key).startsWith('__')||key==='stored_files'||key==='transcript') return true;
+  const provenance=ctx.__stage_provenance&&ctx.__stage_provenance[key];
+  return Boolean(
+    provenance
+    &&provenance.run_id===ctx.__run_id
+    &&provenance.transcript_hash===ctx.__transcript_hash
+    &&provenance.pipeline_configuration_hash===ctx.__pipeline_configuration_hash
+  );
 }
 
 function transcriptText(ctx){
@@ -2773,6 +3329,74 @@ function guardEmptyExtraction(stage, output, ctx){
     critical_errors:[...toList(output.critical_errors), ...issues],
     issues:[...toList(output.issues), ...issues]
   };
+}
+
+function aiSummaryCustomPromptAudit(prompt,ctx){
+  const prepared=String(prompt||'');
+  const transcript=String(transcriptText(ctx)||'').trim();
+  const probe=transcript.slice(0,Math.min(240,transcript.length)).trim();
+  const injected=Boolean(probe&&prepared.includes(probe));
+  return {prompt:prepared,transcript,transcriptPresent:Boolean(transcript),transcriptInjected:injected,resolvedPromptContainsTranscript:injected,transcriptDelivery:injected?'prompt':'not_sent',transcriptSentToModel:injected};
+}
+
+function runAiSummaryStoreCleanerStage(stage,ctx,t0){
+  const cleaner=window.__AI_SUMMARY_10_08_STORE_CLEANER__;
+  const provenance=ctx&&ctx.__stage_provenance&&ctx.__stage_provenance.conversation_judge;
+  const current={run_id:String(ctx&&ctx.__run_id||''),transcript_hash:String(ctx&&ctx.__transcript_hash||''),pipeline_configuration_hash:String(ctx&&ctx.__pipeline_configuration_hash||'')};
+  const cleaned=cleaner&&typeof cleaner.clean==='function'
+    ? cleaner.clean({conversationJudge:ctx&&ctx.conversation_judge,provenance,current})
+    : {output:null,provenanceValidation:{valid:false,source:'conversation_judge',issues:['STORE_CLEANER_RUNTIME_UNAVAILABLE']}};
+  const output=cleaned.output||{
+    facts:[],quotes:[],needs:{primary_need:'',requirements:[],preferences:[],objections:[],unresolved_questions:[]},outcome:{call_result:'',agreement:'',next_step:'',responsible_party:'',deadline:'',channel:''},cleaning:{removed_items:[],deduplicated_items:[],normalizations:[],warnings:['STORE_CLEANER_RUNTIME_UNAVAILABLE']},source_decisions:{facts:'technical_error',needs:'technical_error',outcome:'technical_error'},status:'TECHNICAL_ERROR'
+  };
+  const technical=output.status==='TECHNICAL_ERROR',partial=output.status==='PARTIAL_READY';
+  const ms=Math.round(performance.now()-t0);
+  const schemaId=cleaner&&cleaner.schemaId||stage.schemaId||'ai_summary_10_08_clean_conversation_store_v1';
+  const contractId=cleaner&&cleaner.contractId||stage.contractId||'ai_summary_10_08_clean_conversation_store';
+  const rep={
+    output,raw:null,parseErr:technical?cleaned.provenanceValidation.issues.join('; '):null,ms,tokens:0,cost:0,
+    provider:null,requested_provider:null,actual_model:null,requested_model:null,model:null,model_fallback:false,
+    legacy_parser_used:false,parser_fallback_used:false,text_fallback_used:false,repair_fallback_used:false,
+    provenance_validation:cleaned.provenanceValidation,isCode:true,execution_type:'deterministic',llm_call:'none',
+    stage_version:stage.stageVersion||'v1',prompt_id:null,prompt_version:null,prompt_hash:null,resolved_prompt:null,timestamp:new Date().toISOString(),
+    contract_audit:{status:technical?'INVALID_INPUT':'VALID',contract_id:contractId,prompt_contract_id:contractId,structured_output_requested:false,structured_output_applied:false,response_schema_id:schemaId,parser_schema_id:schemaId,contract_version:cleaner&&cleaner.contractVersion||stage.contractVersion||'v1',all_contracts_match:true,parse_status:'NOT_REQUIRED',schema_status:'VALID',repair_attempted:false,repair_result:'NOT_ATTEMPTED',warnings:[]},
+    status:technical?'bad':partial?'warn':'ok',
+    metrics:[['Type','Deterministic Contract / code'],['LLM call','none'],['Input source','conversation_judge'],['Output','clean_conversation_store'],['Status',output.status],['Tokens',0],['Cost','$0.0000'],['Duration',ms+' мс']]
+  };
+  rep.meta=buildStageMeta(stage,rep);
+  return rep;
+}
+
+function runAiSummaryFinalizationStage(stage,ctx,t0){
+  const runtime=window.__AI_SUMMARY_10_08_FINALIZATION_V1__;
+  const isGate=stage.outKey==='summary_quality_gate';
+  const contract=isGate?runtime&&runtime.contracts.gate:runtime&&runtime.contracts.crm;
+  const output=runtime&&(isGate?runtime.runSummaryQualityGate(ctx):runtime.runCrmResult(ctx));
+  const outputSchemaValid=Boolean(runtime&&output&&(isGate?runtime.validateSummaryQualityGate(output):runtime.validateCrmResult(output)));
+  const provenanceCodes=isGate
+    ? toList(output&&output.technical_errors).filter(code=>/STALE_|PROVENANCE/.test(code))
+    : toList(output&&output.errors).filter(code=>/STALE_|PROVENANCE/.test(code));
+  const inputSchemaValid=isGate
+    ? !toList(output&&output.technical_errors).some(code=>/MISSING|SCHEMA_INVALID|PARSE_FAILED|STRUCTURED_OUTPUT_INVALID|SCORE_MISMATCH/.test(code))
+    : !toList(output&&output.errors).some(code=>/MISSING|SCHEMA_INVALID/.test(code));
+  const decisionReasonCodes=isGate
+    ? [...toList(output&&output.technical_errors),...toList(output&&output.failed_criteria),...toList(output&&output.warnings)]
+    : [...toList(output&&output.errors),...toList(output&&output.warnings),String(output&&output.crm_action||'')];
+  const businessStatus=isGate?String(output&&output.gate_status||'TECHNICAL_ERROR'):String(output&&output.pipeline_status||'TECHNICAL_ERROR');
+  const status=['WARNING','PARTIAL_READY'].includes(businessStatus)?'warn':['BLOCKED','TECHNICAL_ERROR'].includes(businessStatus)?'attn':'ok';
+  const ms=Math.round(performance.now()-t0);
+  const rep={
+    output,raw:null,parseErr:null,ms,tokens:0,cost:0,provider:null,requested_provider:null,actual_model:null,requested_model:null,model:null,model_fallback:false,
+    legacy_parser_used:false,parser_fallback_used:false,text_fallback_used:false,repair_fallback_used:false,
+    isCode:true,execution_type:'deterministic',stage_type:'code',llm_call:false,execution_status:'SUCCESS',
+    current_run_provenance_valid:provenanceCodes.length===0,input_schema_valid:inputSchemaValid,output_schema_valid:outputSchemaValid,decision_reason_codes:decisionReasonCodes,
+    stage_version:stage.stageVersion||'v1',prompt_id:null,prompt_version:null,prompt_hash:null,resolved_prompt:null,timestamp:new Date().toISOString(),
+    contract_audit:{status:outputSchemaValid?'VALID':'INVALID_OUTPUT',contract_id:contract&&contract.contractId||stage.contractId,prompt_contract_id:contract&&contract.contractId||stage.contractId,structured_output_requested:false,structured_output_applied:false,response_schema_id:contract&&contract.schemaId||stage.schemaId,parser_schema_id:contract&&contract.schemaId||stage.schemaId,contract_version:contract&&contract.contractVersion||stage.contractVersion||'v1',all_contracts_match:true,parse_status:'NOT_REQUIRED',schema_status:outputSchemaValid?'VALID':'INVALID',repair_attempted:false,repair_result:'NOT_ATTEMPTED',warnings:[]},
+    status,
+    metrics:[['Type','Deterministic Contract / code'],['LLM call','none'],['Status',businessStatus],['Tokens',0],['Cost','$0.0000'],['Duration',ms+' мс']]
+  };
+  rep.meta=buildStageMeta(stage,rep);
+  return rep;
 }
 
 function ensureModuleTranscriptPrompt(stage, prompt, ctx){
@@ -6989,6 +7613,27 @@ async function callOpenAI(prompt, model, temperature=0.2, maxTokens=2000, respon
 
 function mockPipelineResponse(prompt){
   const source=String(prompt||'');
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT){
+    const fundingFault=source.includes('[FAULT_FUNDING_EXTRACTOR]')||source.includes('"decision": "technical_error"')||source.includes('"funding_source": "technical_error"');
+    if(source.startsWith('Ты определяешь только атрибут заявки «Интересует»')) return {value:['Новостройки'],evidence:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»']};
+    if(source.startsWith('Ты определяешь только атрибут заявки «Источник средств»')) return {value:'ипотека в процессе',evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.'};
+    if(source.startsWith('Ты определяешь только атрибут заявки «Срок покупки»')) return fundingFault?{value:'не определено',evidence:''}:{value:'2–3 месяца',evidence:'Хотелось бы в ближайшие два-три месяца определиться.'};
+    if(source.startsWith('Ты — единый независимый Attributes Judge')){
+      const technical=attribute=>source.includes('"'+attribute+'":{"status":"technical_error"');
+      return {
+        attributes:{interest:technical('interest')?null:['Новостройки'],funding_source:technical('funding_source')?null:'ипотека в процессе',purchase_term:technical('purchase_term')?null:(fundingFault?'не определено':'2–3 месяца')},
+        attribute_statuses:{interest:technical('interest')?'technical_error':'ready',funding_source:technical('funding_source')?'technical_error':'ready',purchase_term:technical('purchase_term')?'technical_error':'ready'},
+        decisions:{interest:technical('interest')?'technical_error':'approve',funding_source:technical('funding_source')?'technical_error':'approve',purchase_term:technical('purchase_term')?'technical_error':'approve'},
+        evidence:{interest:technical('interest')?[]:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:technical('funding_source')?'':'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:technical('purchase_term')?'':(fundingFault?'':'Хотелось бы в ближайшие два-три месяца определиться.')},
+        reason_codes:{interest:technical('interest')?['technical_input_error']:['direct_confirmation'],funding_source:technical('funding_source')?['technical_input_error']:['mortgage_in_process_confirmed'],purchase_term:technical('purchase_term')?['technical_input_error']:[fundingFault?'no_confirmed_purchase_term':'purchase_2_3_months']}
+      };
+    }
+    if(source.startsWith('Ты — независимый проверщик атрибута заявки «Интересует»')) return {decision:'approve',approved_values:['Новостройки'],rejected_values:[],added_values:[],evidence:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],reason_codes:['direct_confirmation']};
+    if(source.startsWith('Ты — независимый проверщик атрибута заявки «Источник средств»')) return {decision:'approve',approved_value:'ипотека в процессе',rejected_value:null,evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.',reason_codes:['mortgage_in_process_confirmed']};
+    if(source.startsWith('Ты — независимый проверщик атрибута заявки «Срок покупки»')) return fundingFault?{decision:'approve',approved_value:'не определено',rejected_value:null,evidence:'',reason_codes:['no_confirmed_purchase_term']}:{decision:'approve',approved_value:'2–3 месяца',rejected_value:null,evidence:'Хотелось бы в ближайшие два-три месяца определиться.',reason_codes:['purchase_2_3_months']};
+    if(source.startsWith('Ты объединяешь результаты трёх независимых Judge')) return fundingFault?{attributes:{interest:['Новостройки'],funding_source:null,purchase_term:'не определено'},attribute_statuses:{interest:'ready',funding_source:'technical_error',purchase_term:'ready'},evidence:{interest:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:'',purchase_term:''},source_decisions:{interest:'approve',funding_source:'technical_error',purchase_term:'approve'}}:{attributes:{interest:['Новостройки'],funding_source:'ипотека в процессе',purchase_term:'2–3 месяца'},attribute_statuses:{interest:'ready',funding_source:'ready',purchase_term:'ready'},evidence:{interest:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:'Хотелось бы в ближайшие два-три месяца определиться.'},source_decisions:{interest:'approve',funding_source:'approve',purchase_term:'approve'}};
+    if(source.startsWith('Ты — Quality Gate атрибутов заявки')) return fundingFault?{decisions:{interest:'AUTO_SAVE',funding_source:'TECHNICAL_ERROR',purchase_term:'SAVE_UNDETERMINED'},values_for_save:{interest:['Новостройки'],funding_source:null,purchase_term:'не определено'},blocked_attributes:[],technical_errors:['funding_source'],gate_status:'PARTIAL_READY'}:{decisions:{interest:'AUTO_SAVE',funding_source:'AUTO_SAVE',purchase_term:'AUTO_SAVE'},values_for_save:{interest:['Новостройки'],funding_source:'ипотека в процессе',purchase_term:'2–3 месяца'},blocked_attributes:[],technical_errors:[],gate_status:'READY'};
+  }
   const fact=(id,category,name,value,normalized_value,speaker,evidence)=>({id,category,name,value,normalized_value,speaker,evidence,confidence:.99,verification_status:'pending'});
   const facts=[
     fact('fact_1','client_intent','цель обращения','поиск участка','поиск участка','Клиент','Слушайте, по поводу участка звоню вам.'),
@@ -7070,16 +7715,27 @@ async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000, resp
   const apiKey=loadAiTunnelKey();
   if(!apiKey) throw new Error('Не задан API-ключ AI Tunnel — задайте его в разделе «Настройки».');
   const baseUrl=loadAiTunnelBaseUrl().replace(/\/+$/,'');
+  const requestedOutputTokenBudget=Math.max(1,Math.round(Number(maxTokens)||2000));
+  const outputTokenParameter=OPENAI_REASONING_MODEL_RE.test(String(model||''))?'max_completion_tokens':'max_tokens';
   const request=async format=>{
     const response=await fetch(baseUrl+'/chat/completions',{
       method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
-      body:JSON.stringify({model,messages:[{role:'user',content:prompt}],...openAiCompletionParams(model,temperature,maxTokens),...(format?{response_format:format}:{})})
+      body:JSON.stringify({model,messages:[{role:'user',content:prompt}],...openAiCompletionParams(model,temperature,requestedOutputTokenBudget),...(format?{response_format:format}:{})})
     });
     return {response,data:await response.json().catch(()=>({}))};
   };
   let {response:res,data}=await request(responseFormat);
   const firstDetail=(data&&data.error&&data.error.message)||'';
   let structuredOutputApplied=Boolean(responseFormat);
+  const applicationAttributesStructuredContract=Boolean(IS_APPLICATION_ATTRIBUTES_PROJECT&&responseFormat&&String(responseFormat.json_schema&&responseFormat.json_schema.name||'').startsWith('application_'));
+  const aiSummaryCustomStructuredContract=Boolean(
+    IS_AI_SUMMARY_TEN_AUGUST_PROJECT
+    &&responseFormat
+    &&Object.values(AI_SUMMARY_CUSTOM_RESPONSE_CONTRACTS).some(contract=>contract.schemaId===String(responseFormat.json_schema&&responseFormat.json_schema.name||''))
+  );
+  if((applicationAttributesStructuredContract||aiSummaryCustomStructuredContract)&&!res.ok&&[400,422].includes(res.status)){
+    throw new Error('AI Tunnel API '+res.status+(firstDetail?': '+firstDetail:'')+' · STRUCTURED_OUTPUT_REQUIRED');
+  }
   if(responseFormat&&!res.ok&&[400,422].includes(res.status)&&/(response.?format|json.?schema|structured|unsupported|not supported)/i.test(firstDetail)){
     ({response:res,data}=await request(null));structuredOutputApplied=false;
   }
@@ -7090,7 +7746,7 @@ async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000, resp
   const text=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
   const tokens=(data.usage&&data.usage.total_tokens)||0;
   const finishReason=data.choices&&data.choices[0]&&data.choices[0].finish_reason;
-  return {text,tokens,finishReason,structuredOutputApplied};
+  return {text,tokens,finishReason,structuredOutputApplied,requestedOutputTokenBudget,outputTokenParameter};
 }
 
 // A *configured* key isn't the same as a *working* one -- an
@@ -7118,8 +7774,11 @@ async function callModel(prompt, model, providerOverride, temperature=0.2, maxTo
     return {...r,actualModel:r.resolvedModel||model,actualProvider:'Anthropic Direct'};
   }
   if(selectedProvider==='mock'){
+    if(IS_APPLICATION_ATTRIBUTES_PROJECT&&String(prompt||'').startsWith('Ты определяешь только атрибут заявки «Источник средств»')&&String(prompt||'').includes('[FAULT_FUNDING_EXTRACTOR]')){
+      return {text:'',tokens:600,finishReason:'length',actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider'};
+    }
     const text=JSON.stringify(mockPipelineResponse(prompt));
-    return {text,tokens:Math.max(1,Math.round(text.length/4)),actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider'};
+    return {text,tokens:Math.max(1,Math.round(text.length/4)),actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider',structuredOutputApplied:Boolean(responseFormat)};
   }
   const vendor = MODEL_VENDOR[model] || 'anthropic';
   if(vendor==='openai'){
@@ -12382,10 +13041,586 @@ ${JSON.stringify(ctx.conversation_store)}${definition.criterion==='completeness'
   rep.meta=buildStageMeta(stage,rep);return rep;
 }
 
+const APPLICATION_ATTRIBUTE_KEYS=Object.freeze(['interest','funding_source','purchase_term']);
+const APPLICATION_ATTRIBUTE_DECISIONS=Object.freeze(['AUTO_SAVE','SAVE_UNDETERMINED','DO_NOT_UPDATE','TECHNICAL_ERROR']);
+const APPLICATION_INTEREST_VALUES=Object.freeze(['Новостройки','Ипотека','Инвестиции в регионах','Безопасность сделок','Юрсопровождение','Строительство']);
+const APPLICATION_FUNDING_VALUES=Object.freeze(['наличные / депозит','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено']);
+const APPLICATION_PURCHASE_TERM_VALUES=Object.freeze(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
+const APPLICATION_ATTRIBUTE_EXTRACTOR_KEYS=Object.freeze(['interest_extractor','funding_source_extractor','purchase_term_extractor']);
+const APPLICATION_ATTRIBUTE_JUDGE_SOURCES=Object.freeze({interest_judge:'interest_extractor',funding_source_judge:'funding_source_extractor',purchase_term_judge:'purchase_term_extractor'});
+const APPLICATION_ATTRIBUTES_JUDGE_KEY='attributes_judge';
+const APPLICATION_ATTRIBUTES_JUDGE_DECISIONS=Object.freeze(['approve','correct','reject','technical_error']);
+const APPLICATION_ATTRIBUTES_JUDGE_STATUSES=Object.freeze(['ready','technical_error','invalid_input']);
+const APPLICATION_INTEREST_REASON_CODES=Object.freeze(['direct_confirmation','soft_confirmation','newbuild_from_context','explicit_rejection','mortgage_only_as_funding','ready_house_not_construction','missing_evidence','conflicting_statements','ambiguous_context','added_missing_value','no_confirmed_interest','technical_input_error']);
+const APPLICATION_FUNDING_REASON_CODES=Object.freeze(['cash_or_deposit_confirmed','mortgage_approved_confirmed','mortgage_in_process_confirmed','property_sale_dependency','cash_payment_not_funding_source','mixed_funding_priority','conflicting_statements','missing_evidence','unsupported_value','insufficient_information','no_confirmed_funding_source','technical_input_error']);
+const APPLICATION_PURCHASE_REASON_CODES=Object.freeze(['purchase_within_1_month','purchase_2_3_months','purchase_3_6_months','purchase_over_6_months','derived_from_linked_event','viewing_is_not_purchase','callback_is_not_purchase','handover_is_not_purchase','bank_decision_is_not_purchase','missing_evidence','insufficient_information','no_confirmed_purchase_term','technical_input_error']);
+const APPLICATION_ATTRIBUTE_EXTRACTOR_SCHEMAS=Object.freeze({
+  interest_extractor:{type:'object',additionalProperties:false,required:['value','evidence'],properties:{value:{type:'array',items:{type:'string',enum:[...APPLICATION_INTEREST_VALUES]}},evidence:{type:'array',items:{type:'string'}}}},
+  funding_source_extractor:{type:'object',additionalProperties:false,required:['value','evidence'],properties:{value:{type:'string',enum:[...APPLICATION_FUNDING_VALUES]},evidence:{type:'string'}}},
+  purchase_term_extractor:{type:'object',additionalProperties:false,required:['value','evidence'],properties:{value:{type:'string',enum:[...APPLICATION_PURCHASE_TERM_VALUES]},evidence:{type:'string'}}}
+});
+const APPLICATION_ATTRIBUTES_JUDGE_SCHEMA=Object.freeze({
+  type:'object',additionalProperties:false,required:['attributes','attribute_statuses','decisions','evidence','reason_codes'],properties:{
+    attributes:{type:'object',additionalProperties:false,required:['interest','funding_source','purchase_term'],properties:{
+      interest:{type:['array','null'],items:{type:'string',enum:[...APPLICATION_INTEREST_VALUES]}},
+      funding_source:{type:['string','null'],enum:[...APPLICATION_FUNDING_VALUES,null]},
+      purchase_term:{type:['string','null'],enum:[...APPLICATION_PURCHASE_TERM_VALUES,null]}
+    }},
+    attribute_statuses:{type:'object',additionalProperties:false,required:['interest','funding_source','purchase_term'],properties:Object.fromEntries(APPLICATION_ATTRIBUTE_KEYS.map(key=>[key,{type:'string',enum:[...APPLICATION_ATTRIBUTES_JUDGE_STATUSES]}]))},
+    decisions:{type:'object',additionalProperties:false,required:['interest','funding_source','purchase_term'],properties:Object.fromEntries(APPLICATION_ATTRIBUTE_KEYS.map(key=>[key,{type:'string',enum:[...APPLICATION_ATTRIBUTES_JUDGE_DECISIONS]}]))},
+    evidence:{type:'object',additionalProperties:false,required:['interest','funding_source','purchase_term'],properties:{interest:{type:'array',items:{type:'string'}},funding_source:{type:'string'},purchase_term:{type:'string'}}},
+    reason_codes:{type:'object',additionalProperties:false,required:['interest','funding_source','purchase_term'],properties:{
+      interest:{type:'array',items:{type:'string',enum:[...APPLICATION_INTEREST_REASON_CODES]}},
+      funding_source:{type:'array',items:{type:'string',enum:[...APPLICATION_FUNDING_REASON_CODES]}},
+      purchase_term:{type:'array',items:{type:'string',enum:[...APPLICATION_PURCHASE_REASON_CODES]}}
+    }}
+  }
+});
+
+function applicationAttributesExtractorKey(stage){
+  const key=String(stage&&stage.outKey||'');
+  return IS_APPLICATION_ATTRIBUTES_PROJECT&&APPLICATION_ATTRIBUTE_EXTRACTOR_KEYS.includes(key)?key:'';
+}
+
+function applicationAttributesJudgeSourceKey(stage){
+  return IS_APPLICATION_ATTRIBUTES_PROJECT?APPLICATION_ATTRIBUTE_JUDGE_SOURCES[String(stage&&stage.outKey||'')]||'':'';
+}
+
+function applicationAttributesResponseFormat(stage){
+  const key=applicationAttributesExtractorKey(stage),schema=APPLICATION_ATTRIBUTE_EXTRACTOR_SCHEMAS[key];
+  if(schema) return {type:'json_schema',json_schema:{name:'application_'+key+'_v1',strict:true,schema}};
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage&&stage.outKey===APPLICATION_ATTRIBUTES_JUDGE_KEY){
+    return {type:'json_schema',json_schema:{name:'application_attributes_judge_v1',strict:true,schema:APPLICATION_ATTRIBUTES_JUDGE_SCHEMA}};
+  }
+  return null;
+}
+
+function applicationAttributesJudgeInput(ctx){
+  const sources={interest:'interest_extractor',funding_source:'funding_source_extractor',purchase_term:'purchase_term_extractor'};
+  return Object.fromEntries(Object.entries(sources).map(([attribute,sourceKey])=>{
+    const failure=applicationAttributesExtractorSourceFailure(ctx,sourceKey);
+    return [attribute,failure
+      ? {status:'technical_error',immutable:true,source:sourceKey,error_code:failure}
+      : {status:'ready',immutable:false,source:sourceKey,result:ctx[sourceKey]}];
+  }));
+}
+
+function applicationAttributesJudgeResolvedPrompt(stage,ctx){
+  const preparedPrompt=String(stage&&stage.prompt||'').replace('{{attributes_judge_input}}',JSON.stringify(applicationAttributesJudgeInput(ctx)));
+  return tmpl(preparedPrompt,ctx);
+}
+
+function applicationAttributesPromptAudit(prompt,ctx){
+  const transcript=String(transcriptText(ctx)||'');
+  const probe=transcript.slice(0,Math.min(240,transcript.length)).trim();
+  const delivered=Boolean(probe)&&String(prompt||'').includes(probe);
+  return {
+    prompt:String(prompt||''),
+    transcript,
+    transcriptPresent:Boolean(transcript.trim()),
+    transcriptInjected:delivered,
+    resolvedPromptContainsTranscript:delivered,
+    transcriptDelivery:delivered?'prompt':'not_sent',
+    transcriptSentToModel:delivered
+  };
+}
+
+function applicationAttributesContractError(message){
+  const error=new Error(message);error.name='ApplicationAttributesSchemaError';throw error;
+}
+
+function applicationAttributesExactObject(value,keys,path){
+  if(!value||typeof value!=='object'||Array.isArray(value)) applicationAttributesContractError(path+': expected object');
+  for(const key of keys) if(!Object.prototype.hasOwnProperty.call(value,key)) applicationAttributesContractError(path+'.'+key+': required');
+  const extra=Object.keys(value).find(key=>!keys.includes(key));
+  if(extra) applicationAttributesContractError(path+'.'+extra+': additional property');
+}
+
+function validateApplicationAttributesExtractor(key,value){
+  applicationAttributesExactObject(value,['value','evidence'],key);
+  if(key==='interest_extractor'){
+    if(!Array.isArray(value.value)||value.value.some(item=>!APPLICATION_INTEREST_VALUES.includes(item))||new Set(value.value).size!==value.value.length) applicationAttributesContractError(key+'.value: invalid interest array');
+    if(!Array.isArray(value.evidence)||value.evidence.some(item=>typeof item!=='string'||!item.trim())) applicationAttributesContractError(key+'.evidence: invalid evidence array');
+    if(value.value.length!==value.evidence.length) applicationAttributesContractError('INTEREST_EVIDENCE_CARDINALITY_MISMATCH');
+  }else{
+    const allowed=key==='funding_source_extractor'?APPLICATION_FUNDING_VALUES:APPLICATION_PURCHASE_TERM_VALUES;
+    if(!allowed.includes(value.value)) applicationAttributesContractError(key+'.value: unsupported value');
+    if(typeof value.evidence!=='string') applicationAttributesContractError(key+'.evidence: expected string');
+    if(value.value==='не определено'&&value.evidence!=='') applicationAttributesContractError(key+'.evidence: undetermined value requires empty evidence');
+  }
+  return value;
+}
+
+function validateApplicationAttributesJudge(stage,value){
+  const key=String(stage&&stage.outKey||'');
+  if(!APPLICATION_ATTRIBUTE_JUDGE_SOURCES[key]) return value;
+  if(key==='interest_judge'){
+    applicationAttributesExactObject(value,['decision','approved_values','rejected_values','added_values','evidence','reason_codes'],key);
+    if(!['approve','correct','reject','technical_error'].includes(value.decision)) applicationAttributesContractError(key+'.decision: invalid');
+    for(const field of ['approved_values','rejected_values','added_values']) if(!Array.isArray(value[field])||value[field].some(item=>!APPLICATION_INTEREST_VALUES.includes(item))) applicationAttributesContractError(key+'.'+field+': invalid interest array');
+    if(!Array.isArray(value.evidence)||value.evidence.some(item=>typeof item!=='string'||!item.trim())) applicationAttributesContractError(key+'.evidence: invalid evidence array');
+    if(!Array.isArray(value.reason_codes)||value.reason_codes.some(item=>typeof item!=='string')) applicationAttributesContractError(key+'.reason_codes: invalid');
+    if(value.decision!=='technical_error'&&value.approved_values.length!==value.evidence.length) applicationAttributesContractError('INTEREST_JUDGE_EVIDENCE_CARDINALITY_MISMATCH');
+    const newbuildIndex=value.approved_values.indexOf('Новостройки');
+    if(newbuildIndex>=0){
+      const evidence=String(value.evidence[newbuildIndex]||'').toLowerCase();
+      const hasDirect=value.reason_codes.includes('direct_confirmation');
+      const hasContext=value.reason_codes.includes('newbuild_from_context');
+      if(value.approved_values.length===1&&hasDirect&&hasContext) applicationAttributesContractError('NEWBUILD_REASON_CODES_CONFLICT');
+      if(hasDirect&&!hasContext&&!/(новостройк|первичн\w*\s+рын)/i.test(evidence)) applicationAttributesContractError('NEWBUILD_DIRECT_CONFIRMATION_NOT_EVIDENCED');
+      if(hasContext&&!/(срок\s+сдач|через\s+(?:полтора|\d+)\s+(?:год|месяц)|переуступ|дду|долев\w*\s+участ|застройщик|строящ|несдан|не\s+сдан|эскроу|брон)/i.test(evidence)) applicationAttributesContractError('NEWBUILD_CONTEXT_NOT_EVIDENCED');
+    }
+  }else{
+    applicationAttributesExactObject(value,['decision','approved_value','rejected_value','evidence','reason_codes'],key);
+    if(!['approve','correct','reject','technical_error'].includes(value.decision)) applicationAttributesContractError(key+'.decision: invalid');
+    const allowed=key==='funding_source_judge'?APPLICATION_FUNDING_VALUES:APPLICATION_PURCHASE_TERM_VALUES;
+    if(value.decision==='technical_error'){
+      if(value.approved_value!==null||value.rejected_value!==null||value.evidence!==''||!Array.isArray(value.reason_codes)||!value.reason_codes.includes('technical_input_error')) applicationAttributesContractError(key+': invalid technical_error contract');
+    }else{
+      if(!allowed.includes(value.approved_value)||!(value.rejected_value===null||allowed.includes(value.rejected_value))||typeof value.evidence!=='string'||!Array.isArray(value.reason_codes)) applicationAttributesContractError(key+': invalid business contract');
+    }
+  }
+  return value;
+}
+
+function applicationAttributesValuesEqual(left,right){
+  if(Array.isArray(left)||Array.isArray(right)) return Array.isArray(left)&&Array.isArray(right)&&left.length===right.length&&left.every((item,index)=>item===right[index]);
+  return left===right;
+}
+
+function applicationAttributesExpectedDecision(attribute,extractorValue,finalValue){
+  if(applicationAttributesValuesEqual(extractorValue,finalValue)) return 'approve';
+  const finalUndetermined=attribute==='interest'?Array.isArray(finalValue)&&finalValue.length===0:finalValue==='не определено';
+  const extractorDefined=attribute==='interest'?Array.isArray(extractorValue)&&extractorValue.length>0:extractorValue!=='не определено';
+  return finalUndetermined&&extractorDefined?'reject':'correct';
+}
+
+function normalizeApplicationAttributesCombinedDecision(value,ctx){
+  const result=enforceApplicationAttributesCombinedTechnicalErrors(value,ctx);
+  const sources={interest:'interest_extractor',funding_source:'funding_source_extractor',purchase_term:'purchase_term_extractor'};
+  const normalized=[];
+  for(const attribute of APPLICATION_ATTRIBUTE_KEYS){
+    const sourceKey=sources[attribute];
+    if(applicationAttributesExtractorSourceFailure(ctx,sourceKey)||result.attribute_statuses[attribute]!=='ready') continue;
+    const expected=applicationAttributesExpectedDecision(attribute,ctx[sourceKey].value,result.attributes[attribute]);
+    if(result.decisions[attribute]!==expected){normalized.push({attribute,field:'decision',from:result.decisions[attribute],to:expected});result.decisions[attribute]=expected;}
+    if(expected==='approve'){
+      const sourceEvidence=ctx[sourceKey].evidence;
+      if(!applicationAttributesValuesEqual(result.evidence[attribute],sourceEvidence)){
+        normalized.push({attribute,field:'evidence',from:'judge',to:'extractor'});
+        result.evidence[attribute]=Array.isArray(sourceEvidence)?[...sourceEvidence]:sourceEvidence;
+      }
+    }
+  }
+  return {value:result,normalized};
+}
+
+function validateApplicationAttributesCombinedJudge(value,ctx){
+  applicationAttributesExactObject(value,['attributes','attribute_statuses','decisions','evidence','reason_codes'],'attributes_judge');
+  for(const field of ['attributes','attribute_statuses','decisions','evidence','reason_codes']) applicationAttributesExactObject(value[field],APPLICATION_ATTRIBUTE_KEYS,'attributes_judge.'+field);
+  const sources={interest:'interest_extractor',funding_source:'funding_source_extractor',purchase_term:'purchase_term_extractor'};
+  const reasonEnums={interest:APPLICATION_INTEREST_REASON_CODES,funding_source:APPLICATION_FUNDING_REASON_CODES,purchase_term:APPLICATION_PURCHASE_REASON_CODES};
+  for(const attribute of APPLICATION_ATTRIBUTE_KEYS){
+    const status=value.attribute_statuses[attribute],decision=value.decisions[attribute],finalValue=value.attributes[attribute],proof=value.evidence[attribute],codes=value.reason_codes[attribute];
+    if(!APPLICATION_ATTRIBUTES_JUDGE_STATUSES.includes(status)) applicationAttributesContractError('attributes_judge.attribute_statuses.'+attribute+': invalid');
+    if(!APPLICATION_ATTRIBUTES_JUDGE_DECISIONS.includes(decision)) applicationAttributesContractError('attributes_judge.decisions.'+attribute+': invalid');
+    if(!Array.isArray(codes)||codes.some(code=>!reasonEnums[attribute].includes(code))) applicationAttributesContractError('attributes_judge.reason_codes.'+attribute+': invalid');
+    const sourceFailure=applicationAttributesExtractorSourceFailure(ctx,sources[attribute]);
+    if(sourceFailure){
+      const emptyProof=attribute==='interest'?Array.isArray(proof)&&proof.length===0:proof==='';
+      if(status!=='technical_error'||decision!=='technical_error'||finalValue!==null||!emptyProof||codes.length!==1||codes[0]!=='technical_input_error') applicationAttributesContractError('attributes_judge.'+attribute+': immutable technical_error required');
+      continue;
+    }
+    if(status==='technical_error'||decision==='technical_error') applicationAttributesContractError('attributes_judge.'+attribute+': unexpected technical_error');
+    if(status==='invalid_input'){
+      if(finalValue!==null) applicationAttributesContractError('attributes_judge.'+attribute+': invalid_input requires null');
+      continue;
+    }
+    if(status!=='ready') applicationAttributesContractError('attributes_judge.'+attribute+': ready required');
+    if(attribute==='interest'){
+      if(!Array.isArray(finalValue)||finalValue.some(item=>!APPLICATION_INTEREST_VALUES.includes(item))||new Set(finalValue).size!==finalValue.length) applicationAttributesContractError('attributes_judge.attributes.interest: invalid');
+      if(!Array.isArray(proof)||proof.length!==finalValue.length||proof.some(item=>typeof item!=='string'||!item.trim())) applicationAttributesContractError('ATTRIBUTES_JUDGE_INTEREST_EVIDENCE_CARDINALITY_MISMATCH');
+    }else{
+      const allowed=attribute==='funding_source'?APPLICATION_FUNDING_VALUES:APPLICATION_PURCHASE_TERM_VALUES;
+      if(!allowed.includes(finalValue)||typeof proof!=='string'||(finalValue==='не определено'?proof!=='':!proof.trim())) applicationAttributesContractError('attributes_judge.'+attribute+': invalid value/evidence');
+    }
+    const expected=applicationAttributesExpectedDecision(attribute,ctx[sources[attribute]].value,finalValue);
+    if(decision!==expected) applicationAttributesContractError('attributes_judge.decisions.'+attribute+': expected '+expected);
+  }
+  return value;
+}
+
+function applicationAttributesCombinedTechnicalOutput(ctx){
+  const input=applicationAttributesJudgeInput(ctx);
+  const output={attributes:{interest:null,funding_source:null,purchase_term:null},attribute_statuses:{interest:'technical_error',funding_source:'technical_error',purchase_term:'technical_error'},decisions:{interest:'technical_error',funding_source:'technical_error',purchase_term:'technical_error'},evidence:{interest:[],funding_source:'',purchase_term:''},reason_codes:{interest:['technical_input_error'],funding_source:['technical_input_error'],purchase_term:['technical_input_error']}};
+  for(const attribute of APPLICATION_ATTRIBUTE_KEYS){
+    if(input[attribute].status==='technical_error') continue;
+    output.attribute_statuses[attribute]='invalid_input';
+    output.decisions[attribute]='reject';
+    output.reason_codes[attribute]=attribute==='interest'?['missing_evidence']:['insufficient_information'];
+  }
+  return output;
+}
+
+function enforceApplicationAttributesCombinedTechnicalErrors(value,ctx){
+  const result=value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+  for(const field of ['attributes','attribute_statuses','decisions','evidence','reason_codes']) result[field]=result[field]&&typeof result[field]==='object'&&!Array.isArray(result[field])?result[field]:{};
+  const input=applicationAttributesJudgeInput(ctx);
+  for(const attribute of APPLICATION_ATTRIBUTE_KEYS){
+    if(input[attribute].status!=='technical_error') continue;
+    result.attributes[attribute]=null;
+    result.attribute_statuses[attribute]='technical_error';
+    result.decisions[attribute]='technical_error';
+    result.evidence[attribute]=attribute==='interest'?[]:'';
+    result.reason_codes[attribute]=['technical_input_error'];
+  }
+  return result;
+}
+
+function applicationAttributesTechnicalJudgeOutput(judgeKey){
+  return judgeKey==='interest_judge'
+    ? {decision:'technical_error',approved_values:[],rejected_values:[],added_values:[],evidence:[],reason_codes:['technical_input_error']}
+    : {decision:'technical_error',approved_value:null,rejected_value:null,evidence:'',reason_codes:['technical_input_error']};
+}
+
+function applicationAttributesExtractorSourceFailure(ctx,sourceKey){
+  if(!applicationAttributesContextIsCurrent(ctx,sourceKey)) return 'SOURCE_NOT_CURRENT';
+  try{validateApplicationAttributesExtractor(sourceKey,ctx[sourceKey]);return null;}
+  catch(error){return String(ctx[sourceKey]&&ctx[sourceKey].error_code||error&&error.message||'SOURCE_CONTRACT_INVALID');}
+}
+
+async function runApplicationAttributesJudgeShortCircuit(stage,ctx,t0){
+  const sourceKey=applicationAttributesJudgeSourceKey(stage);
+  if(!sourceKey) return null;
+  const sourceFailure=applicationAttributesExtractorSourceFailure(ctx,sourceKey);
+  if(!sourceFailure) return null;
+  const output=applicationAttributesTechnicalJudgeOutput(stage.outKey);
+  const rep={
+    output,raw:null,parseErr:'UPSTREAM_EXTRACTOR_TECHNICAL_ERROR: '+sourceKey+' · '+sourceFailure,ms:Math.round(performance.now()-t0),tokens:0,cost:0,
+    provider:'Deterministic Contract',requested_provider:stage.provider||null,actual_model:'code',requested_model:stage.model||null,model_fallback:false,
+    prompt_audit:{prompt_used:false,transcript_present:Boolean(transcriptText(ctx)),transcript_injected:false,transcript_chars:String(transcriptText(ctx)||'').length,prompt_chars:0},
+    stage_version:'application-attributes-v1',prompt_version:'NOT_USED',prompt_hash:null,resolved_prompt:null,model:'code',timestamp:new Date().toISOString(),
+    contract_audit:{status:'TECHNICAL_ERROR',source_out_key:sourceKey,source_current_run:applicationAttributesContextIsCurrent(ctx,sourceKey),parse_status:'NOT_ATTEMPTED',schema_status:'INVALID_INPUT',execution_type:'deterministic_short_circuit',prompt_used:false},
+    status:'bad',metrics:[['Исполнитель','Deterministic Contract'],['LLM','не вызывался'],['Decision','technical_error'],['Источник',sourceKey],['Причина',sourceFailure]]
+  };
+  rep.meta=buildStageMeta(stage,rep);return rep;
+}
+
+function enforceApplicationAttributesMergerTechnicalErrors(output,ctx){
+  const result=output&&typeof output==='object'&&!Array.isArray(output)?output:{};
+  result.attributes=result.attributes&&typeof result.attributes==='object'?result.attributes:{};
+  result.attribute_statuses=result.attribute_statuses&&typeof result.attribute_statuses==='object'?result.attribute_statuses:{};
+  result.evidence=result.evidence&&typeof result.evidence==='object'?result.evidence:{};
+  result.source_decisions=result.source_decisions&&typeof result.source_decisions==='object'?result.source_decisions:{};
+  const judges={interest:'interest_judge',funding_source:'funding_source_judge',purchase_term:'purchase_term_judge'};
+  for(const [attribute,judgeKey] of Object.entries(judges)){
+    if(!applicationAttributesContextIsCurrent(ctx,judgeKey)||ctx[judgeKey]?.decision!=='technical_error') continue;
+    result.attributes[attribute]=attribute==='interest'?[]:null;
+    result.attribute_statuses[attribute]='technical_error';
+    result.evidence[attribute]=attribute==='interest'?[]:'';
+    result.source_decisions[attribute]='technical_error';
+  }
+  return result;
+}
+
+function enforceApplicationAttributesGateTechnicalErrors(output,ctx){
+  const result=output&&typeof output==='object'&&!Array.isArray(output)?output:{};
+  result.decisions=result.decisions&&typeof result.decisions==='object'?result.decisions:{};
+  result.values_for_save=result.values_for_save&&typeof result.values_for_save==='object'?result.values_for_save:{};
+  result.blocked_attributes=Array.isArray(result.blocked_attributes)?result.blocked_attributes:[];
+  result.technical_errors=Array.isArray(result.technical_errors)?result.technical_errors:[];
+  if(applicationAttributesContextIsCurrent(ctx,'attributes_judge')){
+    for(const attribute of APPLICATION_ATTRIBUTE_KEYS){
+      if(ctx.attributes_judge?.attribute_statuses?.[attribute]!=='technical_error') continue;
+      result.decisions[attribute]='TECHNICAL_ERROR';
+      result.values_for_save[attribute]=null;
+      if(!result.technical_errors.includes(attribute)) result.technical_errors.push(attribute);
+      result.blocked_attributes=result.blocked_attributes.filter(item=>item!==attribute);
+    }
+  }
+  const decisions=APPLICATION_ATTRIBUTE_KEYS.map(attribute=>result.decisions[attribute]);
+  const saveable=decisions.filter(decision=>['AUTO_SAVE','SAVE_UNDETERMINED'].includes(decision)).length;
+  const blocked=decisions.filter(decision=>['DO_NOT_UPDATE','TECHNICAL_ERROR'].includes(decision)).length;
+  result.gate_status=blocked===0?'READY':saveable>0?'PARTIAL_READY':'BLOCKED';
+  return result;
+}
+
+function buildApplicationAttributesMerger(ctx){
+  const output={
+    attributes:{interest:null,funding_source:null,purchase_term:null},
+    attribute_statuses:{interest:'invalid_input',funding_source:'invalid_input',purchase_term:'invalid_input'},
+    evidence:{interest:[],funding_source:'',purchase_term:''},
+    source_decisions:{interest:'invalid_input',funding_source:'invalid_input',purchase_term:'invalid_input'}
+  };
+  const sources={interest:'interest_judge',funding_source:'funding_source_judge',purchase_term:'purchase_term_judge'};
+  for(const [attribute,judgeKey] of Object.entries(sources)){
+    const judge=ctx&&ctx[judgeKey];
+    if(!applicationAttributesContextIsCurrent(ctx,judgeKey)) continue;
+    try{validateApplicationAttributesJudge({outKey:judgeKey},judge);}catch(error){continue;}
+    output.source_decisions[attribute]=judge.decision;
+    if(judge.decision==='technical_error'){
+      output.attribute_statuses[attribute]='technical_error';
+      continue;
+    }
+    output.attribute_statuses[attribute]='ready';
+    if(attribute==='interest'){
+      output.attributes.interest=[...judge.approved_values];
+      output.evidence.interest=[...judge.evidence];
+    }else{
+      output.attributes[attribute]=judge.approved_value;
+      output.evidence[attribute]=judge.evidence;
+    }
+  }
+  return output;
+}
+
+function buildApplicationAttributesQualityGate(judge){
+  const result={
+    decisions:{interest:'DO_NOT_UPDATE',funding_source:'DO_NOT_UPDATE',purchase_term:'DO_NOT_UPDATE'},
+    values_for_save:{interest:null,funding_source:null,purchase_term:null},
+    blocked_attributes:[],
+    technical_errors:[],
+    gate_status:'BLOCKED'
+  };
+  const attributes=judge&&judge.attributes||{},statuses=judge&&judge.attribute_statuses||{},evidence=judge&&judge.evidence||{};
+  for(const key of APPLICATION_ATTRIBUTE_KEYS){
+    if(statuses[key]==='technical_error'){
+      result.decisions[key]='TECHNICAL_ERROR';
+      result.technical_errors.push(key);
+      continue;
+    }
+    if(statuses[key]!=='ready'){
+      result.blocked_attributes.push(key);
+      continue;
+    }
+    if(key==='interest'){
+      const values=attributes.interest,proof=evidence.interest;
+      const valid=Array.isArray(values)&&values.every(value=>APPLICATION_INTEREST_VALUES.includes(value))&&new Set(values).size===values.length
+        &&Array.isArray(proof)&&proof.length===values.length&&proof.every(item=>typeof item==='string'&&item.trim());
+      if(!valid){result.blocked_attributes.push(key);continue;}
+      result.decisions.interest=values.length?'AUTO_SAVE':'SAVE_UNDETERMINED';
+      result.values_for_save.interest=[...values];
+      continue;
+    }
+    const allowed=key==='funding_source'?APPLICATION_FUNDING_VALUES:APPLICATION_PURCHASE_TERM_VALUES;
+    const value=attributes[key],proof=evidence[key];
+    if(!allowed.includes(value)||typeof proof!=='string'||(value==='не определено'?proof!=='':!proof.trim())){
+      result.blocked_attributes.push(key);
+      continue;
+    }
+    result.decisions[key]=value==='не определено'?'SAVE_UNDETERMINED':'AUTO_SAVE';
+    result.values_for_save[key]=value;
+  }
+  const decisions=APPLICATION_ATTRIBUTE_KEYS.map(key=>result.decisions[key]);
+  const saveable=decisions.filter(decision=>['AUTO_SAVE','SAVE_UNDETERMINED'].includes(decision)).length;
+  result.gate_status=saveable===APPLICATION_ATTRIBUTE_KEYS.length?'READY':saveable>0?'PARTIAL_READY':'BLOCKED';
+  return result;
+}
+
+function applicationAttributesDeterministicPromptAudit(ctx){
+  const transcript=String(transcriptText(ctx)||'');
+  return {
+    prompt_used:false,
+    transcript_present:Boolean(transcript.trim()),
+    transcript_available:Boolean(transcript.trim()),
+    transcript_injected:false,
+    transcript_delivery:'not_sent',
+    transcript_sent_to_model:false,
+    transcript_chars:transcript.length,
+    resolved_prompt_contains_transcript:false,
+    prompt_chars:0
+  };
+}
+
+async function runApplicationAttributesDeterministicStage(stage,ctx,t0){
+  const key=String(stage&&stage.outKey||'');
+  const sources=['attributes_judge'];
+  const output=enforceApplicationAttributesGateTechnicalErrors(buildApplicationAttributesQualityGate(ctx.attributes_judge),ctx);
+  const promptHash=await hashPrompt('deterministic:'+key+':v1:'+sources.join(','));
+  const rep={
+    output,raw:null,parseErr:null,ms:Math.round(performance.now()-t0),tokens:0,cost:0,
+    provider:'Deterministic Contract',requested_provider:stage.provider||null,actual_model:'code',requested_model:stage.model||null,model_fallback:false,
+    prompt_audit:applicationAttributesDeterministicPromptAudit(ctx),
+    stage_version:'application-attributes-v1',prompt_version:'NOT_USED',prompt_hash:promptHash,resolved_prompt:null,model:'code',timestamp:new Date().toISOString(),
+    contract_audit:{status:'VALID',contract_id:'application_attributes_quality_gate',contract_version:'v1',source_out_key:'attributes_judge',source_current_run:applicationAttributesContextIsCurrent(ctx,'attributes_judge'),parse_status:'NOT_REQUIRED',schema_status:'VALID',execution_type:'deterministic',prompt_used:false},
+    status:'ok',metrics:[['Исполнитель','Deterministic Contract'],['Источник','attributes_judge'],['Результат',output.gate_status],['Токены',0],['Стоимость','$0.0000']]
+  };
+  rep.meta=buildStageMeta(stage,rep);return rep;
+}
+
+function buildApplicationAttributesCrmResult(gate){
+  if(!gate||typeof gate!=='object'||Array.isArray(gate)) throw new Error('ATTRIBUTES_QUALITY_GATE_MISSING');
+  if(!gate.decisions||typeof gate.decisions!=='object'||!gate.values_for_save||typeof gate.values_for_save!=='object') throw new Error('ATTRIBUTES_QUALITY_GATE_INVALID');
+  if(!['READY','PARTIAL_READY','BLOCKED'].includes(gate.gate_status)) throw new Error('ATTRIBUTES_QUALITY_GATE_STATUS_INVALID');
+  if(!Array.isArray(gate.blocked_attributes)||!Array.isArray(gate.technical_errors)) throw new Error('ATTRIBUTES_QUALITY_GATE_DIAGNOSTICS_INVALID');
+  const attributes={},update_actions={};
+  for(const key of APPLICATION_ATTRIBUTE_KEYS){
+    const decision=gate.decisions[key];
+    if(!APPLICATION_ATTRIBUTE_DECISIONS.includes(decision)) throw new Error('ATTRIBUTE_DECISION_INVALID: '+key);
+    if(decision==='AUTO_SAVE'){
+      attributes[key]=gate.values_for_save[key];
+      update_actions[key]='SET';
+    }else if(decision==='SAVE_UNDETERMINED'){
+      attributes[key]=key==='interest'?[]:'не определено';
+      update_actions[key]='SET_UNDETERMINED';
+    }else if(decision==='DO_NOT_UPDATE'){
+      attributes[key]=null;
+      update_actions[key]='SKIP';
+    }else{
+      attributes[key]=null;
+      update_actions[key]='ERROR';
+    }
+  }
+  return {
+    attributes,
+    update_actions,
+    pipeline_status:gate.gate_status,
+    blocked_attributes:[...gate.blocked_attributes],
+    technical_errors:[...gate.technical_errors]
+  };
+}
+
+async function runApplicationAttributesCrmStage(stage,ctx,t0){
+  const runtimeDescriptor='deterministic:crm_attributes_result:v1:attributes_quality_gate';
+  const promptHash=await hashPrompt(runtimeDescriptor);
+  const contextCurrent=applicationAttributesContextIsCurrent(ctx,'attributes_quality_gate');
+  try{
+    if(!contextCurrent) throw new Error('ATTRIBUTES_QUALITY_GATE_STALE_OR_MISSING');
+    const output=buildApplicationAttributesCrmResult(ctx.attributes_quality_gate);
+    const rep={
+      output,raw:null,parseErr:null,ms:Math.round(performance.now()-t0),tokens:0,cost:0,
+      provider:'Deterministic Contract',requested_provider:stage.provider||null,actual_model:'code',requested_model:stage.model||null,model_fallback:false,
+      prompt_audit:{...applicationAttributesDeterministicPromptAudit(ctx),configuration_prompt_present:Boolean(stage.prompt),resolved_prompt_contains_gate:false},
+      stage_version:'application-attributes-v1',prompt_version:'NOT_USED',prompt_hash:promptHash,resolved_prompt:null,model:'code',timestamp:new Date().toISOString(),
+      contract_audit:{status:'VALID',contract_id:'crm_attributes_result',contract_version:'v1',source_out_key:'attributes_quality_gate',source_current_run:true,parse_status:'NOT_REQUIRED',schema_status:'VALID',execution_type:'deterministic',prompt_used:false},
+      status:'ok',metrics:[['Исполнитель','Deterministic Contract'],['Источник','attributes_quality_gate'],['Gate status',output.pipeline_status],['Время',Math.round(performance.now()-t0)+' мс']]
+    };
+    rep.meta=buildStageMeta(stage,rep);
+    return rep;
+  }catch(error){
+    const message=String(error&&error.message||error);
+    const rep={
+      output:{status:'technical_error',execution_status:'TECHNICAL_ERROR',decision:'TECHNICAL_ERROR',error_code:'CRM_ATTRIBUTES_CONTRACT_ERROR',issues:[message]},
+      raw:null,parseErr:message,ms:Math.round(performance.now()-t0),tokens:0,cost:0,
+      provider:'Deterministic Contract',requested_provider:stage.provider||null,actual_model:'code',requested_model:stage.model||null,model_fallback:false,
+      prompt_hash:promptHash,resolved_prompt:null,model:'code',timestamp:new Date().toISOString(),
+      contract_audit:{status:'INVALID',contract_id:'crm_attributes_result',contract_version:'v1',source_out_key:'attributes_quality_gate',source_current_run:contextCurrent,parse_status:'NOT_REQUIRED',schema_status:'INVALID',execution_type:'deterministic',prompt_used:false},
+      status:'bad',metrics:[['Исполнитель','Deterministic Contract'],['Ошибка',message]]
+    };
+    rep.meta=buildStageMeta(stage,rep);
+    return rep;
+  }
+}
+
+function applicationAttributesReasonConfidence(reasonCodes,defaultValue=1){
+  const codes=Array.isArray(reasonCodes)?reasonCodes.map(code=>String(code).toLowerCase()):[];
+  if(codes.some(code=>code.includes('missing_evidence'))) return .5;
+  if(codes.some(code=>code.includes('conflicting')||code.includes('ambiguous'))) return .7;
+  if(codes.some(code=>code.includes('soft_confirmation'))) return .85;
+  if(codes.some(code=>code.includes('newbuild_from_context')||code.includes('context_confirmation'))) return .95;
+  return defaultValue;
+}
+
+function applicationAttributesDecisionCap(value,decision){
+  if(value==null) return null;
+  if(decision==='correct'||decision==='reject') return Math.min(value,.9);
+  return value;
+}
+
+function applicationAttributesConfidence(ctx){
+  const judge=ctx.attributes_judge||{},decisions=judge.decisions||{},attributes=judge.attributes||{},statuses=judge.attribute_statuses||{},reasonCodes=judge.reason_codes||{};
+  const interestValues=Array.isArray(attributes.interest)?attributes.interest:[];
+  const interestCodes=Array.isArray(reasonCodes.interest)?reasonCodes.interest:[];
+  const interestValueConfidence={};
+  if(statuses.interest!=='technical_error'){
+    interestValues.forEach((value,index)=>{
+      const aligned=interestCodes.length===interestValues.length?[interestCodes[index]]:interestCodes;
+      interestValueConfidence[value]=applicationAttributesDecisionCap(applicationAttributesReasonConfidence(aligned,1),decisions.interest);
+    });
+  }
+  const interestConfidence=statuses.interest==='technical_error'||attributes.interest==null
+    ? null
+    : interestValues.length
+    ? Object.values(interestValueConfidence).reduce((sum,value)=>sum+value,0)/interestValues.length
+    : decisions.interest==='reject'?0.9:applicationAttributesDecisionCap(applicationAttributesReasonConfidence(interestCodes,1),decisions.interest);
+  const scalarConfidence=(attribute)=>{
+    const value=attributes[attribute],decision=decisions[attribute];
+    if(statuses[attribute]==='technical_error'||value==null) return null;
+    const base=value==='не определено'?1:applicationAttributesReasonConfidence(reasonCodes[attribute],1);
+    return applicationAttributesDecisionCap(base,decision);
+  };
+  const attributeConfidence={
+    interest:interestConfidence,
+    funding_source:scalarConfidence('funding_source'),
+    purchase_term:scalarConfidence('purchase_term')
+  };
+  const available=Object.values(attributeConfidence).filter(value=>typeof value==='number'&&Number.isFinite(value));
+  const overall=available.length?available.reduce((sum,value)=>sum+value,0)/available.length:null;
+  const round=value=>value==null?null:Number(value.toFixed(4));
+  return {
+    overall_confidence:round(overall),
+    confidence_status:available.length===0?'UNAVAILABLE':available.length===APPLICATION_ATTRIBUTE_KEYS.length?'COMPLETE':'PARTIAL',
+    attribute_confidence:Object.fromEntries(Object.entries(attributeConfidence).map(([key,value])=>[key,round(value)])),
+    interest_value_confidence:Object.fromEntries(Object.entries(interestValueConfidence).map(([key,value])=>[key,round(value)]))
+  };
+}
+
+function applicationAttributesProvenanceValid(ctx){
+  const provenance=ctx.__stage_provenance||{};
+  return ['interest_extractor','funding_source_extractor','purchase_term_extractor','attributes_judge','attributes_quality_gate','crm_attributes_result'].every(key=>{
+    const item=provenance[key];
+    return item&&item.run_id===ctx.__run_id&&item.transcript_hash===ctx.__transcript_hash&&item.pipeline_configuration_hash===ctx.__pipeline_configuration_hash;
+  });
+}
+
+function buildApplicationAttributesMetrics(ctx){
+  const judge=ctx.attributes_judge||{},decisions=judge.decisions||{},gate=ctx.attributes_quality_gate||{},execution=ctx.pipeline_execution||{};
+  const technical=!applicationAttributesContextIsCurrent(ctx,'attributes_judge')||APPLICATION_ATTRIBUTE_KEYS.some(key=>judge.attribute_statuses?.[key]==='technical_error');
+  const invalid=APPLICATION_ATTRIBUTE_KEYS.some(key=>!['ready','technical_error'].includes(judge.attribute_statuses?.[key]));
+  const corrections=APPLICATION_ATTRIBUTE_KEYS.filter(key=>['correct','reject'].includes(decisions[key])).length;
+  const extractorCorrectness=technical||invalid?0:[100,75,50,25][Math.min(corrections,3)];
+  let evidenceQuality=100;
+  for(const key of APPLICATION_ATTRIBUTE_KEYS){
+    const status=judge.attribute_statuses?.[key],value=judge.attributes?.[key],proof=judge.evidence?.[key];
+    if(status!=='ready'){evidenceQuality=0;break;}
+    if(key==='interest'){
+      if(!Array.isArray(value)||!Array.isArray(proof)||value.length!==proof.length||proof.some(item=>typeof item!=='string'||!item.trim())){evidenceQuality=0;break;}
+    }else if((key==='funding_source'&&!APPLICATION_FUNDING_VALUES.includes(value))||(key==='purchase_term'&&!APPLICATION_PURCHASE_TERM_VALUES.includes(value))||typeof proof!=='string'||(value==='не определено'?proof!=='':!proof.trim())){
+      evidenceQuality=0;break;
+    }
+  }
+  const judgeConsistency=technical||invalid?0:APPLICATION_ATTRIBUTE_KEYS.every(key=>['approve','correct','reject'].includes(decisions[key]))?100:0;
+  const provenanceValid=applicationAttributesProvenanceValid(ctx);
+  const pipelineIntegrity=gate.gate_status==='PARTIAL_READY'?50:gate.gate_status==='READY'&&execution.pipeline_status==='SUCCESS'&&provenanceValid?100:0;
+  const crmReadiness=gate.gate_status==='READY'?100:gate.gate_status==='PARTIAL_READY'&&APPLICATION_ATTRIBUTE_KEYS.some(key=>['AUTO_SAVE','SAVE_UNDETERMINED'].includes(gate.decisions?.[key]))?75:0;
+  const criteria={
+    extractor_correctness:extractorCorrectness,
+    evidence_quality:evidenceQuality,
+    judge_consistency:judgeConsistency,
+    pipeline_integrity:pipelineIntegrity,
+    crm_readiness:crmReadiness
+  };
+  const confidence=applicationAttributesConfidence(ctx);
+  return {
+    ...confidence,
+    quality_score:Math.round(Object.values(criteria).reduce((sum,value)=>sum+value,0)/5),
+    quality_criteria:criteria,
+    calculation:{execution_type:'deterministic',tokens:0,cost:0,provenance_valid:provenanceValid}
+  };
+}
+
 async function runStage(stage, ctx){
   const t0=performance.now();
   const v3Role=transcriptionSummaryV3Enabled()?v3SelectedRole(stage):null;
   if(v3Role) return runV3StructuredStage(stage,ctx,t0,v3Role);
+  if(isAiSummaryFinalizationStage(stage)) return runAiSummaryFinalizationStage(stage,ctx,t0);
+  if(isAiSummaryStoreCleanerStage(stage)) return runAiSummaryStoreCleanerStage(stage,ctx,t0);
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage&&stage.outKey==='attributes_quality_gate') return runApplicationAttributesDeterministicStage(stage,ctx,t0);
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage&&stage.outKey==='crm_attributes_result') return runApplicationAttributesCrmStage(stage,ctx,t0);
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT&&applicationAttributesJudgeSourceKey(stage)){
+    const shortCircuit=await runApplicationAttributesJudgeShortCircuit(stage,ctx,t0);
+    if(shortCircuit) return shortCircuit;
+  }
   if(IS_TRANSCRIPTION_SUMMARY_MODULE&&MODULE_GENERIC_JUDGE_DEFINITIONS[stage.outKey]) return runModuleGenericSummaryJudgeStage(stage,ctx,t0);
   if(stage.type==='hybrid'){
     // Проверка фактов/потребностей/результата звонка: один шаг пайплайна,
@@ -12547,6 +13782,18 @@ async function runStage(stage, ctx){
     const isFactsExtraction=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage.type==='llm'&&stage.outKey==='facts';
     const isNeedsExtraction=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage.type==='llm'&&stage.outKey==='needs';
     const isOutcomeExtraction=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage.type==='llm'&&stage.outKey==='outcome';
+    const aiSummaryCustomContract=aiSummaryCustomResponseContract(stage);
+    const isApplicationAttributesJudge=IS_APPLICATION_ATTRIBUTES_PROJECT&&stage.outKey===APPLICATION_ATTRIBUTES_JUDGE_KEY;
+    const aiSummaryJudgeProvenance=aiSummaryCustomContract&&stage.outKey==='conversation_judge'?aiSummaryConversationJudgeProvenance(ctx):null;
+    const aiSummarySummaryProvenance=aiSummaryCustomContract&&stage.outKey==='summary_generator'?aiSummarySummaryGeneratorProvenance(ctx):null;
+    const aiSummaryInputProvenance=aiSummaryJudgeProvenance||aiSummarySummaryProvenance;
+    if(aiSummaryInputProvenance&&!aiSummaryInputProvenance.valid){
+      const provenanceError='CURRENT_RUN_PROVENANCE_VALIDATION_FAILED: '+aiSummaryInputProvenance.issues.join('; ');
+      const output={status:'technical_error',decision:'technical_error',error_code:'CURRENT_RUN_PROVENANCE_VALIDATION_FAILED',issues:aiSummaryInputProvenance.issues};
+      const rep={output,raw:null,parseErr:provenanceError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,provider:null,requested_provider:stage.provider||null,actual_model:null,requested_model:stage.model,model_fallback:false,legacy_parser_used:false,parser_fallback_used:false,text_fallback_used:false,repair_fallback_used:false,prompt_audit:{transcript_present:Boolean(transcriptText(ctx)),transcript_injected:false,transcript_chars:String(transcriptText(ctx)||'').length,resolved_prompt_contains_transcript:false,prompt_chars:0},network_retry_count:0,network_retry_reason:null,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:null,resolved_prompt:null,retry_attempt:ctx.__summary_retry_attempt||0,model:null,timestamp:new Date().toISOString(),provenance_validation:aiSummaryInputProvenance,contract_audit:{status:'INVALID_INPUT',prompt_contract_id:aiSummaryCustomContract.contractId,structured_output_requested:false,structured_output_applied:false,response_schema_id:aiSummaryCustomContract.schemaId,parser_schema_id:aiSummaryCustomContract.schemaId,contract_version:aiSummaryCustomContract.contractVersion,all_contracts_match:true,parse_status:'NOT_ATTEMPTED',schema_status:'INVALID_INPUT',repair_attempted:false,repair_result:'NOT_ATTEMPTED',warnings:[provenanceError]},status:'bad',metrics:[['LLM','не вызывался'],['Decision','technical_error'],['Причина',provenanceError]]};
+      rep.meta=buildStageMeta(stage,rep);
+      return rep;
+    }
     const outcomeDependency=isOutcomeExtraction&&outcomeDependencyError(ctx);
     if(outcomeDependency){
       const output={status:'dependency_error',decision:'ERROR',score:null,error_code:'DEPENDENCY_ERROR',schema_error:outcomeDependency,parse_error:outcomeDependency,raw_response:null,issues:[outcomeDependency]};
@@ -12556,6 +13803,10 @@ async function runStage(stage, ctx){
     }
     const promptAudit=isSummaryNewStage(stage)
       ? summaryNewPrompt(stage,ctx)
+      : IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&(stage.type==='llm'||aiSummaryCustomContract)
+      ? aiSummaryCustomPromptAudit(tmpl(stage.prompt,ctx),ctx)
+      : IS_APPLICATION_ATTRIBUTES_PROJECT
+      ? applicationAttributesPromptAudit(isApplicationAttributesJudge?applicationAttributesJudgeResolvedPrompt(stage,ctx):tmpl(stage.prompt,ctx),ctx)
       : ensureModuleTranscriptPrompt(stage, tmpl(stage.prompt, ctx), ctx);
     let prompt=promptAudit.prompt;
     // AI Tunnel учитывает размер входа в предварительном контроле бюджета.
@@ -12570,10 +13821,12 @@ async function runStage(stage, ctx){
       ? needContractConfigurationError()
       : isOutcomeExtraction
       ? outcomeContractConfigurationError()
+      : aiSummaryCustomContract&&stage.outKey==='summary_generator'
+      ? aiSummarySummaryGeneratorPromptConfigurationError(stage)
       : null;
     if(contractConfigurationError){
       const output={status:'technical_error',decision:'ERROR',score:null,error_code:'CONTRACT_CONFIGURATION_ERROR',schema_error:contractConfigurationError,parse_error:contractConfigurationError,retry_count:0,raw_response:null,critical_errors:[contractConfigurationError],issues:[contractConfigurationError]};
-      const rep={output,raw:null,parseErr:contractConfigurationError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,provider:null,requested_provider:stage.provider||null,actual_model:null,requested_model:stage.model,model_fallback:false,prompt_audit:{transcript_present:promptAudit.transcriptPresent,transcript_injected:promptAudit.transcriptInjected,transcript_chars:String(transcriptText(ctx)||'').length,resolved_prompt_contains_transcript:Boolean(promptAudit.resolvedPromptContainsTranscript),prompt_chars:prompt.length},network_retry_count:0,network_retry_reason:null,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:null,resolved_prompt:prompt,retry_attempt:ctx.__summary_retry_attempt||0,model:null,timestamp:new Date().toISOString(),contract_audit:{status:'CONFIGURATION_ERROR',prompt_contract_id:isOutcomeExtraction?OUTCOME_CONTRACT_ID:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:'facts_v2',structured_output_requested:false,structured_output_applied:false,response_schema_id:isOutcomeExtraction?OUTCOME_RESPONSE_SCHEMA_ID:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:'facts_v2',parser_schema_id:isOutcomeExtraction?OUTCOME_PARSER_SCHEMA_ID:isNeedsExtraction?NEED_PARSER_SCHEMA_ID:'facts_v2',contract_version:isOutcomeExtraction?OUTCOME_CONTRACT_VERSION:isNeedsExtraction?NEED_CONTRACT_VERSION:null,all_contracts_match:false,schema_hash:isOutcomeExtraction?OUTCOME_SCHEMA_HASH:isNeedsExtraction?NEED_SCHEMA_HASH:null,warnings:[contractConfigurationError]},status:'bad',metrics:[['LLM','не вызывался'],['Decision','ERROR'],['Ошибка контракта',contractConfigurationError]]};
+      const rep={output,raw:null,parseErr:contractConfigurationError,ms:Math.round(performance.now()-t0),tokens:0,cost:0,provider:null,requested_provider:stage.provider||null,actual_model:null,requested_model:stage.model,model_fallback:false,legacy_parser_used:false,parser_fallback_used:false,text_fallback_used:false,repair_fallback_used:false,prompt_audit:{transcript_present:promptAudit.transcriptPresent,transcript_injected:promptAudit.transcriptInjected,transcript_chars:String(transcriptText(ctx)||'').length,resolved_prompt_contains_transcript:Boolean(promptAudit.resolvedPromptContainsTranscript),prompt_chars:prompt.length},network_retry_count:0,network_retry_reason:null,stage_version:stage.stageVersion||'v1',prompt_version:'v'+(stage.promptVersion||1),prompt_hash:null,resolved_prompt:prompt,retry_attempt:ctx.__summary_retry_attempt||0,model:null,timestamp:new Date().toISOString(),contract_audit:{status:'CONFIGURATION_ERROR',prompt_contract_id:aiSummaryCustomContract?aiSummaryCustomContract.contractId:isOutcomeExtraction?OUTCOME_CONTRACT_ID:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:'facts_v2',structured_output_requested:false,structured_output_applied:false,response_schema_id:aiSummaryCustomContract?aiSummaryCustomContract.schemaId:isOutcomeExtraction?OUTCOME_RESPONSE_SCHEMA_ID:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:'facts_v2',parser_schema_id:aiSummaryCustomContract?aiSummaryCustomContract.schemaId:isOutcomeExtraction?OUTCOME_PARSER_SCHEMA_ID:isNeedsExtraction?NEED_PARSER_SCHEMA_ID:'facts_v2',contract_version:aiSummaryCustomContract?aiSummaryCustomContract.contractVersion:isOutcomeExtraction?OUTCOME_CONTRACT_VERSION:isNeedsExtraction?NEED_CONTRACT_VERSION:null,all_contracts_match:false,schema_hash:isOutcomeExtraction?OUTCOME_SCHEMA_HASH:isNeedsExtraction?NEED_SCHEMA_HASH:null,warnings:[contractConfigurationError]},status:'bad',metrics:[['LLM','не вызывался'],['Decision','ERROR'],['Ошибка контракта',contractConfigurationError]]};
       rep.meta=buildStageMeta(stage,rep);
       return rep;
     }
@@ -12592,6 +13845,8 @@ async function runStage(stage, ctx){
       rep.meta=buildStageMeta(stage,rep);
       return rep;
     }
+    const applicationExtractorKey=applicationAttributesExtractorKey(stage);
+    const applicationResponseFormat=applicationAttributesResponseFormat(stage);
     const responseFormat=isSummaryNewStage(stage)
       ? {type:'json_schema',json_schema:{name:'summary_new',strict:true,schema:SUMMARY_NEW_JSON_SCHEMA}}
       : isFactsExtraction
@@ -12600,7 +13855,9 @@ async function runStage(stage, ctx){
       ? {type:'json_schema',json_schema:{name:NEED_RESPONSE_SCHEMA_ID,strict:true,schema:NEED_RESPONSE_SCHEMA}}
       : isOutcomeExtraction
       ? {type:'json_schema',json_schema:{name:OUTCOME_RESPONSE_SCHEMA_ID,strict:true,schema:OUTCOME_RESPONSE_SCHEMA}}
-      : null;
+      : aiSummaryCustomContract
+      ? {type:'json_schema',json_schema:{name:aiSummaryCustomContract.schemaId,strict:true,schema:aiSummaryCustomContract.jsonSchema}}
+      : applicationResponseFormat;
     // AI Tunnel оценивает максимальную стоимость до запуска запроса. На
     // длинной транскрипции резерв 6000 превышал лимит ключа всего на 0,24 ₽
     // и останавливал весь pipeline до первого ответа модели. Для строгой
@@ -12608,10 +13865,12 @@ async function runStage(stage, ctx){
     // меньший лимит сохраняем, а другие этапы и провайдеры не затрагиваем.
     const effectiveExtractionMaxTokens=isFactsExtraction&&stage.provider==='ai-tunnel'
       ? Math.min(Number(stage.maxTokens)||5500,5500)
+      : applicationExtractorKey
+      ? Math.max(Number(stage.maxTokens)||0,2000)
       : stage.maxTokens;
-    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason,structuredOutputApplied,networkRetryCount=0,networkRetryReason}=await callModelWithTransientRetry(prompt, stage.model, stage.provider, stage.temperature, effectiveExtractionMaxTokens,responseFormat,stageAllowsVendorFallback(stage));
+    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason,structuredOutputApplied,requestedOutputTokenBudget,outputTokenParameter,networkRetryCount=0,networkRetryReason}=await callModelWithTransientRetry(prompt, stage.model, stage.provider, stage.temperature, effectiveExtractionMaxTokens,responseFormat,aiSummaryCustomContract?false:stageAllowsVendorFallback(stage));
     const promptHash=await hashPrompt(prompt);
-    let parsed=null, parseErr=null, parseErrKind=null,contractWarnings=[],extractionAudit=null;
+    let parsed=null, parseErr=null, parseErrKind=null,contractWarnings=[],extractionAudit=null,applicationJudgeNormalizations=[];
     try{
       if(finishReason==='length') throw new Error('TRUNCATED_JSON');
       parsed=isSummaryNewStage(stage)?parseSummaryNewResponse(raw):parseJSON(raw);
@@ -12622,12 +13881,27 @@ async function runStage(stage, ctx){
       if(isNeedsExtraction){
         const recovered=recoverLegacyNeedInterestStrings(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);if(recovered.audit) extractionAudit=recovered.audit;
       }
-      if(stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))) parsed=validateExtractionRoot(moduleStageKind(stage),parsed,ctx);
-    }catch(e){ parseErr=e.message; parseErrKind=['FactSchemaError','NeedSchemaError','OutcomeSchemaError'].includes(e.name)?'schema':'json'; }
+      if(aiSummaryCustomContract) parsed=aiSummaryCustomContract.validate(parsed);
+      if(applicationExtractorKey) parsed=validateApplicationAttributesExtractor(applicationExtractorKey,parsed);
+      if(applicationAttributesJudgeSourceKey(stage)) parsed=validateApplicationAttributesJudge(stage,parsed);
+      if(isApplicationAttributesJudge){const normalized=normalizeApplicationAttributesCombinedDecision(parsed,ctx);applicationJudgeNormalizations.push(...normalized.normalized);parsed=validateApplicationAttributesCombinedJudge(normalized.value,ctx);}
+      if(!aiSummaryCustomContract&&stage.type==='llm'&&['facts','needs','outcome'].includes(moduleStageKind(stage))) parsed=validateExtractionRoot(moduleStageKind(stage),parsed,ctx);
+    }catch(e){ parseErr=e.message; parseErrKind=['FactSchemaError','NeedSchemaError','OutcomeSchemaError','ApplicationAttributesSchemaError','AiSummaryFactsSchemaError','AiSummaryNeedsSchemaError','AiSummaryContractSchemaError'].includes(e.name)?'schema':'json'; }
     let extractionRetryCount=0;
     const extractionKind=moduleStageKind(stage);
-    const isExtractionStage=stage.type==='llm'&&['facts','needs','outcome'].includes(extractionKind);
+    const isExtractionStage=Boolean(applicationExtractorKey)||Boolean(aiSummaryCustomContract)||(stage.type==='llm'&&['facts','needs','outcome'].includes(extractionKind));
     const unknownFactCategories=isFactsExtraction&&parseErrKind==='schema'?factUnknownCategories(parsed):[];
+    if(parseErr&&isApplicationAttributesJudge){
+      extractionRetryCount=1;
+      const retryPrompt=prompt+'\n\nSCHEMA REPAIR — ПОСЛЕДНЯЯ ПОПЫТКА. Ошибка: '+parseErr+'. Верни полный объект заново строго по response schema. Не меняй immutable technical_error атрибуты и не добавляй текст вне JSON.';
+      const retryResult=await callModelWithTransientRetry(retryPrompt,stage.model,stage.provider,stage.temperature,effectiveExtractionMaxTokens,responseFormat,stageAllowsVendorFallback(stage));
+      raw=retryResult.text;tokens+=retryResult.tokens||0;actualModel=retryResult.actualModel;actualProvider=retryResult.actualProvider;fallbackNote=retryResult.fallbackNote;finishReason=retryResult.finishReason;structuredOutputApplied=retryResult.structuredOutputApplied;
+      networkRetryCount+=retryResult.networkRetryCount||0;networkRetryReason=networkRetryReason||retryResult.networkRetryReason;
+      try{
+        if(finishReason==='length') throw new Error('TRUNCATED_JSON');
+        const normalized=normalizeApplicationAttributesCombinedDecision(parseJSON(raw),ctx);applicationJudgeNormalizations.push(...normalized.normalized);parsed=validateApplicationAttributesCombinedJudge(normalized.value,ctx);parseErr=null;parseErrKind=null;
+      }catch(e){parsed=null;parseErr=e.message;parseErrKind=e.name==='ApplicationAttributesSchemaError'?'schema':'json';}
+    }
     if(parseErr&&unknownFactCategories.length){
       extractionRetryCount=1;
       const invalidCategoryResponse=parsed;
@@ -12640,7 +13914,7 @@ async function runStage(stage, ctx){
         parsed=validateFactSchemaRepair(invalidCategoryResponse,parseJSON(raw));parseErr=null;parseErrKind=null;
       }catch(e){parsed=null;parseErr=e.message;parseErrKind=e.name==='FactSchemaError'?'schema':'json';}
     }
-    if(parseErr&&extractionRetryCount===0&&isExtractionStage&&(!(isFactsExtraction||isOutcomeExtraction)||parseErrKind!=='schema')){
+    if(parseErr&&extractionRetryCount===0&&isExtractionStage&&!applicationExtractorKey&&!aiSummaryCustomContract&&(!(isFactsExtraction||isOutcomeExtraction)||parseErrKind!=='schema')){
       extractionRetryCount=1;
       const repairPrompt=isNeedsExtraction?needSchemaRepairPrompt(prompt,parsed,parseErr):prompt;
       const retryResult=await callModelWithTransientRetry(repairPrompt,stage.model,stage.provider,stage.temperature,Math.max(Number(stage.maxTokens)||0,14000),responseFormat,stageAllowsVendorFallback(stage));
@@ -12679,10 +13953,25 @@ async function runStage(stage, ctx){
       ? {...parsed,execution_status:'SUCCESS',status:'success',score:null,confidence:null}
       : parseErr&&isExtractionStage
       ? {status:'technical_error',decision:'ERROR',score:null,error_code:parseErrKind==='schema'?'SCHEMA_VALIDATION_FAILED':parseErr==='TRUNCATED_JSON'?'TRUNCATED_JSON':parseErr==='INVALID_ROOT_SCHEMA'?'INVALID_ROOT_SCHEMA':'INVALID_JSON',parse_error:parseErr,schema_error:parseErrKind==='schema'?parseErr:null,retry_count:extractionRetryCount,raw_response:raw,critical_errors:['Extractor вернул невалидный результат: '+parseErr],issues:[parseErr]}
-      : isFactsExtraction||isNeedsExtraction||isOutcomeExtraction
+      : parseErr&&applicationAttributesJudgeSourceKey(stage)
+      ? applicationAttributesTechnicalJudgeOutput(stage.outKey)
+      : parseErr&&isApplicationAttributesJudge
+      ? applicationAttributesCombinedTechnicalOutput(ctx)
+      : isFactsExtraction||isNeedsExtraction||isOutcomeExtraction||aiSummaryCustomContract
       ? parsed
       : guardEmptyExtraction(stage, parsed || (stage.type==='check' ? failedSummaryJudgeOutput(stage, 'Проверщик вернул невалидный JSON: '+parseErr) : {raw}), ctx);
     output=normalizeModuleSummaryJudge(stage,output,ctx);
+    let aiSummaryOutcomeEvidenceAudit=null;
+    if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&AI_SUMMARY_CONVERSATION_JUDGE_V5&&stage.outKey==='conversation_judge'&&output&&typeof output==='object'&&!parseErr){
+      const guarded=AI_SUMMARY_CONVERSATION_JUDGE_V5.validateConversationJudge(output,{transcript:transcriptText(ctx),outcomeExtractor:ctx&&ctx.outcome_extractor});
+      output=guarded.output;aiSummaryOutcomeEvidenceAudit=guarded.audit;
+    }
+    if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&AI_SUMMARY_CONVERSATION_JUDGE_V5&&stage.outKey==='summary_judge'&&output&&typeof output==='object'&&!parseErr){
+      const guarded=AI_SUMMARY_CONVERSATION_JUDGE_V5.applySummaryJudgeEvidence(output,{transcript:transcriptText(ctx),outcomeExtractor:ctx&&ctx.outcome_extractor,cleanOutcome:ctx&&ctx.clean_conversation_store&&ctx.clean_conversation_store.outcome,summary:ctx&&ctx.summary_generator});
+      output=guarded.output;aiSummaryOutcomeEvidenceAudit=guarded.audit;
+    }
+    if(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage.outKey==='attributes_merger') output=enforceApplicationAttributesMergerTechnicalErrors(output,ctx);
+    if(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage.outKey==='attributes_quality_gate') output=enforceApplicationAttributesGateTechnicalErrors(output,ctx);
     if(IS_TRANSCRIPTION_SUMMARY_MODULE && stage.outKey==='summary' && output && typeof output==='object' && typeof output.summary==='string'){
       output=cleanupSummaryFunding(output, transcriptText(ctx));
       output=cleanupSummaryOutcome(output,ctx);
@@ -12697,21 +13986,27 @@ async function runStage(stage, ctx){
       // калибровка судей по прогонам была воспроизводимой даже когда
       // vendor-fallback молча подменил вендора.
       provider:actualProvider, requested_provider:stage.provider||null, actual_model:actualModel, requested_model:stage.model, model_fallback:Boolean(fallbackNote),
-      prompt_audit:{transcript_present:promptAudit.transcriptPresent, transcript_injected:promptAudit.transcriptInjected, transcript_chars:isSummaryNewStage(stage)?promptAudit.transcript.length:String(transcriptText(ctx)||'').length, resolved_prompt_contains_transcript:Boolean(promptAudit.resolvedPromptContainsTranscript), prompt_chars:prompt.length},
+      ...(aiSummaryCustomContract?{legacy_parser_used:false,parser_fallback_used:false,text_fallback_used:false,repair_fallback_used:false}:{}),
+      prompt_audit:{transcript_present:promptAudit.transcriptPresent, transcript_injected:promptAudit.transcriptInjected, transcript_available:promptAudit.transcriptPresent, transcript_delivery:promptAudit.transcriptDelivery||(promptAudit.transcriptInjected?'prompt':'not_sent'), transcript_sent_to_model:promptAudit.transcriptSentToModel??promptAudit.transcriptInjected, transcript_chars:isSummaryNewStage(stage)?promptAudit.transcript.length:String(transcriptText(ctx)||'').length, resolved_prompt_contains_transcript:Boolean(promptAudit.resolvedPromptContainsTranscript), prompt_chars:prompt.length},
       network_retry_count:networkRetryCount, network_retry_reason:networkRetryReason||null,
       // Общие требования ТЗ (stages 1-9 rework): версионирование каждого этапа.
       stage_version:stage.stageVersion||'v1', prompt_id:stage.promptId||null, prompt_version:'v'+(stage.promptVersion||1), prompt_updated_at:stage.promptUpdatedAt||null, prompt_hash:promptHash, resolved_prompt:prompt, retry_attempt:ctx.__summary_retry_attempt||0,
       model:actualModel, timestamp:new Date().toISOString(),
       finish_reason:finishReason||null,
+      configured_max_tokens:Math.max(1,Math.round(Number(stage.maxTokens)||2000)),
+      requested_output_token_budget:Number(requestedOutputTokenBudget)||Number(effectiveExtractionMaxTokens)||null,
+      effective_output_token_budget:Number(effectiveExtractionMaxTokens)||null,
+      output_token_parameter:outputTokenParameter||null,
+      output_token_budget:Number(effectiveExtractionMaxTokens)||null,
       retry_count:extractionRetryCount,
       contract_audit:{
         status:contractWarnings.length?'RECOVERED_WITH_WARNING':'VALID',
-        prompt_contract_id:isOutcomeExtraction?OUTCOME_CONTRACT_ID:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:isFactsExtraction?'facts_v2':null,
+        prompt_contract_id:aiSummaryCustomContract?aiSummaryCustomContract.contractId:isOutcomeExtraction?OUTCOME_CONTRACT_ID:isNeedsExtraction?NEED_RESPONSE_SCHEMA_ID:isFactsExtraction?'facts_v2':applicationExtractorKey?'application_'+applicationExtractorKey+'_v1':isApplicationAttributesJudge?'application_attributes_judge_v1':null,
         structured_output_requested:Boolean(responseFormat),
         structured_output_applied:structuredOutputApplied==null?Boolean(responseFormat&&['AI Tunnel','OpenAI Direct'].includes(actualProvider)):Boolean(structuredOutputApplied),
         response_schema_id:responseFormat&&responseFormat.json_schema?responseFormat.json_schema.name:null,
-        parser_schema_id:isFactsExtraction?'facts_v2':isNeedsExtraction?NEED_PARSER_SCHEMA_ID:isOutcomeExtraction?OUTCOME_PARSER_SCHEMA_ID:null,
-        contract_version:isOutcomeExtraction?OUTCOME_CONTRACT_VERSION:isNeedsExtraction?NEED_CONTRACT_VERSION:null,
+        parser_schema_id:aiSummaryCustomContract?aiSummaryCustomContract.schemaId:isFactsExtraction?'facts_v2':isNeedsExtraction?NEED_PARSER_SCHEMA_ID:isOutcomeExtraction?OUTCOME_PARSER_SCHEMA_ID:applicationExtractorKey?'application_'+applicationExtractorKey+'_v1':isApplicationAttributesJudge?'application_attributes_judge_v1':null,
+        contract_version:aiSummaryCustomContract?aiSummaryCustomContract.contractVersion:isOutcomeExtraction?OUTCOME_CONTRACT_VERSION:isNeedsExtraction?NEED_CONTRACT_VERSION:null,
         all_contracts_match:isFactsExtraction||isNeedsExtraction||isOutcomeExtraction?true:null,
         schema_hash:isOutcomeExtraction?OUTCOME_SCHEMA_HASH:isNeedsExtraction?NEED_SCHEMA_HASH:null,
         recovery_status:extractionAudit&&extractionAudit.recovery_status||'NOT_NEEDED',
@@ -12720,14 +14015,18 @@ async function runStage(stage, ctx){
         repair_attempted:extractionRetryCount>0,
         repair_result:extractionRetryCount>0?(parseErr?'FAILED':'SUCCESS'):'NOT_ATTEMPTED',
         warnings:[...new Set([...contractWarnings,...(responseFormat&&structuredOutputApplied===false?['STRUCTURED_OUTPUT_UNSUPPORTED_PARSER_FALLBACK']:[])])]
+        ,decision_normalizations:applicationJudgeNormalizations
       },
       extraction_audit:extractionAudit,
+      ...(aiSummaryOutcomeEvidenceAudit?{outcome_evidence_audit:aiSummaryOutcomeEvidenceAudit}:{}),
+      ...(aiSummaryInputProvenance?{provenance_validation:aiSummaryInputProvenance}:{}),
       status: isSummaryNewStage(stage)?(summaryNewFailure?'bad':'ok'):(parseErr?'bad':contractWarnings.length?'warn':'ok'),
       metrics:isSummaryNewStage(stage)
         ? [['Статус выполнения',summaryNewFailure?'техническая ошибка':'успешно'],['JSON',parseErr?'ошибка':'корректный'],['Транскрибация',promptAudit.transcriptInjected?'передана':'не передана'],['Модель',actualModel||'—'],['Fallback',fallbackNote?'да':'нет'],...(summaryNewFailure?[['Причина',summaryNewFailure.reason]]:[])]
         : isFactsExtraction
         ? [['Статус извлечения',parseErr?'ошибка':'успешно'],['Фактов на выходе',output&&Array.isArray(output.facts)?output.facts.length:0],['Цитат на выходе',output&&Array.isArray(output.quotes)?output.quotes.length:0],['Удалено локальным фильтром',Number(extractionAudit&&extractionAudit.removed_fact_count||0)+Number(extractionAudit&&extractionAudit.removed_quote_count||0)],['Провайдер',actualProvider],['Модель',modelLabel],['Токены',tokens],['Стоимость','$'+cost.toFixed(4)],['Время',ms+' мс'],['JSON',parseErr?'ошибка':'ок']]
         : [['Провайдер',actualProvider],['Модель',modelLabel],['Токены', tokens],['Стоимость', '$'+cost.toFixed(4)],['Время',ms+' мс'],['JSON', parseErr?'ошибка':'ок']] };
+    if(applicationExtractorKey||isApplicationAttributesJudge||aiSummaryCustomContract) rep.contract_audit.all_contracts_match=true;
     rep.meta=buildStageMeta(stage,rep);
     return rep;
   }
@@ -12794,7 +14093,7 @@ async function retrySummaryQualityFlow(active,stageReports){
       rep.retry_attempt=attempt;
       if(stage.outKey&&rep.output!==undefined){
         ctx[stage.outKey]=rep.output;
-        if(isSummaryGateStage(stage)) ctx.__latest_summary_quality_gate=rep.output;
+        if(isSummaryGateStage(stage)&&!IS_APPLICATION_ATTRIBUTES_PROJECT) ctx.__latest_summary_quality_gate=rep.output;
       }
       tokens+=rep.tokens||0;
       cost+=rep.cost||0;
@@ -12857,6 +14156,7 @@ function looksLikePipelinePrompt(text){
 }
 
 function buildPipelineExecutionSummary(active,stageReports,stoppedAtIndex){
+  if(!IS_TRANSCRIPTION_SUMMARY_MODULE) return buildCustomPipelineExecutionSummary(active,stageReports,stoppedAtIndex);
   const countedStages=active.filter(stage=>stage.outKey!=='stt');
   const countedReports=stageReports.filter(item=>item.stage?.outKey!=='stt');
   const executedReports=countedReports.filter(item=>item.report?.execution_status!=='NOT_RUN');
@@ -12889,6 +14189,39 @@ function buildPipelineExecutionSummary(active,stageReports,stoppedAtIndex){
       if(!matched||matched.report?.execution_status==='NOT_RUN') return {outKey:stage.outKey||'',status:'NOT_RUN'};
       const reportStatus=matched.report?.status;
       return {outKey:stage.outKey||'',status:reportStatus==='ok'?'SUCCESS':['warn','attn'].includes(reportStatus)?'SUCCESS_WITH_WARNING':'FAILED'};
+    })
+  };
+}
+
+function buildCustomPipelineExecutionSummary(active,stageReports,stoppedAtIndex){
+  const countedStages=active.filter(stage=>stage.outKey!=='stt');
+  const countedReports=stageReports.filter(item=>item.stage?.outKey!=='stt');
+  const reportByKey=new Map(countedReports.map(item=>[item.stage?.outKey,item.report]));
+  const reportFailed=report=>Boolean(
+    !report
+    ||report.execution_status==='NOT_RUN'
+    ||report.status==='bad'
+    ||report.error
+    ||report.parseErr
+  );
+  const executedReports=countedReports.filter(item=>item.report?.execution_status!=='NOT_RUN');
+  const successfulReports=executedReports.filter(item=>!reportFailed(item.report));
+  const failedStages=countedStages.filter(stage=>reportFailed(reportByKey.get(stage.outKey)));
+  const interrupted=stoppedAtIndex>=0||executedReports.length!==countedStages.length;
+  const crmBusinessStatus=IS_AI_SUMMARY_TEN_AUGUST_PROJECT?reportByKey.get('crm_summary_result')?.output?.pipeline_status:null;
+  return {
+    pipeline_status:interrupted||failedStages.length?'FAILED':'SUCCESS',
+    business_pipeline_status:crmBusinessStatus||null,
+    steps_total:countedStages.length,
+    steps_executed:executedReports.length,
+    steps_successful:successfulReports.length,
+    stopped_at_stage:stoppedAtIndex>=0?(active[stoppedAtIndex].outKey||null):null,
+    extractor_failures:failedStages.filter(stage=>/_extractor$/.test(stage.outKey||'')).map(stage=>stage.outKey),
+    judge_failures:failedStages.filter(stage=>/_judge$/.test(stage.outKey||'')).map(stage=>stage.outKey),
+    stages:countedStages.map(stage=>{
+      const report=reportByKey.get(stage.outKey);
+      if(!report||report.execution_status==='NOT_RUN') return {outKey:stage.outKey||'',status:'NOT_RUN'};
+      return {outKey:stage.outKey||'',status:reportFailed(report)?'FAILED':'SUCCESS'};
     })
   };
 }
@@ -13111,7 +14444,8 @@ async function runPipeline(){
 
     let rep;
     const isModelStage=stage.type==='llm'||stage.type==='check'||stage.type==='hybrid';
-    const noModelKey=isModelStage && !hasProviderCredentials(stage) && !transcriptionSummaryV3Enabled() && !(isModuleSummaryStage(stage)&&moduleSummaryDependencyError(ctx)) && !(isModuleTruthCheckStage(stage)&&truthCheckDependency(ctx)) && !(isModuleCriticalCompletenessStage(stage)&&criticalCompletenessDependency(ctx)) && !(isModuleAgentUtilityStage(stage)&&agentUtilityDependency(ctx)) && !(isModuleActionCheckStage(stage)&&actionCheckDependency(ctx)) && !(isModulePresentationCheckStage(stage)&&presentationCheckDependency(ctx));
+    const deterministicApplicationAttributesStage=isApplicationAttributesDeterministicStage(stage);
+    const noModelKey=isModelStage && !deterministicApplicationAttributesStage && !hasProviderCredentials(stage) && !transcriptionSummaryV3Enabled() && !(isModuleSummaryStage(stage)&&moduleSummaryDependencyError(ctx)) && !(isModuleTruthCheckStage(stage)&&truthCheckDependency(ctx)) && !(isModuleCriticalCompletenessStage(stage)&&criticalCompletenessDependency(ctx)) && !(isModuleAgentUtilityStage(stage)&&agentUtilityDependency(ctx)) && !(isModuleActionCheckStage(stage)&&actionCheckDependency(ctx)) && !(isModulePresentationCheckStage(stage)&&presentationCheckDependency(ctx));
     if(noModelKey){
       const summaryTranscriptMissing=isSummaryNewStage(stage)&&!summaryNewTranscript(ctx);
       rep=isSummaryNewStage(stage)?{
@@ -13200,8 +14534,9 @@ async function runPipeline(){
       const gateInputStoreHash=transcriptionSummaryV3Enabled()&&(stage.outKey==='summary'||v3SelectedRole(stage)==='summaryJudges')
         ? String(ctx.conversation_store?.content_hash||'')
         : (stage.outKey==='summary'||Object.prototype.hasOwnProperty.call(SUMMARY_QUALITY_GATE_CRITERIA,stage.outKey))?summaryQualityGateStoreHash(ctx):'';
-      const protectedOutputHash=['summary','summary_quality_gate'].includes(stage.outKey)&&rep.output!==undefined?stableHash(rep.output):'';
-      ctx.__stage_provenance[stage.outKey]={run_id:runId,transcript_hash:transcriptHash,pipeline_configuration_hash:pipelineConfigurationHash,stage_execution_id:rep.stage_execution_id,...(gateInputStoreHash?{conversation_store_hash:gateInputStoreHash}:{}),...(protectedOutputHash?{output_hash:protectedOutputHash}:{}),...(stage.outKey==='summary'?{prompt_version:String(rep.prompt_version||''),model_id:String(rep.model||rep.actual_model||''),stage_version:String(rep.stage_version||'')}:{})};
+      const protectedOutputHash=['summary','summary_generator','summary_quality_gate'].includes(stage.outKey)&&rep.output!==undefined?stableHash(rep.output):'';
+      const audit=rep.contract_audit||{};
+      ctx.__stage_provenance[stage.outKey]={run_id:runId,transcript_hash:transcriptHash,pipeline_configuration_hash:pipelineConfigurationHash,stage_execution_id:rep.stage_execution_id,execution_status:rep.execution_status||'SUCCESS',parse_status:audit.parse_status||null,schema_status:audit.schema_status||null,structured_output_requested:audit.structured_output_requested===true,structured_output_applied:audit.structured_output_applied===true,...(gateInputStoreHash?{conversation_store_hash:gateInputStoreHash}:{}),...(protectedOutputHash?{output_hash:protectedOutputHash}:{}),...(stage.outKey==='summary'?{prompt_version:String(rep.prompt_version||''),model_id:String(rep.model||rep.actual_model||''),stage_version:String(rep.stage_version||'')}:{})};
     }
     // сохраняем в контекст
     if(stage.outKey && rep.output!==undefined){
@@ -13214,7 +14549,7 @@ async function runPipeline(){
       if(stage.outKey === 'needs' && rep.output) rep.output = cleanupNeedsV9(rep.output);
       if(stage.outKey === 'outcome' && rep.output) rep.output = cleanupOutcomeV9(rep.output);
       ctx[stage.outKey]=rep.output;
-      if(isSummaryGateStage(stage)) ctx.__latest_summary_quality_gate=rep.output;
+      if(isSummaryGateStage(stage)&&!IS_APPLICATION_ATTRIBUTES_PROJECT) ctx.__latest_summary_quality_gate=rep.output;
     }
     if(rep.tokens) totalTokens+=rep.tokens;
     if(rep.cost) totalCost+=rep.cost;
@@ -13265,6 +14600,7 @@ async function runPipeline(){
   const executedReports=stageReports.filter(item=>item.report?.execution_status!=='NOT_RUN');
   try{attachReviewerScores(stageReports);}catch(error){if(!IS_TRANSCRIPTION_SUMMARY_MODULE) throw error;}
   ctx.pipeline_execution=buildPipelineExecutionSummary(active,stageReports,stoppedAtIndex);
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT) ctx.attributes_metrics=buildApplicationAttributesMetrics(ctx);
 
   const retry=transcriptionSummaryV3Enabled()
     ? {tokens:0,cost:0,attempted:false,reason:'FULL_V3_ORCHESTRATOR'}
@@ -13295,12 +14631,14 @@ async function runPipeline(){
 function reportRunToParent(run){
   try{
     const gate=currentSummaryGate(ctx), check=ctx.presentation_check||ctx.summary_check;
+    const applicationMetrics=IS_APPLICATION_ATTRIBUTES_PROJECT?ctx.attributes_metrics:null;
+    const applicationGate=IS_APPLICATION_ATTRIBUTES_PROJECT?ctx.attributes_quality_gate:null;
     const summaryTechnical=IS_SUMMARY_NEW_PROJECT&&isSummaryNewTechnicalError(ctx.summary);
     // Same shape as the "Скачать полный отчёт (JSON)" button builds
     // (dlReport, see renderFinal) -- so a test opened later from
     // Dashboard's run history shows exactly what that download would
     // have shown, not a lighter summary.
-    const report={ run_id:run.runId, started_at:run.startedAt, completed_at:new Date().toISOString(), pipeline_configuration_hash:run.pipelineConfigurationHash, transcript_hash:run.transcriptHash, pipeline: pipeline.map(sanitize), result: ctx, stageReports: run.stageReports||[], usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
+    const report={ run_id:run.runId, started_at:run.startedAt, completed_at:new Date().toISOString(), pipeline_configuration_hash:run.pipelineConfigurationHash, transcript_hash:run.transcriptHash, pipeline: pipeline.map(sanitize), result: ctx, ...(IS_APPLICATION_ATTRIBUTES_PROJECT?{attributes_metrics:ctx.attributes_metrics||null}:{}), stageReports: run.stageReports||[], usage:{ totalTokens: run.totalTokens, totalCost: run.totalCost } };
     const payload={
       id:run.runId,
       startedAt: run.startedAt,
@@ -13312,9 +14650,9 @@ function reportRunToParent(run){
       tokens: run.totalTokens,
       costUsd: run.totalCost,
       status: run.errorCount>0 ? 'failed' : 'succeeded',
-      confidence: summaryTechnical?undefined:(gate ? (gate.qualityScore!=null ? gate.qualityScore/100 : gate.summary_quality_score!=null ? gate.summary_quality_score/100 : gate.confidence) : undefined),
-      decision: summaryTechnical?'TECHNICAL_ERROR':(gate ? gate.decision : undefined),
-      qualityScore: summaryTechnical?undefined:(gate ? (gate.qualityScore ?? gate.summary_quality_score ?? check?.score) : check ? check.score : undefined),
+      confidence: applicationMetrics?.overall_confidence??(summaryTechnical?undefined:(gate ? (gate.qualityScore!=null ? gate.qualityScore/100 : gate.summary_quality_score!=null ? gate.summary_quality_score/100 : gate.confidence) : undefined)),
+      decision: applicationGate?.gate_status??(summaryTechnical?'TECHNICAL_ERROR':(gate ? gate.decision : undefined)),
+      qualityScore: applicationMetrics?.quality_score??(summaryTechnical?undefined:(gate ? (gate.qualityScore ?? gate.summary_quality_score ?? check?.score) : check ? check.score : undefined)),
       transcript: ctx.__transcript,
       report: report,
       run_id:run.runId,
@@ -13327,10 +14665,10 @@ function reportRunToParent(run){
       pipeline_name:IS_TRANSCRIPTION_SUMMARY_MODULE?'AI-саммари звонков':'Pipeline Lab v3',
       pipelineName:IS_TRANSCRIPTION_SUMMARY_MODULE?'AI-саммари звонков':'Pipeline Lab v3',
       created_at:run.startedAt,
-      final_score:summaryTechnical?undefined:(gate ? (gate.qualityScore ?? gate.summary_quality_score ?? check?.score) : check?.score),
-      finalScore:summaryTechnical?undefined:(gate ? (gate.qualityScore ?? gate.summary_quality_score ?? check?.score) : check?.score),
-      final_decision:summaryTechnical?'TECHNICAL_ERROR':(gate ? gate.decision : undefined),
-      finalDecision:summaryTechnical?'TECHNICAL_ERROR':(gate ? gate.decision : undefined),
+      final_score:applicationMetrics?.quality_score??(summaryTechnical?undefined:(gate ? (gate.qualityScore ?? gate.summary_quality_score ?? check?.score) : check?.score)),
+      finalScore:applicationMetrics?.quality_score??(summaryTechnical?undefined:(gate ? (gate.qualityScore ?? gate.summary_quality_score ?? check?.score) : check?.score)),
+      final_decision:applicationGate?.gate_status??(summaryTechnical?'TECHNICAL_ERROR':(gate ? gate.decision : undefined)),
+      finalDecision:applicationGate?.gate_status??(summaryTechnical?'TECHNICAL_ERROR':(gate ? gate.decision : undefined)),
       steps_total:run.stageCount,
       tokens_total:run.totalTokens,
       cost_total:run.totalCost,
@@ -13400,6 +14738,7 @@ function persistDashboardRun(payload){
 function badgeFor(st){return st==='ok'?'ok':st==='warn'?'warn':st==='attn'?'attn':st==='bad'?'bad':'run';}
 function badgeText(st){return st==='ok'?'OK':st==='warn'?'Внимание':st==='attn'?'Ручная проверка':st==='bad'?'Ошибка':st==='not_run'?'Не запущен':'…';}
 function whoLabel(stage,rep){
+  if(isApplicationAttributesDeterministicStage(stage)||isAiSummaryStoreCleanerStage(stage)||isAiSummaryFinalizationStage(stage)) return 'Deterministic Contract · code';
   if(rep&&rep.provider) return rep.provider+' · '+(rep.actual_model||stage.model||'');
   if(stage.provider) return LLM_PROVIDER_OPTIONS.find(option=>option.v===stage.provider)?.t+' · '+(stage.model||'');
   if(stage.vendor) return stage.vendor;
@@ -13477,6 +14816,16 @@ function renderFactJudgeV3Panel(output){
   return table('Проверка каждого факта',['ID','Status','Speaker','Confidence','Reason','Evidence'],factRows)+table('Проверка цитат',['ID','Status','Speaker','Confidence','Reason','Evidence'],quoteRows)+missingList;
 }
 
+function renderAiSummaryQualityGatePanel(output){
+  const labels={faithfulness:'Faithfulness',completeness:'Completeness',usefulness:'Usefulness',agreements_next_step:'Agreements & Next Step',format:'Format'};
+  const scoreRows=Object.entries(labels).map(([key,label])=>'<div><span class="k">'+label+'</span> <b>'+escapeHtml(output.scores&&output.scores[key])+'</b></div>').join('');
+  const list=(label,items)=>'<details class="help" open><summary>'+label+' ('+toList(items).length+')</summary><div class="out">'+escapeHtml(JSON.stringify(toList(items),null,2))+'</div></details>';
+  return '<div class="kvlist" style="margin-top:10px"><div><span class="k">gate_status</span> <b>'+escapeHtml(output.gate_status)+'</b></div><div><span class="k">Quality Score</span> <b>'+escapeHtml(output.quality_score)+'%</b></div><div><span class="k">Confidence</span> <b>'+escapeHtml(Number(output.confidence).toFixed(2))+'</b></div>'+scoreRows+'</div>'+list('failed_criteria',output.failed_criteria)+list('warnings',output.warnings)+list('technical_errors',output.technical_errors);
+}
+function renderAiSummaryCrmResultPanel(output){
+  return '<div class="kvlist" style="margin-top:10px"><div><span class="k">crm_action</span> <b>'+escapeHtml(output.crm_action)+'</b></div><div><span class="k">business pipeline_status</span> <b>'+escapeHtml(output.pipeline_status)+'</b></div><div><span class="k">Gate</span> <b>'+escapeHtml(output.quality&&output.quality.gate_status)+'</b></div><div><span class="k">Quality Score</span> <b>'+escapeHtml(output.quality&&output.quality.quality_score)+'%</b></div><div><span class="k">Confidence</span> <b>'+escapeHtml(Number(output.quality&&output.quality.confidence||0).toFixed(2))+'</b></div></div><details class="help" open><summary>Summary без изменений</summary><div class="out">'+escapeHtml(JSON.stringify(output.summary,null,2))+'</div></details><details class="help"><summary>warnings / errors</summary><div class="out">'+escapeHtml(JSON.stringify({warnings:output.warnings,errors:output.errors},null,2))+'</div></details>';
+}
+
 function renderReport(stage, rep, num){
   const M=stageTypeMeta(stage);
   const el=document.createElement('div'); el.className='report collapsed';
@@ -13490,6 +14839,8 @@ function renderReport(stage, rep, num){
   const moduleActionCheckStage=isModuleActionCheckStage(stage);
   const modulePresentationCheckStage=isModulePresentationCheckStage(stage);
   const moduleCrmStage=IS_TRANSCRIPTION_SUMMARY_MODULE&&stage&&stage.codeFn==='crm'&&stage.outKey==='crm';
+  const applicationAttributesCrmStage=isApplicationAttributesDeterministicStage(stage);
+  const aiSummaryFinalizationStage=isAiSummaryFinalizationStage(stage);
   // Для известных стадий score вычисляется сразу; после независимого
   // проверщика первичная структурная оценка заменяется итоговой смысловой.
   const hasScore=meta.score!=null;
@@ -13503,7 +14854,7 @@ function renderReport(stage, rep, num){
     }).join('')+'</div>';
   }
 
-  if(!summaryNewStage && !moduleSummaryStage && !moduleTruthStage && !moduleCriticalCompletenessStage && !moduleAgentUtilityStage && !moduleActionCheckStage && !modulePresentationCheckStage && !moduleCrmStage && stage.codeFn!=='stt'){
+  if(!summaryNewStage && !moduleSummaryStage && !moduleTruthStage && !moduleCriticalCompletenessStage && !moduleAgentUtilityStage && !moduleActionCheckStage && !modulePresentationCheckStage && !moduleCrmStage && !applicationAttributesCrmStage && stage.codeFn!=='stt'){
     body+='<div class="metrics">'
       +'<div class="metric"><div class="ml">Оценка</div><div class="mv '+scoreTone+'">'+(hasScore?Number(meta.score).toFixed(0)+'%':'не рассчитана')+'</div></div>'
       +'<div class="metric"><div class="ml">Confidence</div><div class="mv">'+(meta.confidence==null?'не рассчитан':Number(meta.confidence).toFixed(2))+'</div></div>'
@@ -13558,6 +14909,9 @@ function renderReport(stage, rep, num){
   if(rep.isSummaryQualityGate && rep.output){
     body+=renderSummaryQualityPanel(rep.output);
   }
+  if(aiSummaryFinalizationStage&&rep.output){
+    body+=stage.outKey==='summary_quality_gate'?renderAiSummaryQualityGatePanel(rep.output):renderAiSummaryCrmResultPanel(rep.output);
+  }
 
   if(moduleTruthStage&&rep.output){ body+=renderTruthCheckPanel(rep.output); }
   else if(moduleCriticalCompletenessStage&&rep.output){ body+=renderCriticalCompletenessPanel(rep.output); }
@@ -13580,11 +14934,12 @@ function renderReport(stage, rep, num){
   else if(rep.parseErr){ body+='<div class="out" style="color:var(--warn)">JSON не распознан: '+escapeHtml(rep.parseErr)+'\n\n'+escapeHtml((rep.raw||'').slice(0,600))+'</div>'; }
   else if(rep.output!==undefined && !rep.isCode){
     body+='<div class="out">'+escapeHtml(JSON.stringify(rep.output,null,2))+'</div>';
-  } else if(rep.isCode && stage.codeFn!=='gate' && stage.codeFn!=='summaryQualityGate' && rep.output){
+  } else if(rep.isCode && !aiSummaryFinalizationStage && stage.codeFn!=='gate' && stage.codeFn!=='summaryQualityGate' && rep.output){
     // компактный вывод для сервисных и код-шагов
     const o={...rep.output}; delete o.checks; delete o.rows; delete o.breakdown;
     if(Object.keys(o).length) body+='<div class="out">'+escapeHtml(JSON.stringify(o,null,2))+'</div>';
   }
+  if(isAiSummaryStoreCleanerStage(stage)) body+='<details class="help"><summary>Provenance validation</summary><div class="out">'+escapeHtml(JSON.stringify(rep.provenance_validation||{},null,2))+'</div></details>';
 
   const st=rep.status||'ok';
   const who=whoLabel(stage,rep);
@@ -13659,6 +15014,14 @@ function renderFinalSummary(summary){
     html+='<div class="summary-facts">'+sections.facts.map(item=>'<div>• '+escapeHtml(item)+'</div>').join('')+'</div>';
   }
   if(sections.action) html+='<p class="summary-action"><b>Договорённости / следующий шаг:</b> '+escapeHtml(sections.action)+'</p>';
+  return html;
+}
+
+function renderAiSummaryTenAugustResult(summary){
+  let html='<p class="fl">Итог разговора</p><p class="fs">'+escapeHtml(summary.conversation_result||'—')+'</p>';
+  if(summary.key_facts.length) html+='<p class="fl" style="margin-top:4px">Ключевые факты</p><div class="summary-facts">'+summary.key_facts.map(item=>'<div>• '+escapeHtml(item)+'</div>').join('')+'</div>';
+  if(summary.quotes.length) html+='<p class="fl" style="margin-top:4px">Цитаты</p><div class="summary-facts">'+summary.quotes.map(item=>'<div>• '+escapeHtml(item)+'</div>').join('')+'</div>';
+  html+='<p class="fl" style="margin-top:4px">Договорённости / следующий шаг</p><div class="summary-facts"><div>• '+escapeHtml(summary.next_step||'—')+'</div></div>';
   return html;
 }
 
@@ -13774,18 +15137,87 @@ function appendModuleReportDownloadFallback(totalTokens,totalCost,stageReports){
   };
 }
 
+function formatApplicationAttributeValue(value){
+  if(value===null) return 'не изменять';
+  if(Array.isArray(value)) return value.length?value.join(', '):'не определено';
+  if(value===undefined||value==='') return 'не определено';
+  return String(value);
+}
+
+function renderApplicationAttributesFinal(totalTokens,totalCost,stageReports){
+  const crmResult=ctx.crm_attributes_result||{};
+  const attributes=crmResult.attributes||{};
+  const gate=ctx.attributes_quality_gate||{};
+  const execution=ctx.pipeline_execution||{};
+  const attributesMetrics=ctx.attributes_metrics||{};
+  const confidence=attributesMetrics.attribute_confidence||{};
+  const qualityCriteria=attributesMetrics.quality_criteria||{};
+  const percent=value=>value==null?'не рассчитана':Math.round(Number(value)*100)+'%';
+  const qualityPercent=value=>Number.isFinite(Number(value))?Math.round(Number(value))+'%':'не рассчитана';
+  const finalEl=document.createElement('div');
+  finalEl.className='final';
+  finalEl.dataset.applicationAttributesResult='true';
+  finalEl.innerHTML='<p class="fl">🎯 Результат обработки атрибутов</p>'
+    +'<p class="fl" style="margin-top:4px">Потребности клиента</p>'
+    +'<div class="fmeta">'
+    +'<div class="fm">Интересует: <b data-result-interest>'+escapeHtml(formatApplicationAttributeValue(attributes.interest))+'</b></div>'
+    +'<div class="fm">Источник средств: <b data-result-funding-source>'+escapeHtml(formatApplicationAttributeValue(attributes.funding_source))+'</b></div>'
+    +'<div class="fm">Срок покупки: <b data-result-purchase-term>'+escapeHtml(formatApplicationAttributeValue(attributes.purchase_term))+'</b></div>'
+    +'<div class="fm">Уверенность: <b data-result-overall-confidence>'+escapeHtml(percent(attributesMetrics.overall_confidence))+'</b></div>'
+    +'<div class="fm">Оценка качества: <b data-result-quality-score>'+escapeHtml(qualityPercent(attributesMetrics.quality_score))+'</b></div>'
+    +'</div>'
+    +'<details class="help" data-attributes-metrics-details><summary>Как рассчитаны метрики</summary>'
+    +'<div class="kvlist"><div><span class="k">Уверенность · Интересует</span> <b>'+escapeHtml(percent(confidence.interest))+'</b></div>'
+    +'<div><span class="k">Уверенность · Источник средств</span> <b>'+escapeHtml(percent(confidence.funding_source))+'</b></div>'
+    +'<div><span class="k">Уверенность · Срок покупки</span> <b>'+escapeHtml(percent(confidence.purchase_term))+'</b></div>'
+    +'<div><span class="k">Extractor correctness</span> <b>'+escapeHtml(qualityPercent(qualityCriteria.extractor_correctness))+'</b></div>'
+    +'<div><span class="k">Evidence quality</span> <b>'+escapeHtml(qualityPercent(qualityCriteria.evidence_quality))+'</b></div>'
+    +'<div><span class="k">Judge consistency</span> <b>'+escapeHtml(qualityPercent(qualityCriteria.judge_consistency))+'</b></div>'
+    +'<div><span class="k">Pipeline integrity</span> <b>'+escapeHtml(qualityPercent(qualityCriteria.pipeline_integrity))+'</b></div>'
+    +'<div><span class="k">CRM readiness</span> <b>'+escapeHtml(qualityPercent(qualityCriteria.crm_readiness))+'</b></div></div></details>';
+  reportsEl.appendChild(finalEl);
+
+  const metaEl=document.createElement('div');
+  metaEl.className='card';
+  metaEl.style.marginTop='12px';
+  metaEl.dataset.applicationAttributesStatus='true';
+  metaEl.innerHTML='<div class="card-b">'
+    +'<div class="fmeta">'
+    +'<div class="fm">Quality Gate: <b data-result-quality-gate>'+escapeHtml(gate.gate_status||'—')+'</b></div>'
+    +'<div class="fm">CRM status: <b data-result-crm-status>'+escapeHtml(crmResult.pipeline_status||'—')+'</b></div>'
+    +'<div class="fm">Этапов выполнено: <b>'+Number(execution.steps_executed??(stageReports||[]).length)+'</b></div>'
+    +'<div class="fm">Успешно пройдено: <b>'+Number(execution.steps_successful??(stageReports||[]).filter(item=>item.report?.status==='ok').length)+'</b></div>'
+    +'<div class="fm">Pipeline status: <b data-result-pipeline-status>'+escapeHtml(execution.pipeline_status||'—')+'</b></div>'
+    +(execution.stopped_at_stage?'<div class="fm">Остановлен на этапе: <b>'+escapeHtml(execution.stopped_at_stage)+'</b></div>':'')
+    +'<div class="fm">Токены (тест): <b>'+(totalTokens||0)+'</b></div>'
+    +'<div class="fm">Стоимость (тест): <b>$'+Number(totalCost||0).toFixed(4)+'</b></div>'
+    +'</div>'
+    +'<div class="row" style="margin-top:14px"><button class="btn sm" id="dlReport">↓ Скачать полный отчёт (JSON)</button></div>'
+    +'</div>';
+  reportsEl.appendChild(metaEl);
+  metaEl.scrollIntoView({behavior:'smooth',block:'center'});
+  document.getElementById('dlReport').onclick=()=>{
+    const blob=new Blob([JSON.stringify({pipeline:pipeline.map(sanitize),result:ctx,attributes_metrics:ctx.attributes_metrics||null,stageReports:stageReports||[],usage:{totalTokens,totalCost}},null,2)],{type:'application/json'});
+    dl(blob,'pipeline_report.json');
+  };
+}
+
 function renderFinal(totalTokens, totalCost, stageReports){
-  const sm=ctx.summary, gate=currentSummaryGate(ctx), crm=ctx.crm||ctx.publish_result, n=displayNeeds();
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT) return renderApplicationAttributesFinal(totalTokens,totalCost,stageReports);
+  const sm=IS_AI_SUMMARY_TEN_AUGUST_PROJECT?ctx.summary_generator:ctx.summary;
+  const gate=IS_AI_SUMMARY_TEN_AUGUST_PROJECT?ctx.summary_quality_gate:currentSummaryGate(ctx);
+  const crm=IS_AI_SUMMARY_TEN_AUGUST_PROJECT?ctx.crm_summary_result:ctx.crm||ctx.publish_result, n=displayNeeds();
   const execution=ctx.pipeline_execution||{};
   const pipelineTechnical=execution.pipeline_status==='TECHNICAL_ERROR';
   const summaryTechnical=IS_SUMMARY_NEW_PROJECT&&isSummaryNewTechnicalError(sm);
   const summaryStructured=IS_SUMMARY_NEW_PROJECT&&sm&&typeof sm.summary==='string'&&Array.isArray(sm.key_facts)&&Array.isArray(sm.quotes)&&Array.isArray(sm.next_steps);
   const moduleSummaryStructured=IS_TRANSCRIPTION_SUMMARY_MODULE&&sm&&typeof sm.conversation_result==='string'&&Array.isArray(sm.key_facts)&&Array.isArray(sm.quotes)&&typeof sm.next_step==='string';
+  const aiSummaryTenAugustStructured=IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&sm&&typeof sm.conversation_result==='string'&&Array.isArray(sm.key_facts)&&Array.isArray(sm.quotes)&&typeof sm.next_step==='string';
   const summary = (sm&&(sm.conversation_result||sm.summary)) || '—';
   const el=document.createElement('div'); el.className='final';
-  const decision = summaryTechnical||pipelineTechnical?'TECHNICAL_ERROR':(gate?gate.decision:'—');
-  const c = summaryTechnical?null:(gate?(gate.qualityScore ?? gate.summary_quality_score ?? (gate.confidence==null?null:gate.confidence*100)):null);
-  const saved = summaryTechnical?'не опубликована':(crm?(crm.saved?'сохранена':'на ручной проверке'):'—');
+  const decision = summaryTechnical||pipelineTechnical?'TECHNICAL_ERROR':(gate?(IS_AI_SUMMARY_TEN_AUGUST_PROJECT?gate.gate_status:gate.decision):'—');
+  const c = summaryTechnical?null:(gate?(IS_AI_SUMMARY_TEN_AUGUST_PROJECT?gate.quality_score:(gate.qualityScore ?? gate.summary_quality_score ?? (gate.confidence==null?null:gate.confidence*100))):null);
+  const saved = summaryTechnical?'не опубликована':(IS_AI_SUMMARY_TEN_AUGUST_PROJECT?(crm?crm.crm_action:'—'):(crm?(crm.saved?'сохранена':'на ручной проверке'):'—'));
 
   // «Итоговое саммари»: текст саммари (только суть/результат звонка,
   // без пересказа фактов/потребностей -- см. промт Summary Agent) +
@@ -13795,8 +15227,8 @@ function renderFinal(totalTokens, totalCost, stageReports){
   el.innerHTML=summaryTechnical
     ? '<p class="fl">Техническая ошибка</p><p class="fs">'+escapeHtml(sm.message||'Не удалось сформировать саммари.')+'</p>'
     : '<p class="fl">🎯 Итоговое саммари</p>'
-      +(moduleSummaryStructured?renderModuleSummaryResult(sm):summaryStructured?renderSummaryNewResult(sm):renderFinalSummary(summary))
-      +(IS_SUMMARY_NEW_PROJECT||moduleSummaryStructured?'':'<p class="fl" style="margin-top:4px">Потребности клиента</p>'
+      +(aiSummaryTenAugustStructured?renderAiSummaryTenAugustResult(sm):moduleSummaryStructured?renderModuleSummaryResult(sm):summaryStructured?renderSummaryNewResult(sm):renderFinalSummary(summary))
+      +(IS_AI_SUMMARY_TEN_AUGUST_PROJECT||IS_SUMMARY_NEW_PROJECT||moduleSummaryStructured?'':'<p class="fl" style="margin-top:4px">Потребности клиента</p>'
         +'<div class="fmeta">'
         +'<div class="fm">Интересует: <b>'+escapeHtml(fmtNeed(n.interested_in))+'</b></div>'
         +'<div class="fm">Источник средств: <b>'+escapeHtml(fmtNeed(n.source_of_funds))+'</b></div>'
@@ -13817,6 +15249,7 @@ function renderFinal(totalTokens, totalCost, stageReports){
     +'<div class="fm">Этапов выполнено: <b>'+Number(execution.steps_executed??(stageReports||[]).length)+'</b></div>'
     +'<div class="fm">Успешно пройдено: <b>'+Number(execution.steps_successful??(stageReports||[]).filter(item=>item.report?.status==='ok').length)+'</b></div>'
     +'<div class="fm">Pipeline status: <b>'+escapeHtml(execution.pipeline_status||'COMPLETED')+'</b></div>'
+    +(execution.business_pipeline_status?'<div class="fm">Business pipeline status: <b>'+escapeHtml(execution.business_pipeline_status)+'</b></div>':'')
     +(execution.stopped_at_stage?'<div class="fm">Остановлен на этапе: <b>'+escapeHtml(execution.stopped_at_stage)+'</b></div>':'')
     +'<div class="fm">Токены (тест): <b>'+(totalTokens||0)+'</b></div>'
     +'<div class="fm">Стоимость (тест): <b>$'+(totalCost||0).toFixed(4)+'</b></div>'
@@ -13838,7 +15271,15 @@ function renderFinal(totalTokens, totalCost, stageReports){
 //  UI: конфигурация пайплайна
 // ═══════════════════════════════════════════════════════════════════════════
 const stagesEl=document.getElementById('stages');
-function stageTypeMeta(stage){ return TYPE_META[stage.type]||TYPE_META.code; }
+function isApplicationAttributesDeterministicStage(stage){
+  return Boolean(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage&&['attributes_quality_gate','crm_attributes_result'].includes(stage.outKey));
+}
+function stageTypeMeta(stage){
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT&&stage&&stage.outKey==='attributes_judge') return {...TYPE_META.check,label:'LLM Judge'};
+  if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT&&stage&&stage.outKey==='summary_judge') return {...TYPE_META.check,label:'Проверщик'};
+  if(isAiSummaryStoreCleanerStage(stage)||isAiSummaryFinalizationStage(stage)) return {...TYPE_META.code,label:'Код'};
+  return isApplicationAttributesDeterministicStage(stage)?{...TYPE_META.code,label:'Детерминированный этап'}:(TYPE_META[stage.type]||TYPE_META.code);
+}
 
 function syncPipelineFromEditor(){
   const cards=[...stagesEl.querySelectorAll('.stage')];
@@ -13881,7 +15322,9 @@ function renderStages(){
   }
   pipeline.forEach((stage,i)=>{
     const M=stageTypeMeta(stage);
-    const isModelStep = stage.type==='llm' || stage.type==='check' || stage.type==='hybrid';
+    const deterministicApplicationAttributesStage=isApplicationAttributesDeterministicStage(stage);
+    const deterministicAiSummaryStoreCleaner=isAiSummaryStoreCleanerStage(stage);
+    const isModelStep = !deterministicApplicationAttributesStage&&!deterministicAiSummaryStoreCleaner&&(stage.type==='llm' || stage.type==='check' || stage.type==='hybrid');
     const selectedProvider=stage.provider||loadSelectedLlmProvider();
     const knownModel=MODEL_OPTIONS.some(option=>option.v===stage.model);
     const modelControls=
@@ -13923,24 +15366,34 @@ function renderStages(){
         ? '<div style="grid-column:1/-1"><label class="fld">Описание этапа</label>'
           +'<textarea data-description rows="3" placeholder="Кратко опишите, что делает этот этап, что получает на входе и что возвращает.">'+escapeHtml(stage.description||'')+'</textarea></div>'
         : '')
-      +'<div style="max-width:130px"><label class="fld">Тип</label>'
-      +'<select data-type>'
+      +'<div style="max-width:180px"><label class="fld">Тип</label>'
+      +(deterministicApplicationAttributesStage||deterministicAiSummaryStoreCleaner
+        ? '<input type="text" readonly value="'+(deterministicAiSummaryStoreCleaner?'Код':'Детерминированный этап')+'" data-deterministic-stage-type>'
+        : '<select data-type>'
       +'<option value="llm" '+(stage.type==='llm'?'selected':'')+'>LLM-агент</option>'
       +'<option value="check" '+(stage.type==='check'?'selected':'')+'>Проверщик</option>'
       +'<option value="hybrid" '+(stage.type==='hybrid'?'selected':'')+'>Code + LLM</option>'
       +'<option value="code" '+(stage.type==='code'?'selected':'')+'>Код</option>'
       +'<option value="svc" '+(stage.type==='svc'?'selected':'')+'>Сервис</option>'
       +'<option value="store" '+(stage.type==='store'?'selected':'')+'>Хранилище</option>'
-      +'</select></div>'
+      +'</select>')+'</div>'
       +'</div>'
       +(!isModelStep ?
-        '<label class="fld">Код-функция</label>'
+        (deterministicApplicationAttributesStage||deterministicAiSummaryStoreCleaner
+        ? '<div class="kvlist" data-deterministic-stage-details>'
+          +(deterministicAiSummaryStoreCleaner?'':'<div><span class="k">Requested configuration</span> <b>LLM / '+escapeHtml(stage.model||'gpt-5-mini')+'</b></div>')
+          +'<div><span class="k">Actual execution</span> <b>Deterministic Contract / code</b></div>'
+          +'<div><span class="k">Источник</span> <b>'+escapeHtml(stage.sourceOutKey||'current run')+' · current run</b></div>'
+          +'<div><span class="k">Контракт</span> <b>'+escapeHtml(stage.contractId||stage.outKey)+' · '+escapeHtml(stage.contractVersion||'v1')+'</b></div>'
+          +'<div><span class="k">Prompt runtime</span> <b>не используется</b></div>'
+          +'</div><div class="hintbar">Маппинг выполняется кодом без вызова LLM.</div>'
+        : '<label class="fld">Код-функция</label>'
         +'<select data-codefn>'
         +CODE_FN_LIST.map(f=>'<option value="'+f+'" '+(stage.codeFn===f?'selected':'')+'>'+f+'</option>').join('')
         +'</select>'
         +'<label class="fld" style="margin-top:10px">Исполнитель (сервис)</label>'
         +'<input type="text" data-vendor value="'+escapeAttr(stage.vendor||'')+'">'
-        +'<div class="hintbar">Детерминированный шаг: выполняется кодом, без модели. Использует результаты предыдущих шагов из контекста.</div>'
+        +'<div class="hintbar">Детерминированный шаг: выполняется кодом, без модели. Использует результаты предыдущих шагов из контекста.</div>')
       :
         modelControls
         +'<div class="hintbar" data-prompt-provenance>Активный промт: v'+escapeHtml(stage.promptVersion||1)+' · '+escapeHtml(stage.promptSource||(stage.userEdited?'user_override':'system_default'))+'</div>'
@@ -13962,34 +15415,36 @@ function renderStages(){
 
     // события
     el.querySelector('[data-toggle]').addEventListener('click',()=>el.classList.toggle('open'));
-    el.querySelector('[data-en]').addEventListener('change',e=>{stage.enabled=e.target.checked;el.classList.toggle('disabled',!stage.enabled);});
-    el.querySelector('[data-name]').addEventListener('input',e=>{stage.name=e.target.value;el.querySelector('.st-name').textContent=e.target.value;});
-    const ds=el.querySelector('[data-description]'); if(ds)ds.addEventListener('input',e=>stage.description=e.target.value);
-    el.querySelector('[data-type]').addEventListener('change',e=>{
+    el.querySelector('[data-en]').addEventListener('change',e=>{stage.enabled=e.target.checked;stage.userEdited=true;el.classList.toggle('disabled',!stage.enabled);schedulePipelineAutosave();});
+    el.querySelector('[data-name]').addEventListener('input',e=>{stage.name=e.target.value;stage.userEdited=true;el.querySelector('.st-name').textContent=e.target.value;schedulePipelineAutosave();});
+    const ds=el.querySelector('[data-description]'); if(ds)ds.addEventListener('input',e=>{stage.description=e.target.value;stage.userEdited=true;schedulePipelineAutosave();});
+    const typeControl=el.querySelector('[data-type]');
+    if(typeControl) typeControl.addEventListener('change',e=>{
       stage.type=e.target.value;
+      stage.userEdited=true;
       if(stage.outKey==='action_check'||/Проверка договорённостей и следующего шага/i.test(stage.name||'')) stage.typeEdited=true;
       const modelStep = stage.type==='llm'||stage.type==='check'||stage.type==='hybrid';
       if(!modelStep && !stage.codeFn) stage.codeFn='validate';
       if(modelStep&&stage.type!=='hybrid'){delete stage.codeFn;delete stage.vendor;}
       if(modelStep && !stage.model) stage.model='gpt-5-mini';
-      renderStages();
+      savePipelineConfig();renderStages();
     });
-    el.querySelector('[data-outkey]').addEventListener('input',e=>{stage.outKey=e.target.value.trim(); forgetDeletedStageOutKey(stage.outKey);});
-    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>{stage.prompt=e.target.value;stage.promptEdited=true;stage.userEdited=true;stage.promptSource='user_override';});
+    el.querySelector('[data-outkey]').addEventListener('input',e=>{stage.outKey=e.target.value.trim();stage.userEdited=true;forgetDeletedStageOutKey(stage.outKey);schedulePipelineAutosave();});
+    const pm=el.querySelector('[data-prompt]'); if(pm)pm.addEventListener('input',e=>{stage.prompt=e.target.value;stage.promptEdited=true;stage.userEdited=true;stage.promptSource='user_override';schedulePipelineAutosave();});
     const mm=el.querySelector('[data-model]');
     const customModel=el.querySelector('[data-custom-model]');
     if(mm)mm.addEventListener('change',e=>{
       const custom=e.target.value==='__custom__';
       if(customModel) customModel.style.display=custom?'':'none';
       if(!custom) stage.model=e.target.value;
-      stage.settingsEdited=true;stage.userEdited=true;
+      stage.settingsEdited=true;stage.userEdited=true;schedulePipelineAutosave();
     });
-    if(customModel)customModel.addEventListener('input',e=>{stage.model=e.target.value.trim();stage.settingsEdited=true;stage.userEdited=true;});
-    const pv=el.querySelector('[data-provider]'); if(pv)pv.addEventListener('change',e=>{stage.provider=e.target.value;stage.settingsEdited=true;stage.userEdited=true;});
-    const tp=el.querySelector('[data-temperature]'); if(tp)tp.addEventListener('input',e=>{stage.temperature=Number(e.target.value);stage.settingsEdited=true;stage.userEdited=true;});
-    const mt=el.querySelector('[data-max-tokens]'); if(mt)mt.addEventListener('input',e=>{stage.maxTokens=Math.max(1,Math.round(Number(e.target.value)));stage.settingsEdited=true;stage.userEdited=true;});
-    const cf=el.querySelector('[data-codefn]'); if(cf)cf.addEventListener('change',e=>stage.codeFn=e.target.value);
-    const vn=el.querySelector('[data-vendor]'); if(vn)vn.addEventListener('input',e=>stage.vendor=e.target.value.trim());
+    if(customModel)customModel.addEventListener('input',e=>{stage.model=e.target.value.trim();stage.settingsEdited=true;stage.userEdited=true;schedulePipelineAutosave();});
+    const pv=el.querySelector('[data-provider]'); if(pv)pv.addEventListener('change',e=>{stage.provider=e.target.value;stage.settingsEdited=true;stage.userEdited=true;schedulePipelineAutosave();});
+    const tp=el.querySelector('[data-temperature]'); if(tp)tp.addEventListener('input',e=>{stage.temperature=Number(e.target.value);stage.settingsEdited=true;stage.userEdited=true;schedulePipelineAutosave();});
+    const mt=el.querySelector('[data-max-tokens]'); if(mt)mt.addEventListener('input',e=>{stage.maxTokens=Math.max(1,Math.round(Number(e.target.value)));stage.settingsEdited=true;stage.userEdited=true;schedulePipelineAutosave();});
+    const cf=el.querySelector('[data-codefn]'); if(cf)cf.addEventListener('change',e=>{stage.codeFn=e.target.value;stage.userEdited=true;schedulePipelineAutosave();});
+    const vn=el.querySelector('[data-vendor]'); if(vn)vn.addEventListener('input',e=>{stage.vendor=e.target.value.trim();stage.userEdited=true;schedulePipelineAutosave();});
     el.querySelector('[data-up]').addEventListener('click',()=>{if(i>0){syncPipelineFromEditor();[pipeline[i-1],pipeline[i]]=[pipeline[i],pipeline[i-1]];savePipelineConfig();renderStages();}});
     el.querySelector('[data-down]').addEventListener('click',()=>{if(i<pipeline.length-1){syncPipelineFromEditor();[pipeline[i+1],pipeline[i]]=[pipeline[i],pipeline[i+1]];savePipelineConfig();renderStages();}});
     el.querySelector('[data-del]').addEventListener('click',()=>{syncPipelineFromEditor();rememberDeletedStage(pipeline[i]);pipeline.splice(i,1);savePipelineConfig();renderStages();});
@@ -14025,7 +15480,19 @@ document.getElementById('runBtn').addEventListener('click',runPipeline);
 document.getElementById('clearBtn').addEventListener('click',()=>{reportsEl.innerHTML='';emptyState.style.display='';reportsEl.appendChild(emptyState);progBar.style.width='0%';runStatus.textContent='готов';ctx={};});
 document.getElementById('addStage').addEventListener('click',()=>{syncPipelineFromEditor();const outKey='step'+(pipeline.length+1);forgetDeletedStageOutKey(outKey);pipeline.push({id:s(),enabled:true,type:'llm',name:'Новый шаг',model:'gpt-5-mini',outKey,prompt:'Промт... {{transcript}}'});savePipelineConfig();renderStages();});
 document.getElementById('preset').addEventListener('change',e=>{
-  if(e.target.value==='default'){deletedStageOutKeys=[];pipeline=applySummaryNewStageConfig(defaultPipeline());}
+  if(e.target.value==='default'){
+    if(IS_APPLICATION_ATTRIBUTES_PROJECT){
+      const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
+      deletedStageOutKeys=[...(seed?.deletedStageOutKeys||[])];
+      pipeline=(seed?.stages||[]).map(stage=>({id:s(),...stage}));
+    }else if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT){
+      const seed=window.__AI_SUMMARY_10_08_PIPELINE_CONFIG__;
+      deletedStageOutKeys=[...(seed?.deletedStageOutKeys||[])];
+      pipeline=(seed?.stages||[]).map(stage=>({id:s(),...stage}));
+    }else{
+      deletedStageOutKeys=[];pipeline=applySummaryNewStageConfig(defaultPipeline());
+    }
+  }
   else{pipeline.forEach(rememberDeletedStage);pipeline=blankPipeline();}
   savePipelineConfig();
   renderStages();

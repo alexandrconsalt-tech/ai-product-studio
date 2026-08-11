@@ -4,7 +4,11 @@ export type HumanDecision = "EXCELLENT" | "GOOD" | "ACCEPTABLE" | "NEEDS_REWORK"
 
 export type ReviewerRole = "Агент" | "РОП" | "Продакт" | "QA" | "Другое";
 
-export type CriterionValue = "yes" | "partial" | "no" | "na";
+export type CriterionValue = 0 | 1 | 2 | 3 | 4;
+
+export type LegacyCriterionValue = "yes" | "partial" | "no" | "na";
+
+export type StoredCriterionValue = CriterionValue | LegacyCriterionValue;
 
 export type ReviewBlockId = "truth" | "criticalFacts" | "utility" | "action" | "format";
 
@@ -36,7 +40,7 @@ export type HumanReview = {
   formatScore: number;
   humanScore: number;
   humanDecision: HumanDecision;
-  criteriaJson: Record<string, CriterionValue>;
+  criteriaJson: Record<string, StoredCriterionValue>;
   comment: string;
   createdAt: string;
 };
@@ -48,7 +52,7 @@ export type GoldenDatasetItem = {
   transcript: string;
   aiScore: number;
   humanScore: number;
-  criteria: Record<string, CriterionValue>;
+  criteria: Record<string, StoredCriterionValue>;
   approvedBy: string;
   createdAt: string;
 };
@@ -61,4 +65,3 @@ export type ReviewRecord = {
   differenceStatus: DifferenceStatus | "Нет оценки";
   reviewStatus: ReviewStatus;
 };
-

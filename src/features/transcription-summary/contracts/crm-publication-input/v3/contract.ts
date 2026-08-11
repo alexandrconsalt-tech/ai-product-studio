@@ -12,6 +12,10 @@ import { SummaryV3Contract, SummaryV3Schema } from "../../summary/v3/contract";
 import type { JsonValue } from "../../contract-types";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const PublishableQualityGateSchema = SummaryQualityGateResultV3Schema.and(z.object({
+  decision: z.literal("QUALITY_RECORDED"),
+  blocking: z.literal(false),
+}));
 
 export const CRM_PUBLICATION_POLICY_ID = "crm-publication-policy-v3.0.0";
 export const CRM_PUBLICATION_POLICY_VERSION = "3.0.0";
@@ -31,7 +35,7 @@ export const CrmPublicationInputV3Schema = z.object({
   }).strict(),
   conversationStore: ConversationStoreV3Schema,
   summary: SummaryV3Schema,
-  qualityGate: SummaryQualityGateResultV3Schema,
+  qualityGate: PublishableQualityGateSchema,
   target: z.object({
     crmSystem: NonEmptyStringSchema,
     entityType: z.enum(["lead", "request", "contact", "call"]),

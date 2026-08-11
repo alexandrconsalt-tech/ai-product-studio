@@ -15,13 +15,19 @@ const expected = JSON.parse(
 }>;
 
 describe("Phase 9 golden Preview pack", () => {
-  it("contains twelve paired synthetic scenarios including two manual-audit regressions", () => {
-    expect(cases).toHaveLength(12);
-    expect(expected).toHaveLength(12);
+  it("contains twenty paired scenarios including semantic-quality regressions", () => {
+    expect(cases).toHaveLength(20);
+    expect(expected).toHaveLength(20);
     expect(expected.map((entry) => entry.id)).toEqual(cases.map((entry) => entry.id));
-    expect(cases.slice(-2).map((entry) => entry.id)).toEqual([
-      "alexandra_cash_on_account_parents_purchase_evening_follow_up",
-      "snezhana_sale_move_46sqm_duplicate_listing_price_growth_follow_up",
+    expect(cases.slice(-8).map((entry) => entry.id)).toEqual([
+      "prazhskaya_cash_self_late_exit_viewing_callback",
+      "bolshevikov_legal_owners_deposit_terminal_refusal",
+      "conditional_viewing_not_appointment",
+      "terminal_refusal_without_next_step",
+      "legal_due_diligence_documents",
+      "cash_without_mortgage_single_meaning",
+      "listing_price_is_not_client_budget",
+      "listing_feature_is_not_search_requirement",
     ]);
   });
 

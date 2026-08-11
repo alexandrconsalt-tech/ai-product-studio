@@ -37,12 +37,12 @@ export type SummaryQualityGateDiagnosticV3 = Readonly<{
   decisionReasons: readonly string[];
   postFinalDiagnostics: SummaryFinalDiagnosticsV3 | null;
   qualityScore: number | null;
-  decision: "QUALITY_RECORDED";
-  blockersCount: 0;
+  decision: "QUALITY_RECORDED" | "TECHNICAL_ERROR";
+  blockersCount: number;
   warningsCount: number;
   validationStatus: "valid";
-  errorType: null;
-  errorCode: null;
+  errorType: "dependency_error" | null;
+  errorCode: "FACTS_SOURCE_UNAVAILABLE" | null;
   durationMs: number;
 }>;
 
@@ -109,9 +109,13 @@ export function executeSummaryQualityGateV3(input: {
   const startedAt = Date.now();
   const store = ConversationStoreV3Schema.safeParse(input.conversationStore);
   const summary = SummaryV3Schema.safeParse(input.summary);
+  const factsUnavailable = store.success && (
+    store.data.source_errors.includes("facts")
+    || store.data.source_quality.facts === "technical_error"
+  );
   const verdicts = parsedVerdicts(input.verdicts);
   const criterionResults = SUMMARY_CRITERIA.map((criterion) => {
-    const verdict = verdicts.get(criterion);
+    const verdict = factsUnavailable ? undefined : verdicts.get(criterion);
     return {
       criterion,
       score: verdict?.score ?? null,
@@ -121,18 +125,24 @@ export function executeSummaryQualityGateV3(input: {
     };
   });
   const evaluated = criterionResults.filter((item) => item.evaluated && item.score !== null);
-  const qualityScore = evaluated.length
+  const qualityScore = factsUnavailable ? null : evaluated.length
     ? Math.round(
       (evaluated.reduce((sum, item) => sum + (item.score ?? 0), 0) / evaluated.length) * 10,
     ) / 10
     : null;
-  const issues = SUMMARY_CRITERIA.flatMap((criterion) =>
+  const semanticIssues = SUMMARY_CRITERIA.flatMap((criterion) =>
     (verdicts.get(criterion)?.issues ?? []).map((issue) => ({
       code: issue.code,
       criterion,
       message: issue.message,
     })));
-  const criticalIssues = SUMMARY_CRITERIA.flatMap((criterion) =>
+  const issues = factsUnavailable
+    ? [{
+        code: "FACTS_SOURCE_UNAVAILABLE",
+        message: "Facts source is unavailable; semantic evaluation and publication are blocked.",
+      }]
+    : semanticIssues;
+  const criticalIssues = factsUnavailable ? [] : SUMMARY_CRITERIA.flatMap((criterion) =>
     (verdicts.get(criterion)?.issues ?? [])
       .filter((issue) => issue.severity === "critical")
       .map((issue) => ({
@@ -144,7 +154,7 @@ export function executeSummaryQualityGateV3(input: {
     ? applySummaryPlanAndValidate(summary.data, buildSummaryPlanV3(store.data))
     : null;
   const postFinalDiagnostics = finalValidation?.diagnostics ?? null;
-  const decisionReasons = [
+  const decisionReasons = factsUnavailable ? ["FACTS_SOURCE_UNAVAILABLE"] : [
     ...criterionResults
       .filter((item) => item.score !== null && item.score < 80)
       .map((item) => `JUDGE_SCORE_BELOW_80:${item.criterion}:${item.score}`),
@@ -154,19 +164,21 @@ export function executeSummaryQualityGateV3(input: {
   const computedStatus = status(qualityScore);
   const storeData = store.success ? store.data : null;
   const value = SummaryQualityGateResultV3Schema.parse({
-    decision: "QUALITY_RECORDED",
-    blocking: false,
+    decision: factsUnavailable ? "TECHNICAL_ERROR" : "QUALITY_RECORDED",
+    blocking: factsUnavailable,
     qualityScore,
     qualityStatus: criticalIssues.length > 0 && ["EXCELLENT", "GOOD"].includes(computedStatus)
       ? "NEEDS_ATTENTION"
       : computedStatus,
-    evaluationStatus: evaluated.length === 0
+    evaluationStatus: factsUnavailable
+      ? "partial"
+      : evaluated.length === 0
       ? "technical_error"
       : evaluated.length < 5 ? "partial" : "complete",
     evaluatedChecks: evaluated.length,
     failedChecks: evaluated.filter((item) => item.verdict === "fail").length,
     technicalErrors: 5 - evaluated.length,
-    partialEvaluation: evaluated.length < 5,
+    partialEvaluation: factsUnavailable || evaluated.length < 5,
     criterionResults,
     issues,
     criticalIssues,
@@ -206,12 +218,12 @@ export function executeSummaryQualityGateV3(input: {
       decisionReasons,
       postFinalDiagnostics,
       qualityScore,
-      decision: "QUALITY_RECORDED",
-      blockersCount: 0,
+      decision: factsUnavailable ? "TECHNICAL_ERROR" : "QUALITY_RECORDED",
+      blockersCount: factsUnavailable ? 1 : 0,
       warningsCount: issues.length,
       validationStatus: "valid",
-      errorType: null,
-      errorCode: null,
+      errorType: factsUnavailable ? "dependency_error" : null,
+      errorCode: factsUnavailable ? "FACTS_SOURCE_UNAVAILABLE" : null,
       durationMs: Date.now() - startedAt,
     },
   };

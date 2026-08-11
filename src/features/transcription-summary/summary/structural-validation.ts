@@ -17,7 +17,10 @@ export type SummaryStructuralTransformation = Readonly<{
 export type SummaryFinalDiagnosticsV3 = Readonly<{
   requiredMeaningIds: readonly string[];
   missingMeaningIds: readonly string[];
+  missingP0MeaningIds: readonly string[];
   duplicatedMeaningIds: readonly string[];
+  semanticRepetitionCount: number;
+  invalidQuoteCount: number;
   protectedValueViolations: readonly string[];
   technicalResidue: readonly string[];
   nextStepDuplicationCount: number;
@@ -128,12 +131,15 @@ function meaningCovered(summary: SummaryV3, meaning: SummaryPlanMeaning): boolea
 }
 
 function label(meaning: SummaryPlanMeaning): string {
-  if (meaning.kind === "client_goal") return "Цель клиента";
+  if (meaning.label) return meaning.label;
+  if (meaning.kind === "client_goal") return "Цель";
   if (/(?:бюджет|руб|₽|млн|миллион)/iu.test(meaning.text)) return "Бюджет";
-  if (/(?:собственник|дду|зарегистрирован|прописан|юрид)/iu.test(meaning.text)) return "Юридическая информация";
+  if (/(?:документ|оригинал)/iu.test(meaning.text)) return "Документы";
+  if (/(?:собственник|дду|зарегистрирован|прописан|юрид|обремен)/iu.test(meaning.text)) return "Юридический статус";
   if (/(?:ипотек|финанс|сбербанк|наличн|депозит|деньги\s+находятся\s+на\s+сч[её]т)/iu.test(meaning.text)) return "Финансирование";
-  if (/(?:срок|месяц)/iu.test(meaning.text)) return "Срок покупки";
-  return /(?:возраж|сомнен|не рассматрива|огранич)/iu.test(meaning.text) ? "Ограничение" : "Ключевой факт";
+  if (/(?:срок|месяц)/iu.test(meaning.text)) return "Срок";
+  if (/(?:возраж|сомнен|не\s+подход|дорог|высок\S*\s+цен)/iu.test(meaning.text)) return "Возражение";
+  return /(?:не рассматрива|огранич|критич)/iu.test(meaning.text) ? "Ограничение" : "Требование";
 }
 
 function renderConversationResult(meanings: readonly SummaryPlanMeaning[]): string {
@@ -188,8 +194,16 @@ function sharedNextStepAction(value: string, nextStep: string): boolean {
 }
 
 function isAllowedCompactOutcome(value: string, nextStep: string): boolean {
-  return normalized(value).replace(/[.!?]+$/u, "")
-    === normalized(compactConversationResult(nextStep)).replace(/[.!?]+$/u, "");
+  const actual = normalized(value).replace(/[.!?]+$/u, "");
+  if (actual === normalized(compactConversationResult(nextStep)).replace(/[.!?]+$/u, "")) return true;
+  if (protectedTokens(value).length) return false;
+  const expected = normalized(nextStep);
+  if (/(?:отправ|пришл|направ|переда)/u.test(expected)
+    && /^(?:согласована\s+)?отправка(?:\s+[^.!?]{0,30})?\s+согласована$|^отправка\s+согласована$/u.test(actual)) return true;
+  if (/(?:просмотр|осмотр|показ|встреч)/u.test(expected)
+    && /^(?:просмотр|осмотр|показ|встреча)\s+согласован[ао]?$/u.test(actual)) return true;
+  return /(?:позвон|перезвон|созвон|свя[зж])/u.test(expected)
+    && /^(?:договорились\s+о\s+)?повторн\S*\s+(?:звонк|контакт)/u.test(actual);
 }
 
 function containsNextStepDetail(value: string, nextStep: string): boolean {
@@ -267,10 +281,191 @@ function meaningCoveredWithExclusiveNextStep(
   return sharesExclusiveDetail && overlap(summary.conversation_result, meaning.text) >= 0.5;
 }
 
+function removeTechnicalFragments(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/gu, " ")
+    .replace(/\{[^{}]*(?:"(?:status|error|message|code)"|technical_error)[^{}]*\}/giu, " ")
+    .replace(/(?:^|\s)(?:technical_error|error)(?=\s|[.!?,;]|$)/giu, " ")
+    .replace(/\s+([.!?,;])/gu, "$1")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function exactDeduplicatedSentences(value: string): string {
+  const seen = new Set<string>();
+  return value
+    .split(/(?<=[.!?])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => {
+      const identity = normalized(sentence).replace(/[.!?]+$/u, "");
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    })
+    .join(" ");
+}
+
+function removeExactNextStepDuplication(
+  conversationResult: string,
+  nextStep: string,
+): Readonly<{ value: string; changed: boolean }> {
+  const expected = normalized(nextStep).replace(/[.!?]+$/u, "");
+  const sentences = conversationResult
+    .split(/(?<=[.!?])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const kept = sentences.filter((sentence) =>
+    normalized(sentence).replace(/[.!?]+$/u, "") !== expected);
+  return { value: kept.join(" "), changed: kept.length !== sentences.length };
+}
+
+function plannedFactFor(value: string, meanings: readonly SummaryPlanMeaning[]): SummaryPlanMeaning | null {
+  return meanings
+    .map((meaning) => ({ meaning, score: overlap(value, meaning.text) }))
+    .filter(({ meaning }) => protectedTokens(meaning.text).every((item) => protectedPresent(value, item)))
+    .sort((left, right) => right.score - left.score)
+    .find(({ score }) => score >= 0.5)?.meaning ?? null;
+}
+
+function strictPriorityPlanValidation(
+  generated: SummaryV3,
+  plan: SummaryPlanV3,
+): StructuralValidationResult {
+  const transformations: SummaryStructuralTransformation[] = [];
+  const required = plan.meanings.filter((meaning) => meaning.required);
+  const plannedFacts = plan.meanings.filter((meaning) => meaning.block === "key_facts");
+  const plannedQuotes = plan.meanings.filter((meaning) => meaning.block === "quotes");
+  const nextMeaning = plan.meanings.find((meaning) => meaning.block === "next_step");
+  let conversationResult = exactDeduplicatedSentences(removeTechnicalFragments(generated.conversation_result));
+  if (conversationResult !== generated.conversation_result.trim()) {
+    transformations.push({
+      ruleId: technicalResidue(generated.conversation_result).length
+        ? "summary.technical-residue-removed.v1"
+        : "summary.plan-block-enforced.v1",
+      fieldPath: "conversation_result",
+      meaningId: null,
+      reason: "Only technical fragments and exact duplicate sentences were removed.",
+    });
+  }
+  if (nextMeaning) {
+    const exclusive = removeExactNextStepDuplication(conversationResult, nextMeaning.text);
+    if (exclusive.changed) {
+      conversationResult = exclusive.value;
+      transformations.push({
+        ruleId: "summary.exclusive-next-step.v1",
+        fieldPath: "conversation_result",
+        meaningId: nextMeaning.meaningId,
+        reason: "Exact or detail-preserving next-step duplication was removed from conversation_result.",
+      });
+    }
+  }
+
+  const usedMeanings = new Set<string>();
+  const usedFactValues = new Set<string>();
+  const unmatchedFacts: string[] = [];
+  const keyFacts = generated.key_facts.flatMap((fact) => {
+    const meaning = plannedFactFor(fact.value, plannedFacts);
+    if (!meaning) {
+      unmatchedFacts.push(fact.value);
+      return [fact];
+    }
+    const exactValue = normalized(fact.value);
+    if (usedMeanings.has(meaning.meaningId) && usedFactValues.has(exactValue)) {
+      transformations.push({
+        ruleId: "summary.plan-block-enforced.v1",
+        fieldPath: "key_facts",
+        meaningId: meaning.meaningId,
+        reason: "An exact duplicate key fact was removed.",
+      });
+      return [];
+    }
+    usedMeanings.add(meaning.meaningId);
+    usedFactValues.add(exactValue);
+    const normalizedFact = { label: label(meaning), value: fact.value.trim() };
+    if (normalizedFact.label !== fact.label || normalizedFact.value !== fact.value) {
+      transformations.push({
+        ruleId: "summary.plan-block-enforced.v1",
+        fieldPath: "key_facts",
+        meaningId: meaning.meaningId,
+        reason: "A semantic label was normalized without changing the fact value.",
+      });
+    }
+    return [normalizedFact];
+  });
+
+  const plannedQuoteTexts = new Set(plannedQuotes.map((meaning) => normalized(meaning.text)));
+  const quotes = generated.quotes.filter((quote) => plannedQuoteTexts.has(normalized(quote.text)));
+  const invalidQuoteCount = generated.quotes.length - quotes.length;
+  if (invalidQuoteCount) {
+    transformations.push({
+      ruleId: "summary.invalid-quote-removed.v1",
+      fieldPath: "quotes",
+      meaningId: null,
+      reason: "Quotes outside the unique objection/motive/condition plan were removed.",
+    });
+  }
+
+  const nextStep = nextMeaning?.text ?? generated.next_step.trim();
+  if (nextMeaning && normalized(nextStep) !== normalized(generated.next_step)) {
+    transformations.push({
+      ruleId: "summary.protected-value-restored.v1",
+      fieldPath: "next_step",
+      meaningId: nextMeaning.meaningId,
+      reason: "The canonical primary_next_step was restored without changing its meaning.",
+    });
+  }
+  const candidate: SummaryV3 = { conversation_result: conversationResult, key_facts: keyFacts, quotes, next_step: nextStep };
+  const missingMeaningIds = required
+    .filter((meaning) => !meaningCovered(candidate, meaning))
+    .map((meaning) => meaning.meaningId);
+  const missingP0MeaningIds = required
+    .filter((meaning) => meaning.priority === "P0" && !meaningCovered(candidate, meaning))
+    .map((meaning) => meaning.meaningId);
+  const crossBlockDuplicateMeanings = plannedFacts.filter((meaning) =>
+    overlap(candidate.conversation_result, meaning.text) >= 0.8
+    && candidate.key_facts.some((fact) => overlap(fact.value, meaning.text) >= 0.8));
+  const withinFactsDuplicateMeaningIds = candidate.key_facts.flatMap((fact, index) =>
+    candidate.key_facts.slice(index + 1).some((other) => overlap(fact.value, other.value) >= 0.8)
+      ? [plannedFactFor(fact.value, plannedFacts)?.meaningId ?? `key_fact_${index + 1}`]
+      : []);
+  const duplicatedMeaningIds = [...new Set([
+    ...crossBlockDuplicateMeanings.map((meaning) => meaning.meaningId),
+    ...withinFactsDuplicateMeaningIds,
+  ])];
+  const nextStepDuplicationCount = nextMeaning && nextStepDuplicatedInText(candidate.conversation_result, candidate.next_step) ? 1 : 0;
+  const sentenceCount = candidate.conversation_result.split(/(?<=[.!?])\s+/u).filter(Boolean).length;
+  const residue = [
+    ...technicalResidue([candidate.conversation_result, ...candidate.key_facts.flatMap((fact) => [fact.label, fact.value]), candidate.next_step].join(" ")),
+    ...(new Set(candidate.key_facts.map((fact) => normalized(fact.value))).size !== candidate.key_facts.length
+      ? ["DUPLICATE_KEY_FACT_VALUE"] : []),
+    ...actionChannelCodes(candidate.next_step),
+    ...(unmatchedFacts.length ? ["UNPLANNED_KEY_FACT"] : []),
+    ...(sentenceCount < 1 || sentenceCount > 3 ? ["CONVERSATION_RESULT_SENTENCE_LIMIT"] : []),
+    ...(candidate.key_facts.length > 4 ? ["KEY_FACT_LIMIT"] : []),
+  ];
+  const diagnostics: SummaryFinalDiagnosticsV3 = {
+    requiredMeaningIds: required.map((meaning) => meaning.meaningId),
+    missingMeaningIds,
+    missingP0MeaningIds,
+    duplicatedMeaningIds,
+    semanticRepetitionCount: duplicatedMeaningIds.length,
+    invalidQuoteCount,
+    protectedValueViolations: [],
+    technicalResidue: [...new Set(residue)],
+    nextStepDuplicationCount,
+  };
+  if (missingMeaningIds.length || duplicatedMeaningIds.length || residue.length || nextStepDuplicationCount) {
+    return { ok: false, error: "SUMMARY_STRUCTURAL_VALIDATION_FAILED", transformations, diagnostics };
+  }
+  return { ok: true, value: candidate, status: transformations.length ? "transformed" : "unchanged", transformations, diagnostics };
+}
+
 export function applySummaryPlanAndValidate(
   generated: SummaryV3,
   plan: SummaryPlanV3,
 ): StructuralValidationResult {
+  if (plan.version === "summary-plan-v3.2.0") return strictPriorityPlanValidation(generated, plan);
   const transformations: SummaryStructuralTransformation[] = [];
   const requiredResult = plan.meanings.filter((item) => item.required && item.block === "conversation_result");
   const required = plan.meanings.filter((item) => item.required);
@@ -452,7 +647,11 @@ export function applySummaryPlanAndValidate(
   const diagnostics: SummaryFinalDiagnosticsV3 = {
     requiredMeaningIds: required.map((item) => item.meaningId),
     missingMeaningIds,
+    missingP0MeaningIds: missingMeaningIds.filter((meaningId) =>
+      required.some((meaning) => meaning.meaningId === meaningId && meaning.priority === "P0")),
     duplicatedMeaningIds,
+    semanticRepetitionCount: duplicatedMeaningIds.length,
+    invalidQuoteCount: 0,
     protectedValueViolations,
     technicalResidue: residue,
     nextStepDuplicationCount,

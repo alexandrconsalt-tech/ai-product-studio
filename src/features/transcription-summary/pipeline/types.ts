@@ -40,6 +40,7 @@ export type PipelineStageAudit = Readonly<{
   structuredOutputRequested?: boolean;
   structuredOutputApplied?: boolean;
   providerDiagnostic?: PipelineStageReportV3["provider_diagnostic"];
+  inputDiagnostic?: PipelineStageReportV3["input_diagnostic"];
   attempts?: number;
   repairAttempted?: boolean;
   rawProviderResponse?: unknown | null;

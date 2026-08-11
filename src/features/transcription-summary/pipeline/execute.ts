@@ -82,6 +82,7 @@ function stageReport(input: {
       applied: input.audit.structuredOutputApplied ?? false,
     },
     provider_diagnostic: input.audit.providerDiagnostic ?? null,
+    input_diagnostic: input.audit.inputDiagnostic ?? null,
     attempts: input.audit.attempts ?? 0,
     repair_attempted: input.audit.repairAttempted ?? false,
     raw_provider_response: input.audit.rawProviderResponse === undefined
@@ -229,6 +230,9 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
       stages: reports,
       quality_score: null,
       quality_decision: null,
+      degraded_sources: ["facts", "needs", "outcome"],
+      semantic_evaluation_allowed: false,
+      quality_score_valid: false,
       crm_status: "NOT_RUN",
       started_at: startedAt.toISOString(),
       finished_at: finishedAt.toISOString(),
@@ -356,7 +360,6 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
         || stageId === "needs_agent"
         || stageId === "outcome_agent"
         || SUMMARY_JUDGES.has(stageId)
-        || stageId === "quality_gate"
       ) {
         continue;
       }
@@ -366,6 +369,18 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
 
   const gate = outputs.quality_gate as { qualityScore?: number | null; decision?: PipelineReportV3["quality_decision"] } | undefined;
   const crm = outputs.crm_publication as { status?: PipelineReportV3["crm_status"] } | undefined;
+  const degradedSources = ([
+    ["facts", "facts_agent"],
+    ["needs", "needs_agent"],
+    ["outcome", "outcome_agent"],
+  ] as const)
+    .filter(([, stageId]) => reports.some((report) =>
+      report.stage_id === stageId && report.status === "TECHNICAL_ERROR"))
+    .map(([source]) => source);
+  const semanticEvaluationAllowed = !degradedSources.includes("facts");
+  const qualityScoreValid = semanticEvaluationAllowed
+    && gate?.decision === "QUALITY_RECORDED"
+    && typeof gate.qualityScore === "number";
   const finishedAt = now();
   const report = PipelineReportV3Schema.parse({
     report_id: `report-${runId}`,
@@ -378,8 +393,11 @@ export async function executeTranscriptionSummaryV3Pipeline(input: {
     flags: { v3Enabled: true, crmDryRun: true },
     status: finalStatus(outputs, reports),
     stages: reports,
-    quality_score: gate?.qualityScore ?? null,
+    quality_score: qualityScoreValid ? gate?.qualityScore ?? null : null,
     quality_decision: gate?.decision ?? null,
+    degraded_sources: degradedSources,
+    semantic_evaluation_allowed: semanticEvaluationAllowed,
+    quality_score_valid: qualityScoreValid,
     crm_status: crm?.status ?? "NOT_RUN",
     started_at: startedAt.toISOString(),
     finished_at: finishedAt.toISOString(),

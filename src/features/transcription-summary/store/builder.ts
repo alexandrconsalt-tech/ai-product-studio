@@ -134,7 +134,7 @@ function failure(
 function stripPii(value: unknown): unknown {
   if (typeof value === "string") {
     return value
-      .replace(/(?:\\+?7|8)[\\s()-]*\\d{3}[\\s()-]*\\d{3}[\\s-]*\\d{2}[\\s-]*\\d{2}/g, "[PII удалено]")
+      .replace(/(?<![a-f0-9])(?:\+7|8)[\s()-]*\d{3}[\s()-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}(?![a-f0-9])/g, "[PII удалено]")
       .replace(/[\\w.+-]+@[\\w.-]+\\.[A-Za-z]{2,}/g, "[PII удалено]");
   }
   if (Array.isArray(value)) return value.map(stripPii);
@@ -152,6 +152,101 @@ function uniqueById<T extends Record<string, unknown>>(items: readonly T[]): T[]
     seen.add(identity);
     return true;
   });
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function semanticText(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function semanticMeaningId(item: Record<string, unknown>): string {
+  const predicate = semanticText(item.predicate ?? item.need_type ?? "");
+  const value = semanticText(item.value ?? "");
+  const action = semanticText(item.action ?? "");
+  const source = semanticText(`${item.predicate ?? ""} ${item.need_type ?? ""} ${item.value ?? ""} ${item.action ?? ""} ${item.owner ?? ""} ${item.evidence ?? ""}`);
+  if (/(?:client_goal|цель\S*\s+(?:обращ|покуп)|searching_for)/u.test(predicate)) return "client_goal";
+  if (/(?:funding|финанс|ипотек|наличн|депозит|деньг\S*\s+на\s+счет|свои\s+деньг)/u.test(source)) return "funding_source";
+  if (/(?:purchase_term|срок\S*\s+покуп|в\s+течение\s+\d+\s+(?:дн|недел|месяц)|до\s+\d+\s+месяц)/u.test(source)) return "purchase_term";
+  if (/(?:interested|интерес\S*\s+к|новострой|строительств)/u.test(source)) return "interest:property_type";
+  if (/(?:client_goal|цель\S*\s+покуп|ищу|подбираю|покупаю\S*\s+для)/u.test(source)) return "client_goal";
+  if (/(?:price_sensitivity|чувствительн\S*\s+к\s+цен|explicit_objection|возраж|отказ|не\s+подход)[^.!?]{0,100}(?:цен|дорог|ремонт)|(?:цен|дорог|ремонт)[^.!?]{0,100}(?:возраж|отказ|не\s+подход)/u.test(source)) return "objection:price_or_repair";
+  if (/(?:budget|бюджет|готов\S*\s+(?:потратить|заплатить)|рассматрива\S*\s+до)/u.test(source)) return "client_budget";
+  if (/(?:legal|юрид|собствен|дду|обремен|пропис|документ)/u.test(source)) return `legal_context:${value || predicate}`;
+  if (/(?:area|площад|метр|м²)/u.test(source)) return "requirement:area";
+  if (/(?:room|комнат)/u.test(source)) return "requirement:rooms";
+  if (/(?:ремонт|отделк)/u.test(source)) return "requirement:finish";
+  if (/(?:метро|локац|район)/u.test(source)) return "requirement:location";
+  if (action && /(?:просмотр|показ|позвон|перезвон|звонок|отправ|направ|подготов|уточн|подтверд|сообщ)/u.test(action)) {
+    return `outcome:${action.replace(/\b(?:agent|client|operator)\b/gu, "").trim()}`;
+  }
+  return `meaning:${semanticText(item.id ?? item.value ?? stableStringify(item))}`;
+}
+
+function withMeaningId<T extends Record<string, unknown>>(item: T): T & { meaning_id: string } {
+  return { ...item, meaning_id: semanticMeaningId(item) };
+}
+
+function uniqueByMeaning<T extends Record<string, unknown>>(items: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const meaningId = semanticText(item.meaning_id ?? semanticMeaningId(item));
+    if (seen.has(meaningId)) return false;
+    seen.add(meaningId);
+    return true;
+  });
+}
+
+function attributeDefined(value: unknown): boolean {
+  const item = record(value);
+  const normalized = semanticText(item.value);
+  return Boolean(normalized && normalized !== "не определено" && normalized !== "not_defined");
+}
+
+function addsFundingSpecificity(item: Record<string, unknown>): boolean {
+  return /(?:родител|счет|продаж\S*\s+сво|не\s+хвата|огранич|проблем|бюджет)/iu.test(
+    `${item.value ?? ""} ${item.evidence ?? ""}`,
+  );
+}
+
+function semanticStoreRecords(input: {
+  facts: readonly Record<string, unknown>[];
+  requirements: readonly Record<string, unknown>[];
+  attributes: Record<string, unknown>;
+  agreements: readonly Record<string, unknown>[];
+}) {
+  const fundingDefined = attributeDefined(input.attributes.funding_source);
+  const termDefined = attributeDefined(input.attributes.purchase_term);
+  const interestDefined = Array.isArray(input.attributes.interested_in)
+    && input.attributes.interested_in.some(attributeDefined);
+  let requirements = input.requirements
+    .map(withMeaningId)
+    .filter((item) => !(item.meaning_id === "funding_source" && fundingDefined && !addsFundingSpecificity(item)))
+    .filter((item) => !(item.meaning_id === "purchase_term" && termDefined))
+    .filter((item) => !(item.meaning_id.startsWith("interest:") && interestDefined));
+  const objectionMeanings = new Set(input.facts.map(withMeaningId)
+    .filter((item) => item.meaning_id.startsWith("objection:"))
+    .map((item) => item.meaning_id));
+  requirements = requirements.filter((item) => !objectionMeanings.has(item.meaning_id));
+  const requirementMeanings = new Set(requirements.map((item) => item.meaning_id));
+  const facts = input.facts
+    .map(withMeaningId)
+    .filter((item) => !(item.kind === "requirement_signal" && requirementMeanings.has(item.meaning_id)))
+    .filter((item) => !(item.meaning_id === "funding_source" && fundingDefined && !addsFundingSpecificity(item)));
+  return {
+    facts: uniqueByMeaning(uniqueById(facts)),
+    requirements: uniqueByMeaning(uniqueById(requirements)),
+    agreements: uniqueByMeaning(uniqueById(input.agreements.map(withMeaningId))),
+  };
 }
 
 export function buildConversationStoreV3(
@@ -202,9 +297,9 @@ export function buildConversationStoreV3(
   const facts = FactsV3Schema.safeParse(input.facts);
   const needs = NeedsV3Schema.safeParse(input.needs);
   const outcome = OutcomeV3Schema.safeParse(input.outcome);
-  const factsPolicy = facts.success ? applyFactsAgentOutputPolicyV3(facts.data) : null;
+  const factsPolicy = facts.success ? applyFactsAgentOutputPolicyV3(facts.data, transcript.data) : null;
   const needsPolicy = needs.success ? applyNeedsAgentOutputPolicyV3(needs.data) : null;
-  const outcomePolicy = outcome.success ? applyOutcomeAgentOutputPolicyV3(outcome.data) : null;
+  const outcomePolicy = outcome.success ? applyOutcomeAgentOutputPolicyV3(outcome.data, transcript.data) : null;
   const semanticSourceErrors = [
     ...(factsPolicy?.transformations.some((item) => item.ruleId === "facts.remove-object-card-data.v1") ? ["facts" as const] : []),
     ...(needsPolicy?.transformations.some((item) => item.ruleId === "needs.explicit-client-criteria-only.v1" || item.ruleId === "needs.direct-interest-evidence.v1") ? ["needs" as const] : []),
@@ -236,6 +331,12 @@ export function buildConversationStoreV3(
     needs: !needs.success ? "technical_error" : semanticSourceErrors.includes("needs") ? "semantic_repair" : "valid",
     outcome: !outcome.success ? "technical_error" : semanticSourceErrors.includes("outcome") ? "semantic_repair" : "valid",
   };
+  const semanticRecords = semanticStoreRecords({
+    facts: safeFacts.confirmed_facts,
+    requirements: [...safeNeeds.business_needs, ...safeNeeds.property_requirements],
+    attributes: safeNeeds.structured_crm_attributes,
+    agreements: safeOutcome.agreements,
+  });
   const payload = stripPii({
     meta: {
       run_id: transcript.data.metadata.run_id,
@@ -248,15 +349,12 @@ export function buildConversationStoreV3(
         sha256: actualTranscriptHash,
       },
     },
-    facts: uniqueById(safeFacts.confirmed_facts),
+    facts: semanticRecords.facts,
     quotes: uniqueById(safeFacts.quotes),
     attributes: safeNeeds.structured_crm_attributes,
-    requirements: uniqueById([
-      ...safeNeeds.business_needs,
-      ...safeNeeds.property_requirements,
-    ]),
+    requirements: semanticRecords.requirements,
     call_result: safeOutcome.call_result,
-    agreements: uniqueById(safeOutcome.agreements),
+    agreements: semanticRecords.agreements,
     primary_next_step: safeOutcome.primary_next_step,
     source_quality: sourceQuality,
     transcript_available: true as const,

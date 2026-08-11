@@ -22,7 +22,8 @@ describe("Conversation Store v3.2 из raw Extractor", () => {
       transcript_available: true,
       primary_next_step: { status: "confirmed" },
     });
-    expect(result.store.facts).toHaveLength(1);
+    expect(result.store.facts).toHaveLength(0);
+    expect(result.store.attributes.funding_source).toMatchObject({ value: "наличные / депозит" });
     expect(result.store.agreements).toHaveLength(1);
   });
 
@@ -51,10 +52,21 @@ describe("Conversation Store v3.2 из raw Extractor", () => {
   it("удаляет PII и дедуплицирует по id", () => {
     const input = createPhase4StoreInput();
     const facts = structuredClone(input.facts) as Record<string, any>;
-    facts.confirmed_facts.push({
+    facts.confirmed_facts = [{
       ...facts.confirmed_facts[0],
-      evidence: "Телефон +7 999 111-22-33",
-    });
+      id: "objection-price",
+      kind: "requirement_signal",
+      predicate: "explicit_objection",
+      value: "Цена слишком высокая",
+      evidence: "Цена слишком высокая, телефон +7 999 111-22-33",
+    }, {
+      ...facts.confirmed_facts[0],
+      id: "objection-price",
+      kind: "requirement_signal",
+      predicate: "explicit_objection",
+      value: "Цена слишком высокая",
+      evidence: "Цена слишком высокая, телефон +7 999 111-22-33",
+    }];
     const result = buildConversationStoreV3({ ...input, facts });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -72,5 +84,30 @@ describe("Conversation Store v3.2 из raw Extractor", () => {
     expect(first).toEqual(result.store);
     if (first) first.facts.splice(0);
     expect(await repository.getByRunId(result.store.meta.run_id)).toEqual(result.store);
+  });
+
+  it("дедуплицирует Store по meaning_id между CRM, needs и facts", () => {
+    const input = createPhase4StoreInput();
+    const facts = structuredClone(input.facts) as Record<string, any>;
+    facts.confirmed_facts.push({
+      ...facts.confirmed_facts[0],
+      id: "price-objection",
+      kind: "requirement_signal",
+      predicate: "explicit_objection",
+      value: "Цена и ремонт слишком дорогие",
+      evidence: "Цена высокая, ремонт слишком дорогой.",
+    });
+    const needs = structuredClone(input.needs) as Record<string, any>;
+    needs.business_needs = [
+      { ...needs.structured_crm_attributes.funding_source, id: "mortgage-duplicate", need_type: "financial_context", value: "Ипотека не нужна" },
+      { ...needs.structured_crm_attributes.funding_source, id: "price-sensitive", need_type: "price_sensitivity", value: "Чувствительность к цене и ремонту", evidence: "Цена высокая, ремонт слишком дорогой." },
+    ];
+
+    const result = buildConversationStoreV3({ ...input, facts, needs });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.store.facts.map((item) => item.meaning_id)).toEqual(["objection:price_or_repair"]);
+    expect(result.store.requirements).toEqual([]);
+    expect(result.store.attributes.funding_source).toMatchObject({ value: "наличные / депозит" });
   });
 });

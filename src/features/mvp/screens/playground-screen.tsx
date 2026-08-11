@@ -37,6 +37,7 @@ const EXECUTOR_SOURCE: PlaygroundTestRunSource = "pipeline-executor";
 // edited it) always wins over this regardless -- this only decides what a
 // browser with no saved config yet sees the first time.
 const TRANSCRIPTION_SUMMARY_PROJECT_ID = "project_transcription_summary_module";
+const APPLICATION_ATTRIBUTES_PROJECT_ID = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
 const SUMMARY_V2_PROJECT_ID = "project_summary_pipeline_v2";
 const TEST_BENCH_SOURCE: PlaygroundTestRunSource = "product-test-bench";
 const AD_COPY_PIPELINE_ID = "pipeline_ad_copy_generation";
@@ -423,7 +424,7 @@ export function PlaygroundScreen() {
             <PipelineLabV3Screen
               productId={selectedProject.id}
               productName={selectedProject.name}
-              preset={selectedProject.id === TRANSCRIPTION_SUMMARY_PROJECT_ID ? undefined : "blank"}
+              preset={selectedProject.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || selectedProject.id === APPLICATION_ATTRIBUTES_PROJECT_ID ? undefined : "blank"}
               onRunComplete={handleRunComplete}
             />
           </Card>

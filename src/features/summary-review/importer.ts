@@ -1,5 +1,12 @@
 import type { AiDecision, SummaryRun } from "./types";
 
+export type SummarySections = {
+  conversationResult: string;
+  keyFacts: string[];
+  quotes: string[];
+  nextSteps: string[];
+};
+
 function pickString(source: Record<string, unknown>, keys: string[], fallback = "") {
   for (const key of keys) {
     const value = source[key];
@@ -54,6 +61,101 @@ function nestedString(source: Record<string, unknown>, paths: string[][]): strin
     if (typeof value === "string" && value.trim()) return value;
   }
   return "";
+}
+
+function pickTextArray(value: unknown): string[] {
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string" && item.trim()) return [item.trim()];
+    const record = asRecord(item);
+    if (!record) return [];
+    const label = pickString(record, ["label", "name"], "");
+    const text = pickString(record, ["value", "text", "summary"], "");
+    return text ? [`${label ? `${label}: ` : ""}${text}`] : [];
+  });
+}
+
+function sectionsFromObject(summary: Record<string, unknown>): SummarySections | null {
+  const conversationResult = pickString(summary, ["conversation_result", "overview", "summary"], "");
+  if (!conversationResult) return null;
+  const hasStructuredFields = ["conversation_result", "overview", "key_facts", "quotes", "next_steps", "agreements", "agreement_next_step", "next_step"]
+    .some((key) => key in summary);
+  if (!hasStructuredFields && /^Итог разговора\s*$/im.test(conversationResult)) {
+    return parseFormattedSummary(conversationResult);
+  }
+  return {
+    conversationResult,
+    keyFacts: pickTextArray(summary.key_facts),
+    quotes: pickTextArray(summary.quotes),
+    nextSteps: [
+      ...pickTextArray(summary.next_steps),
+      ...pickTextArray(summary.agreements),
+      ...pickTextArray(summary.agreement_next_step),
+      ...pickTextArray(summary.next_step),
+    ],
+  };
+}
+
+function summaryObjectCandidates(source: Record<string, unknown>): Record<string, unknown>[] {
+  const reportJson = asRecord(source.report_json) ?? {};
+  const pipelineReport = asRecord(source.pipeline_report) ?? {};
+  const reportResult = asRecord(reportJson.result) ?? {};
+  const sourceResult = asRecord(source.result) ?? {};
+  const candidates = [source.summary, reportResult.summary, sourceResult.summary, pipelineReport.summary]
+    .map(asRecord)
+    .filter((value): value is Record<string, unknown> => Boolean(value));
+
+  const run = asRecord(reportJson.run) ?? asRecord(source.run);
+  const stages = Array.isArray(run?.stages) ? run.stages : [];
+  for (const item of stages) {
+    const stage = asRecord(item);
+    if (stage?.stage_id === "summary_generator") {
+      const output = asRecord(stage.output);
+      if (output) candidates.push(output);
+    }
+  }
+  return candidates;
+}
+
+function parseFormattedSummary(value: string): SummarySections {
+  const headings = [
+    { key: "conversationResult", pattern: "Итог разговора" },
+    { key: "keyFacts", pattern: "Ключевые факты" },
+    { key: "quotes", pattern: "(?:Важная цитата|Важные цитаты|Цитаты)" },
+    { key: "nextSteps", pattern: "(?:Договорённости\\s*(?:\\/|и)\\s*следующий шаг|Договоренности\\s*(?:\\/|и)\\s*следующий шаг)" },
+  ] as const;
+  const matches = headings.flatMap((heading) => {
+    const match = new RegExp(`(?:^|\\n)${heading.pattern}\\s*\\n+`, "i").exec(value);
+    return match ? [{ ...heading, index: match.index + (match[0].startsWith("\n") ? 1 : 0), contentStart: match.index + match[0].length }] : [];
+  }).sort((a, b) => a.index - b.index);
+  if (!matches.length) return { conversationResult: value.trim(), keyFacts: [], quotes: [], nextSteps: [] };
+
+  const sections: SummarySections = { conversationResult: "", keyFacts: [], quotes: [], nextSteps: [] };
+  matches.forEach((match, index) => {
+    const content = value.slice(match.contentStart, matches[index + 1]?.index ?? value.length).trim();
+    if (match.key === "conversationResult") sections.conversationResult = content;
+    else sections[match.key] = content.split(/\n+/).map((item) => item.replace(/^[•\-]\s*/, "").replace(/^«|»$/g, "").trim()).filter(Boolean);
+  });
+  return sections;
+}
+
+export function getSummarySections(input: unknown, fallback = ""): SummarySections {
+  const source = asRecord(input) ?? {};
+  for (const candidate of summaryObjectCandidates(source)) {
+    const sections = sectionsFromObject(candidate);
+    if (sections) return sections;
+  }
+  return parseFormattedSummary(fallback);
+}
+
+export function formatSummarySections(sections: SummarySections): string {
+  return [
+    `Итог разговора\n${sections.conversationResult || "Не указано"}`,
+    `Ключевые факты\n${sections.keyFacts.length ? sections.keyFacts.map((item) => `• ${item}`).join("\n") : "Не указаны"}`,
+    `Цитаты\n${sections.quotes.length ? sections.quotes.map((item) => `• «${item.replace(/^«|»$/g, "")}»`).join("\n") : "Не указаны"}`,
+    `Договорённости и следующий шаг\n${sections.nextSteps.length ? sections.nextSteps.map((item) => `• ${item}`).join("\n") : "Не указаны"}`,
+  ].join("\n\n");
 }
 
 // Pipeline Lab v3's own fields (facts/needs/outcome, and since the
@@ -162,7 +264,7 @@ export function normalizePlaygroundRun(input: unknown): SummaryRun {
       new Date().toISOString(),
     clientName: pickClientName(merged),
     transcript: pickString(merged, ["transcript", "transcription", "dialogue", "call_transcript", "__transcript"], ""),
-    summary: pickSummaryText(merged),
+    summary: formatSummarySections(getSummarySections(input, pickSummaryText(merged))),
     aiScore: hasGate
       ? pickNumber(gate, ["summary_quality_score"], 0)
       : pickNumber(merged, ["ai_score", "aiScore", "quality_score", "summary_quality_score"], 0),

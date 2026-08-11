@@ -105,7 +105,7 @@ describe("audit regression fixtures", () => {
     ).toBe(true);
   });
 
-  it("records unavailable quality without a blocking decision", () => {
+  it("accepts the analytical result contract and rejects an invalid blocking type", () => {
     expect(QualityGateV3Contract.validator.safeParse(
       QualityGateV3Contract.fixtures.valid,
     ).success).toBe(true);

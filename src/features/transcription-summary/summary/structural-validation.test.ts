@@ -15,6 +15,90 @@ const plan: SummaryPlanV3 = {
 };
 
 describe("Summary Plan and post-final Structural Validator", () => {
+  it("для v3.2 удаляет только точный дубль next step", () => {
+    const exactNextStep = "Агент позвонит клиенту сегодня по телефону.";
+    const result = applySummaryPlanAndValidate({
+      conversation_result: `Клиент ожидает подтверждения. ${exactNextStep}`,
+      key_facts: [],
+      quotes: [],
+      next_step: exactNextStep,
+    }, {
+      version: "summary-plan-v3.2.0",
+      meanings: [
+        { meaningId: "result", kind: "conversation_result", block: "conversation_result", text: "Клиент ожидает подтверждения", required: true, exclusive: false, priority: "P0", sourceIds: ["turn-1"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: exactNextStep, required: true, exclusive: true, priority: "P0", sourceIds: ["turn-2"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.conversation_result).toBe("Клиент ожидает подтверждения.");
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(0);
+  });
+
+  it("для v3.2 не удаляет семантический парафраз и отклоняет его как repetition", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ожидает подтверждения. Сегодня агент свяжется с клиентом по телефону.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Агент позвонит клиенту сегодня по телефону.",
+    }, {
+      version: "summary-plan-v3.2.0",
+      meanings: [
+        { meaningId: "result", kind: "conversation_result", block: "conversation_result", text: "Клиент ожидает подтверждения", required: true, exclusive: false, priority: "P0", sourceIds: ["turn-1"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Агент позвонит клиенту сегодня по телефону.", required: true, exclusive: true, priority: "P0", sourceIds: ["turn-2"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.nextStepDuplicationCount).toBe(1);
+    expect(result.transformations.some((item) => item.ruleId === "summary.exclusive-next-step.v1")).toBe(false);
+  });
+
+  it("для v3.2 удаляет неразрешённую цитату, не добавляя новый смысл", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент отказался продолжать из-за цены.",
+      key_facts: [],
+      quotes: [{ text: "Адрес объекта — Пражская улица." }],
+      next_step: "Следующий шаг не согласован.",
+    }, {
+      version: "summary-plan-v3.2.0",
+      meanings: [
+        { meaningId: "result", kind: "conversation_result", block: "conversation_result", text: "Клиент отказался продолжать из-за цены", required: true, exclusive: false, priority: "P0", sourceIds: ["turn-1"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Следующий шаг не согласован.", required: true, exclusive: true, priority: "P0", sourceIds: ["primary_next_step"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.quotes).toEqual([]);
+    expect(result.diagnostics.invalidQuoteCount).toBe(1);
+  });
+
+  it("для v3.2 не добавляет пропущенный P0 и возвращает его в diagnostics", () => {
+    const result = applySummaryPlanAndValidate({
+      conversation_result: "Клиент ищет квартиру для себя.",
+      key_facts: [],
+      quotes: [],
+      next_step: "Служебный следующий шаг.",
+    }, {
+      version: "summary-plan-v3.2.0",
+      meanings: [
+        { meaningId: "goal", kind: "client_goal", block: "conversation_result", text: "Клиент ищет квартиру для себя", required: true, exclusive: false, priority: "P1", label: "Цель", sourceIds: ["turn-1"] },
+        { meaningId: "refusal", kind: "conversation_result", block: "conversation_result", text: "Клиент отказался продолжать из-за цены", required: true, exclusive: false, priority: "P0", sourceIds: ["turn-2"] },
+        { meaningId: "primary_next_step", kind: "primary_next_step", block: "next_step", text: "Следующий шаг не согласован.", required: true, exclusive: true, priority: "P0", sourceIds: ["primary_next_step"] },
+      ],
+      crmCoverage: { fundingSource: false, purchaseTerm: false, interest: false },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.missingP0MeaningIds).toEqual(["refusal"]);
+    expect(result.transformations.some((item) => item.ruleId === "summary.required-meaning-restored.v1")).toBe(false);
+  });
+
   it("repairs technical field residue and duplicate key fact labels before acceptance", () => {
     const result = applySummaryPlanAndValidate({
       conversation_result: "Клиент ищет квартиру. next_step). {\"error\":\"bad\"}",
@@ -47,7 +131,7 @@ describe("Summary Plan and post-final Structural Validator", () => {
     expect(result.value).toEqual({
       conversation_result: "Клиент ищет квартиру. Обсуждение продолжено.",
       key_facts: [
-        { label: "Ключевой факт", value: "от 60 м²" },
+        { label: "Требование", value: "от 60 м²" },
         { label: "Ограничение", value: "не рассматривает шумную квартиру" },
       ],
       quotes: [],
