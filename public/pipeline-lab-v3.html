@@ -358,6 +358,7 @@
 <script src="/ai-application-attributes-pipeline-v22.js"></script>
 <script src="/ai-application-attributes-pipeline-v23.js"></script>
 <script src="/ai-application-attributes-pipeline-v24.js"></script>
+<script src="/ai-application-attributes-pipeline-v25.js"></script>
 <script src="/ai-summary-10-08-pipeline-v1.js"></script>
 <script src="/ai-summary-10-08-store-cleaner.js"></script>
 <script src="/ai-summary-10-08-conversation-judge-v5.js"></script>
@@ -1948,7 +1949,7 @@ function restoreApplicationAttributesPipelineConfig(){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT) return null;
   try{
     const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
-    if(!seed||seed.version!==14||Number(seed.revision)<24||!Array.isArray(seed.stages)||seed.stages.length!==7) return null;
+    if(!seed||seed.version!==14||Number(seed.revision)<25||!Array.isArray(seed.stages)||seed.stages.length!==7) return null;
     deletedStageOutKeys=Array.isArray(seed.deletedStageOutKeys)?seed.deletedStageOutKeys.filter(Boolean):[];
     const restored=seed.stages.map(stage=>({id:s(),...stage}));
     localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({
@@ -2070,12 +2071,12 @@ function migrateApplicationAttributesNextContactDateContract(stages){
 function migrateApplicationAttributesCallMetadataRuntime(stages){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT||!Array.isArray(stages)) return false;
   const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
-  if(!seed||Number(seed.revision)<24||!Array.isArray(seed.stages)) return false;
+  if(!seed||Number(seed.revision)<25||!Array.isArray(seed.stages)) return false;
   const seedByKey=Object.fromEntries(seed.stages.map(stage=>[stage.outKey,stage]));
   let migrated=false;
   const nextContact=stages.find(stage=>stage&&stage.outKey==='next_contact_date_extractor');
   const seedNextContact=seedByKey.next_contact_date_extractor;
-  if(nextContact&&seedNextContact&&nextContact.promptSource==='system_default'&&!nextContact.promptEdited&&Number(nextContact.promptVersion)<24){
+  if(nextContact&&seedNextContact&&nextContact.promptSource==='system_default'&&!nextContact.promptEdited&&Number(nextContact.promptVersion)<25){
     nextContact.prompt=seedNextContact.prompt;
     nextContact.promptVersion=seedNextContact.promptVersion;
     migrated=true;
@@ -2125,7 +2126,7 @@ function loadPipelineConfig(){
         version:PIPELINE_VERSION,
         createdAt:pipelineConfigCreatedAt,
         updatedAt:new Date().toISOString(),
-        restoredFrom:applicationAttributesCallMetadataRuntimeMigrated?'ai-application-attributes-temporal-runtime-v24':applicationAttributesNextContactDateContractMigrated?'ai-application-attributes-next-contact-date-contract-v1':applicationAttributesNextContactDateAdded?'ai-application-attributes-next-contact-date-v1':aiSummaryFinalizationAdded?'ai-summary-10-08-finalization-v1':aiSummarySummaryJudgeAdded?'ai-summary-10-08-summary-judge-recovery-v1':aiSummarySummaryGeneratorAdded?'ai-summary-10-08-summary-generator-v1':aiSummaryRuntimeContractsMigrated?'ai-summary-10-08-runtime-contracts-v2':aiSummaryStoreCleanerAdded?'ai-summary-10-08-store-cleaner-v1':'ai-summary-10-08-token-budget-v2',
+        restoredFrom:applicationAttributesCallMetadataRuntimeMigrated?'ai-application-attributes-structured-recovery-v25':applicationAttributesNextContactDateContractMigrated?'ai-application-attributes-next-contact-date-contract-v1':applicationAttributesNextContactDateAdded?'ai-application-attributes-next-contact-date-v1':aiSummaryFinalizationAdded?'ai-summary-10-08-finalization-v1':aiSummarySummaryJudgeAdded?'ai-summary-10-08-summary-judge-recovery-v1':aiSummarySummaryGeneratorAdded?'ai-summary-10-08-summary-generator-v1':aiSummaryRuntimeContractsMigrated?'ai-summary-10-08-runtime-contracts-v2':aiSummaryStoreCleanerAdded?'ai-summary-10-08-store-cleaner-v1':'ai-summary-10-08-token-budget-v2',
         deletedStageOutKeys,
         stages:restored.map(sanitize)
       }));
@@ -3009,7 +3010,8 @@ function stageContextAudit(stage,ctx){
   if(IS_APPLICATION_ATTRIBUTES_PROJECT){
     const prompt=String(stage&&stage.prompt||'');
     const bareContext=[...prompt.matchAll(/\{\{\s*(call_datetime|call_end_datetime|timezone)\s*\}\}/g)].map(match=>match[1]);
-    const nextContactRequired=key===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?['call_datetime','timezone',...(applicationAttributesNeedsCallEnd(transcriptText(ctx))?['call_end_datetime']:[])]:bareContext;
+    const relativeEndRequired=key===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY&&applicationAttributesNeedsCallEnd(transcriptText(ctx))&&(ctx&&ctx.__call_metadata_audit?.mode==='communication'||Boolean(ctx&&ctx.call_end_datetime));
+    const nextContactRequired=key===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?['call_datetime','timezone',...(relativeEndRequired?['call_end_datetime']:[])]:bareContext;
     const required=[...new Set([...(key==='attributes_judge'?['interest_extractor','funding_source_extractor','purchase_term_extractor','next_contact_date_extractor']:[]),...nextContactRequired,...[...prompt.matchAll(/\{\{\s*ctx\.([a-zA-Z0-9_]+)/g)].map(match=>match[1])])];
     const transcriptRequired=/\{\{\s*transcript\s*\}\}/.test(prompt);
     const contextKeys=transcriptRequired?['transcript',...required]:required;
@@ -3249,7 +3251,6 @@ function applicationAttributesPreflight(ctx,transcript){
   if(audit.mode==='communication'&&!audit.call_datetime) message='Не удалось получить дату исходной коммуникации';
   else if(!audit.call_datetime) message='Не удалось определить дату звонка для ручной транскрипции';
   else if(!audit.timezone) message='Не удалось определить timezone звонка';
-  else if(applicationAttributesNeedsCallEnd(transcript)&&!audit.call_end_datetime) message='Для относительного времени укажите дату и время окончания звонка';
   if(!message) return true;
   if(applicationCallMetadataStatus) applicationCallMetadataStatus.textContent=message+'. Пайплайн не запущен.';
   runStatus.textContent='ошибка контекста звонка';
@@ -3291,16 +3292,29 @@ function applicationAttributesInstantIso(value,timezone){
 
 function applicationAttributesTemporalNormalize(rawExpression,ctx){
   const raw=String(rawExpression||'').trim(),source=raw.toLowerCase().replace(/ё/g,'е'),timezone=String(ctx.timezone||''),reference=String(ctx.call_datetime||'');
-  const audit={raw_time_expression:raw||null,reference_datetime:reference||null,call_end_datetime:ctx.call_end_datetime||null,timezone:timezone||null,strategy:'unresolved',normalized_datetime:null,precision:'none'};
+  const metadataAudit=ctx.__call_metadata_audit||{};
+  const relativeReference=ctx.call_end_datetime||(metadataAudit.mode==='manual'?reference:null);
+  const relativeReferenceSource=ctx.call_end_datetime?(metadataAudit.call_end_datetime_source||'call_end_datetime'):metadataAudit.mode==='manual'&&reference?'pipeline_lab_manual_reference':null;
+  const audit={raw_time_expression:raw||null,reference_datetime:reference||null,call_end_datetime:ctx.call_end_datetime||null,relative_time_reference:relativeReference||null,relative_time_reference_source:relativeReferenceSource,timezone:timezone||null,strategy:'unresolved',normalized_datetime:null,precision:'none'};
   if(!raw||!reference||!timezone) return audit;
   const callParts=applicationAttributesLocalParts(reference,timezone);
   if(!callParts) return audit;
   const finish=(strategy,datetime,precision)=>({...audit,strategy,normalized_datetime:datetime,precision});
   const relativeRange=source.match(/через\s+(\d+)\s*[–—-]\s*(\d+)\s*(минут|минуты|час|часа|часов)/i);
+  const noisyMinuteRange=!relativeRange&&/(?:через\s+30\s*[–—-]\s*(?:40|4к)|(?:минут\s+через\s+t?30ать|через\s+t?30ать)[\s\S]{0,160}через\s+30\s*[–—-]\s*4к)/i.test(source);
   if(relativeRange){
-    const base=ctx.call_end_datetime;if(!base) return {...audit,strategy:'call_end_required'};
+    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
     const midpoint=(Number(relativeRange[1])+Number(relativeRange[2]))/2,multiplier=relativeRange[3].startsWith('час')?60:1;
     return finish('relative_range_midpoint',applicationAttributesInstantIso(new Date(Date.parse(base)+midpoint*multiplier*60000),timezone),'range');
+  }
+  if(noisyMinuteRange){
+    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
+    return finish('relative_noisy_range_midpoint',applicationAttributesInstantIso(new Date(Date.parse(base)+35*60000),timezone),'range');
+  }
+  const spokenThirty=source.match(/(?:минут\s+через|через)\s+(?:тридцать|т?30ать)(?:\s+минут)?/i);
+  if(spokenThirty){
+    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
+    return finish('relative_noisy_minutes',applicationAttributesInstantIso(new Date(Date.parse(base)+30*60000),timezone),'exact');
   }
   const relative=source.match(/через\s+(\d+)\s*(минут|минуты|час|часа|часов|день|дня|дней)/i);
   if(relative){
@@ -3309,7 +3323,7 @@ function applicationAttributesTemporalNormalize(rawExpression,ctx){
       const date=applicationAttributesCalendarDate(callParts,amount);
       return finish('relative_days',applicationAttributesCalendarIso(date,10,0,timezone),'date');
     }
-    const base=ctx.call_end_datetime;if(!base) return {...audit,strategy:'call_end_required'};
+    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
     const minutes=amount*(unit.startsWith('час')?60:1);
     return finish('relative_duration',applicationAttributesInstantIso(new Date(Date.parse(base)+minutes*60000),timezone),'exact');
   }
@@ -3351,6 +3365,7 @@ function applicationAttributesTemporalNormalize(rawExpression,ctx){
 }
 
 function applicationAttributesNormalizeNextContact(value,ctx){
+  ctx.next_contact_semantic_result=value&&typeof value==='object'?{...value}:value||null;
   if(!value||value.detected!==true){
     const audit={raw_time_expression:value&&value.raw_time_expression||null,reference_datetime:ctx.call_datetime||null,call_end_datetime:ctx.call_end_datetime||null,timezone:ctx.timezone||null,strategy:'not_detected',normalized_datetime:null,precision:'none'};
     ctx.temporal_normalization_audit=audit;
@@ -3360,6 +3375,26 @@ function applicationAttributesNormalizeNextContact(value,ctx){
   ctx.temporal_normalization_audit=audit;
   if(!audit.normalized_datetime) return {detected:false,next_contact_at:null,precision:'none',action:'none',actor:'none',raw_time_expression:value.raw_time_expression||null,evidence:value.evidence||null,confidence:0};
   return {...value,next_contact_at:audit.normalized_datetime,precision:audit.precision};
+}
+
+function applicationAttributesNextContactCandidate(transcript){
+  const source=String(transcript||'').replace(/\r/g,'');
+  const turns=[...source.matchAll(/(?:^|\n)(Агент|Менеджер):\s*([\s\S]*?)(?=\n(?:Агент|Менеджер|Оператор|Клиент|Неизвестный спикер):|$)/gi)].map(match=>match[2].replace(/\s+/g,' ').trim()).filter(Boolean);
+  const agentText=turns.join(' \n ');
+  const action=/(?:позвоню|перезвоню|наберу|напишу|пришлю|отправлю|скину|свяжусь|дам\s+знать)/i.exec(agentText);
+  const temporal=/(?:сегодня|завтра|послезавтра|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|утром|дн[ёе]м|вечером|после\s+работы|через\s+(?:\d+|тридцать|т?30ать)|минут\s+через\s+(?:\d+|тридцать|т?30ать)|30\s*[–—-]\s*(?:40|4к))/i.exec(agentText);
+  const possible=Boolean(action&&temporal);
+  return {possible_next_contact_candidate:possible,action_marker:action&&action[0]||null,temporal_marker:temporal&&temporal[0]||null,agent_turns_checked:turns.length,evidence_excerpt:possible?agentText.slice(Math.max(0,Math.min(action.index,temporal.index)-100),Math.max(action.index+action[0].length,temporal.index+temporal[0].length)+180):null};
+}
+
+function applicationAttributesNextContactRecoveryPrompt(ctx,candidate,reason){
+  return `Это технический повтор этапа «Дата следующего контакта». Предыдущий ответ: ${String(reason||'invalid')}.
+Определи, обязался ли именно агент после этого разговора позвонить, написать, отправить информацию или связаться для подтверждения. Не считай сам показ/встречу контактом и не считай обещание клиента.
+Для detected=true верни next_contact_at=null; календарную дату рассчитает код. Учитывай STT-шум и соседние реплики. «тогда вам напишу» + «минут через т30ать» + «через 30—4к» — сильное доказательство range 30–40 минут.
+Кодовый candidate audit: ${JSON.stringify(candidate||{})}
+Контекст: call_datetime=${ctx.call_datetime||''}; call_end_datetime=${ctx.call_end_datetime||''}; timezone=${ctx.timezone||''}.
+ТРАНСКРИБАЦИЯ:\n${transcriptText(ctx)}
+Верни только короткий JSON по response schema.`;
 }
 
 const SUMMARY_NEW_JSON_SCHEMA={
@@ -7957,7 +7992,7 @@ async function callOpenAI(prompt, model, temperature=0.2, maxTokens=2000, respon
 }
 
 function mockApplicationNextContactDate(prompt){
-  const source=String(prompt||''),call=(source.match(/Дата и время звонка:\s*\n([^\n]+)/)||[])[1]?.trim(),end=(source.match(/Дата и время окончания звонка:\s*\n([^\n]+)/)||[])[1]?.trim();
+  const fullPrompt=String(prompt||''),source=(fullPrompt.match(/ТРАНСКРИБАЦИЯ:\s*\n([\s\S]*)$/i)||[])[1]||fullPrompt,call=(fullPrompt.match(/Дата и время звонка:\s*\n([^\n]+)/)||[])[1]?.trim(),end=(fullPrompt.match(/Дата и время окончания звонка:\s*\n([^\n]+)/)||[])[1]?.trim();
   const offset=(call&&call.match(/([+-]\d{2}:\d{2})$/)||[])[1]||'Z';
   const addMinutesIso=(base,minutes)=>{
     const instant=new Date(Date.parse(base)+minutes*60000),match=String(base||'').match(/([+-])(\d{2}):(\d{2})$/)||String(call||'').match(/([+-])(\d{2}):(\d{2})$/),offsetMinutes=match?(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3])):0,local=new Date(instant.getTime()+offsetMinutes*60000),pad=value=>String(value).padStart(2,'0');
@@ -7970,17 +8005,20 @@ function mockApplicationNextContactDate(prompt){
     const adjusted=new Date(utc.getTime()+offsetMinutes*60000);
     return adjusted.getUTCFullYear()+'-'+pad(adjusted.getUTCMonth()+1)+'-'+pad(adjusted.getUTCDate())+'T'+pad(adjusted.getUTCHours())+':'+pad(adjusted.getUTCMinutes())+':'+pad(adjusted.getUTCSeconds())+offset;
   };
-  const no={detected:false,next_contact_at:null,precision:'none',action:'none',actor:'none',raw_time_expression:null,evidence:null,confidence:.98};
+  const no={detected:false,next_contact_at:null,precision:'none',action:'none',actor:'none',raw_time_expression:null,evidence:null,confidence:0};
+  if(/\[FORCE_FALSE_NEGATIVE\]/.test(source)) return no;
   if(/я вам завтра сам позвоню/i.test(source)) return no;
   if(/в субботу в 10:30[\s\S]*хорошо, записал/i.test(source)&&!/(перезвон|позвон|набер|напиш)/i.test(source)) return no;
   if(/давайте уточню, перезвоню/i.test(source)&&!/(сегодня|завтра|послезавтра|пятниц|суббот|воскрес|понедель|вторник|сред|четверг|через\s+\d+)/i.test(source)) return no;
-  if(/минут через 30[\s\S]*вам пару вопросик(?:ов|и)?[\s\S]*напишу[\s\S]*через 30[–—-]40/i.test(source)&&end) return {detected:true,next_contact_at:null,precision:'range',action:'message',actor:'agent',raw_time_expression:'через 30–40 минут',evidence:'Агент: «мне нужно будет там, я минут через 30 ... вам пару вопросиков там напишу»; «Минут ... через 30–40»',confidence:.95};
+  if(/(?:минут через (?:30|т?30ать|тридцать)[\s\S]*вам пару вопросик(?:ов|и)?[\s\S]*напишу[\s\S]*через 30[–—-](?:40|4к)|минут через т?30ать[\s\S]*тогда вам напишу[\s\S]*через 30[–—-]4к)/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'range',action:'message',actor:'agent',raw_time_expression:'минут через т30ать; через 30—4к',evidence:'Агент обещает написать и дважды называет STT-повреждённый диапазон 30–40 минут.',confidence:.95};
+  if(/агент:[^\n]*(?:напишу|позвоню|перезвоню|наберу)[^\n]*(?:через 30[–—-](?:40|4к)|минут через 30[–—-]40)|агент:[^\n]*(?:через 30[–—-](?:40|4к)|минут через 30[–—-]40)[^\n]*(?:напишу|позвоню|перезвоню|наберу)/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'range',action:/напишу/i.test(source)?'message':'callback',actor:'agent',raw_time_expression:(source.match(/(?:(?:минут )?через )30[–—-](?:40|4к)(?: минут)?/i)||[])[0]||'через 30–40 минут',evidence:'Агент подтвердил следующий контакт через 30–40 минут.',confidence:.95};
+  if(/агент:[^\n]*(?:напишу|позвоню|перезвоню|наберу)[^\n]*(?:минут через (?:тридцать|т?30ать)|через (?:тридцать|т?30ать))|агент:[^\n]*(?:минут через (?:тридцать|т?30ать)|через (?:тридцать|т?30ать))[^\n]*(?:напишу|позвоню|перезвоню|наберу)/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'exact',action:/напишу/i.test(source)?'message':'callback',actor:'agent',raw_time_expression:(source.match(/(?:минут через|через) (?:тридцать|т?30ать)(?: минут)?/i)||[])[0],evidence:'Агент подтвердил следующий контакт примерно через тридцать минут.',confidence:.94};
   if(/могу вам сегодня вечером точно сказать, перезвонить или написать/i.test(source)&&/сможете позвонить сегодня вечером[\s\S]*буду ждать звонка/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'сегодня вечером',evidence:'Агент: «Могу вам сегодня вечером точно сказать, перезвонить или написать?»; Клиент: «Хорошо, сможете позвонить сегодня вечером?» — «Да, конечно. Всё, буду ждать звонка.»',confidence:.96};
   if(/через 30 минут вам перезвоню/i.test(source)&&end) return {detected:true,next_contact_at:null,precision:'exact',action:'callback',actor:'agent',raw_time_expression:'через 30 минут',evidence:'Агент: «Через 30 минут вам перезвоню.»',confidence:.98};
   if(/агент:[^\n]*завтра вечером[^\n]*(?:позвон|перезвон|набер)/i.test(source)||/агент:[^\n]*(?:позвон|перезвон|набер)[^\n]*завтра вечером/i.test(source)) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Агент подтвердил звонок завтра вечером.',confidence:.96};
   if(/завтра ближе к вечеру позвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра ближе к вечеру',evidence:'Агент: «Завтра ближе к вечеру позвоню.»',confidence:.96};
   if(/завтра перезвоните мне, да, вечером[\s\S]*да, конечно/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Клиент: «Завтра перезвоните мне, да, вечером?» Агент: «Да, конечно.»',confidence:.95};
-  if(/в пятницу накануне наберу, позвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'date',action:'confirm',actor:'agent',raw_time_expression:'в пятницу',evidence:'Агент: «Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.» Клиент: «До пятницы, до завтра.»',confidence:.95};
+  if(/в пятницу накануне наберу, позвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'date',action:'callback',actor:'agent',raw_time_expression:'в пятницу',evidence:'Агент: «Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.» Клиент: «До пятницы, до завтра.»',confidence:.95};
   if(/агент:[^\n]*(?:в пятницу[^\n]*(?:позвон|перезвон|набер)|(?:позвон|перезвон|набер)[^\n]*в пятницу)/i.test(source)) return {detected:true,next_contact_at:null,precision:'date',action:'callback',actor:'agent',raw_time_expression:'в пятницу',evidence:'Агент подтвердил звонок в пятницу.',confidence:.96};
   if(/пятнадцатого,? в 14:00/i.test(source)) return {detected:true,next_contact_at:null,precision:'exact',action:'callback',actor:'agent',raw_time_expression:'пятнадцатого в 14:00',evidence:'Встретимся в пятницу, пятнадцатого, в 14:00',confidence:.98};
   return no;
@@ -8103,9 +8141,11 @@ async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000, resp
       method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
       body:JSON.stringify({model,messages:[{role:'user',content:prompt}],...openAiCompletionParams(model,temperature,requestedOutputTokenBudget),...(format?{response_format:format}:{})})
     });
-    return {response,data:await response.json().catch(()=>({}))};
+    const rawBody=await response.text();
+    let data={};try{data=rawBody?JSON.parse(rawBody):{};}catch(error){data={};}
+    return {response,data,rawBody};
   };
-  let {response:res,data}=await request(responseFormat);
+  let {response:res,data,rawBody}=await request(responseFormat);
   const firstDetail=(data&&data.error&&data.error.message)||'';
   let structuredOutputApplied=Boolean(responseFormat);
   const applicationAttributesStructuredContract=Boolean(IS_APPLICATION_ATTRIBUTES_PROJECT&&responseFormat&&String(responseFormat.json_schema&&responseFormat.json_schema.name||'').startsWith('application_'));
@@ -8118,16 +8158,20 @@ async function callAiTunnel(prompt, model, temperature=0.2, maxTokens=2000, resp
     throw new Error('AI Tunnel API '+res.status+(firstDetail?': '+firstDetail:'')+' · STRUCTURED_OUTPUT_REQUIRED');
   }
   if(responseFormat&&!res.ok&&[400,422].includes(res.status)&&/(response.?format|json.?schema|structured|unsupported|not supported)/i.test(firstDetail)){
-    ({response:res,data}=await request(null));structuredOutputApplied=false;
+    ({response:res,data,rawBody}=await request(null));structuredOutputApplied=false;
   }
   if(!res.ok){
     const detail=(data&&data.error&&data.error.message)||'';
     throw new Error('AI Tunnel API '+res.status+(detail?': '+detail:''));
   }
-  const text=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+  const choice=data.choices&&data.choices[0]||{},message=choice.message||{};
+  const payload=message.parsed??message.content??data.output_text??choice.text??null;
+  const text=typeof payload==='string'?payload:payload==null?'':JSON.stringify(payload);
   const tokens=(data.usage&&data.usage.total_tokens)||0;
-  const finishReason=data.choices&&data.choices[0]&&data.choices[0].finish_reason;
-  return {text,tokens,finishReason,structuredOutputApplied,requestedOutputTokenBudget,outputTokenParameter};
+  const finishReason=choice.finish_reason||null;
+  const safeProviderBody=JSON.stringify({id:data.id||null,object:data.object||null,model:data.model||model,choices:[{finish_reason:finishReason,message:{content:message.content??null,parsed:message.parsed??null,refusal:message.refusal??null}}],usage:data.usage||null});
+  const providerAudit={provider_http_status:res.status,provider_finish_reason:finishReason,provider_response_present:Boolean(rawBody),provider_response_chars:rawBody.length,provider_raw_body:safeProviderBody.slice(0,12000),structured_output_payload_present:payload!=null&&String(text).length>0,structured_output_payload_chars:String(text).length};
+  return {text,tokens,finishReason,structuredOutputApplied,requestedOutputTokenBudget,outputTokenParameter,providerAudit};
 }
 
 // A *configured* key isn't the same as a *working* one -- an
@@ -8159,11 +8203,21 @@ async function callModel(prompt, model, providerOverride, temperature=0.2, maxTo
       return {text:'',tokens:600,finishReason:'length',actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider'};
     }
     const applicationSchemaId=String(responseFormat&&responseFormat.json_schema&&responseFormat.json_schema.name||'');
+    if(IS_APPLICATION_ATTRIBUTES_PROJECT&&applicationSchemaId===APPLICATION_NEXT_CONTACT_DATE_CONTRACT_ID&&/\[FORCE_(?:TRUNCATED|EMPTY)_ONCE\]/.test(String(prompt||''))){
+      const key=/\[FORCE_TRUNCATED_ONCE\]/.test(prompt)?'truncated':'empty';
+      window.__applicationAttributesForcedProviderAttempts=window.__applicationAttributesForcedProviderAttempts||{};
+      const attempt=window.__applicationAttributesForcedProviderAttempts[key]||0;window.__applicationAttributesForcedProviderAttempts[key]=attempt+1;
+      if(attempt===0){
+        const finishReason=key==='truncated'?'length':'stop',providerAudit={provider_http_status:200,provider_finish_reason:finishReason,provider_response_present:true,provider_response_chars:180,provider_raw_body:JSON.stringify({choices:[{finish_reason:finishReason,message:{content:''}}],usage:{total_tokens:321}}),structured_output_payload_present:false,structured_output_payload_chars:0};
+        return {text:'',tokens:321,finishReason,actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider',structuredOutputApplied:true,providerAudit};
+      }
+    }
     const mockOutput=IS_APPLICATION_ATTRIBUTES_PROJECT&&applicationSchemaId===APPLICATION_NEXT_CONTACT_DATE_CONTRACT_ID
       ? mockApplicationNextContactDate(prompt)
       : mockPipelineResponse(prompt);
     const text=JSON.stringify(mockOutput);
-    return {text,tokens:Math.max(1,Math.round(text.length/4)),actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider',structuredOutputApplied:Boolean(responseFormat)};
+    const providerAudit={provider_http_status:200,provider_finish_reason:'stop',provider_response_present:true,provider_response_chars:text.length,provider_raw_body:JSON.stringify({choices:[{finish_reason:'stop',message:{content:text}}]}),structured_output_payload_present:Boolean(text),structured_output_payload_chars:text.length};
+    return {text,tokens:Math.max(1,Math.round(text.length/4)),finishReason:'stop',actualModel:model,actualProvider:'Mock LLM Provider',fallbackNote:'Mock LLM Provider',structuredOutputApplied:Boolean(responseFormat),providerAudit};
   }
   const vendor = MODEL_VENDOR[model] || 'anthropic';
   if(vendor==='openai'){
@@ -14024,7 +14078,8 @@ function buildApplicationAttributesMetrics(ctx){
   const technical=!applicationAttributesContextIsCurrent(ctx,'attributes_judge')||APPLICATION_ATTRIBUTE_KEYS.some(key=>judge.attribute_statuses?.[key]==='technical_error');
   const invalid=APPLICATION_ATTRIBUTE_KEYS.some(key=>!['ready','technical_error'].includes(judge.attribute_statuses?.[key]));
   const corrections=APPLICATION_ATTRIBUTE_KEYS.filter(key=>['correct','reject'].includes(decisions[key])).length;
-  const likelyMissedNextContact=judge.attributes?.next_contact_date===null&&/(?:агент|менеджер):[^\n]{0,160}(?:(?:перезвон|позвон|набер|напиш|отправ|скин)[^\n]{0,80}(?:сегодня|завтра|послезавтра|пятниц|суббот|воскрес|понедель|вторник|сред|четверг|через\s+\d+)|(?:сегодня|завтра|послезавтра|пятниц|суббот|воскрес|понедель|вторник|сред|четверг|через\s+\d+)[^\n]{0,80}(?:перезвон|позвон|набер|напиш|отправ|скин))/i.test(String(transcriptText(ctx)||''));
+  const nextContactCandidate=ctx.__next_contact_candidate_audit||applicationAttributesNextContactCandidate(transcriptText(ctx));
+  const likelyMissedNextContact=judge.attributes?.next_contact_date===null&&nextContactCandidate.possible_next_contact_candidate===true;
   const extractorCorrectness=technical||invalid||likelyMissedNextContact?0:[100,75,50,25,0][Math.min(corrections,4)];
   let evidenceQuality=100;
   for(const key of APPLICATION_ATTRIBUTE_KEYS){
@@ -14061,7 +14116,7 @@ function buildApplicationAttributesMetrics(ctx){
     ...confidence,
     quality_score:Math.round(Object.values(criteria).reduce((sum,value)=>sum+value,0)/5),
     quality_criteria:criteria,
-    calculation:{execution_type:'deterministic',tokens:0,cost:0,provenance_valid:provenanceValid,next_contact_date:{extractor_current:applicationAttributesContextIsCurrent(ctx,'next_contact_date_extractor'),judge_status:judge.attribute_statuses?.next_contact_date||null,judge_decision:judge.decisions?.next_contact_date||null,gate_decision:gate.decisions?.next_contact_date||null,crm_action:crm.update_actions?.next_contact_date||null,likely_missed:likelyMissedNextContact}}
+    calculation:{execution_type:'deterministic',tokens:0,cost:0,provenance_valid:provenanceValid,next_contact_date:{extractor_current:applicationAttributesContextIsCurrent(ctx,'next_contact_date_extractor'),judge_status:judge.attribute_statuses?.next_contact_date||null,judge_decision:judge.decisions?.next_contact_date||null,gate_decision:gate.decisions?.next_contact_date||null,crm_action:crm.update_actions?.next_contact_date||null,possible_next_contact_candidate:nextContactCandidate.possible_next_contact_candidate,likely_missed:likelyMissedNextContact,candidate_audit:nextContactCandidate}}
   };
 }
 
@@ -14332,7 +14387,8 @@ async function runStage(stage, ctx){
       : applicationExtractorKey
       ? Math.max(Number(stage.maxTokens)||0,2000)
       : stage.maxTokens;
-    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason,structuredOutputApplied,requestedOutputTokenBudget,outputTokenParameter,networkRetryCount=0,networkRetryReason}=await callModelWithTransientRetry(prompt, stage.model, stage.provider, stage.temperature, effectiveExtractionMaxTokens,responseFormat,aiSummaryCustomContract?false:stageAllowsVendorFallback(stage));
+    let {text:raw, tokens, actualModel, actualProvider, fallbackNote, finishReason,structuredOutputApplied,requestedOutputTokenBudget,outputTokenParameter,providerAudit,networkRetryCount=0,networkRetryReason}=await callModelWithTransientRetry(prompt, stage.model, stage.provider, stage.temperature, effectiveExtractionMaxTokens,responseFormat,aiSummaryCustomContract?false:stageAllowsVendorFallback(stage));
+    const providerAttempts=providerAudit?[providerAudit]:[];
     const promptHash=await hashPrompt(prompt);
     let parsed=null, parseErr=null, parseErrKind=null,contractWarnings=[],extractionAudit=null,applicationJudgeNormalizations=[];
     try{
@@ -14355,6 +14411,26 @@ async function runStage(stage, ctx){
     let extractionRetryCount=0;
     const extractionKind=moduleStageKind(stage);
     const isExtractionStage=Boolean(applicationExtractorKey)||Boolean(aiSummaryCustomContract)||(stage.type==='llm'&&['facts','needs','outcome'].includes(extractionKind));
+    const nextContactCandidate=applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?applicationAttributesNextContactCandidate(transcriptText(ctx)):null;
+    if(nextContactCandidate) ctx.__next_contact_candidate_audit=nextContactCandidate;
+    if(applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY&&(parseErr||nextContactCandidate?.possible_next_contact_candidate&&parsed?.detected!==true)){
+      const initialFailure=parseErr||'POSSIBLE_NEXT_CONTACT_FALSE_NEGATIVE';
+      for(let attempt=1;attempt<=2;attempt++){
+        extractionRetryCount=attempt;
+        const retryPrompt=attempt===1&&parseErr?prompt:applicationAttributesNextContactRecoveryPrompt(ctx,nextContactCandidate,parseErr||initialFailure);
+        const retryResult=await callModelWithTransientRetry(retryPrompt,stage.model,stage.provider,stage.temperature,effectiveExtractionMaxTokens,responseFormat,stageAllowsVendorFallback(stage));
+        raw=retryResult.text;tokens+=retryResult.tokens||0;actualModel=retryResult.actualModel;actualProvider=retryResult.actualProvider;fallbackNote=retryResult.fallbackNote;finishReason=retryResult.finishReason;structuredOutputApplied=retryResult.structuredOutputApplied;
+        if(retryResult.providerAudit) providerAttempts.push(retryResult.providerAudit);
+        networkRetryCount+=retryResult.networkRetryCount||0;networkRetryReason=networkRetryReason||retryResult.networkRetryReason;
+        try{
+          if(finishReason==='length') throw new Error('TRUNCATED_JSON');
+          parsed=applicationAttributesNormalizeNextContact(parseJSON(raw),ctx);
+          parsed=validateApplicationAttributesExtractor(applicationExtractorKey,parsed);
+          parseErr=null;parseErrKind=null;
+        }catch(error){parsed=null;parseErr=error.message;parseErrKind=error.name==='ApplicationAttributesSchemaError'?'schema':'json';}
+        if(!parseErr&&(!nextContactCandidate?.possible_next_contact_candidate||parsed?.detected===true)) break;
+      }
+    }
     const unknownFactCategories=isFactsExtraction&&parseErrKind==='schema'?factUnknownCategories(parsed):[];
     if(parseErr&&isApplicationAttributesJudge){
       extractionRetryCount=1;
@@ -14463,6 +14539,14 @@ async function runStage(stage, ctx){
       effective_output_token_budget:Number(effectiveExtractionMaxTokens)||null,
       output_token_parameter:outputTokenParameter||null,
       output_token_budget:Number(effectiveExtractionMaxTokens)||null,
+      provider_attempts:providerAttempts,
+      provider_http_status:providerAttempts.at(-1)?.provider_http_status??null,
+      provider_finish_reason:providerAttempts.at(-1)?.provider_finish_reason??finishReason??null,
+      provider_response_present:providerAttempts.at(-1)?.provider_response_present??Boolean(raw),
+      provider_response_chars:providerAttempts.at(-1)?.provider_response_chars??String(raw||'').length,
+      provider_raw_body:providerAttempts.at(-1)?.provider_raw_body??null,
+      structured_output_payload_present:providerAttempts.at(-1)?.structured_output_payload_present??Boolean(raw),
+      structured_output_payload_chars:providerAttempts.at(-1)?.structured_output_payload_chars??String(raw||'').length,
       retry_count:extractionRetryCount,
       contract_audit:{
         status:contractWarnings.length?'RECOVERED_WITH_WARNING':'VALID',
@@ -14483,7 +14567,7 @@ async function runStage(stage, ctx){
         ,decision_normalizations:applicationJudgeNormalizations
       },
       extraction_audit:extractionAudit,
-      ...(applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?{normalized_result:output,temporal_normalization_audit:ctx.temporal_normalization_audit||null}:{}),
+      ...(applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?{semantic_result:ctx.next_contact_semantic_result||null,normalized_result:output,temporal_normalization_audit:ctx.temporal_normalization_audit||null,next_contact_candidate_audit:nextContactCandidate}:{}),
       ...(aiSummaryOutcomeEvidenceAudit?{outcome_evidence_audit:aiSummaryOutcomeEvidenceAudit}:{}),
       ...(aiSummaryInputProvenance?{provenance_validation:aiSummaryInputProvenance}:{}),
       status: isSummaryNewStage(stage)?(summaryNewFailure?'bad':'ok'):(parseErr?'bad':contractWarnings.length?'warn':'ok'),

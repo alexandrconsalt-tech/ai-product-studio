@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import realCases from "./fixtures/application-attributes-real-cases.json";
 
 const projectId = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
 const projectUrl = `/pipeline-lab-v3.html?projectId=${projectId}&productName=${encodeURIComponent("AI Атрибуты в Заявке")}`;
@@ -152,7 +153,7 @@ test("миграция добавляет новый шаг в сохранён�
     history: localStorage.getItem(runHistoryKey),
   }), { scopedConfigKey: configKey, runHistoryKey: historyKey });
 
-  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-temporal-runtime-v24");
+  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-structured-recovery-v25");
   expect(migrated.config.stages.map((stage: { outKey: string }) => stage.outKey)).toEqual([
     "interest_extractor",
     "funding_source_extractor",
@@ -200,7 +201,7 @@ test("миграция отделяет ошибочно сохранённую 
   const nextStage = migrated.config.stages.find((stage: { outKey: string }) => stage.outKey === "next_contact_date_extractor");
   const interestStage = migrated.config.stages.find((stage: { outKey: string }) => stage.outKey === "interest_extractor");
 
-  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-temporal-runtime-v24");
+  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-structured-recovery-v25");
   expect(nextStage.responseContract).toBe("application_next_contact_date_extractor_v1");
   expect(nextStage.prompt).toContain("{{transcript}}");
   expect(nextStage.prompt).not.toBe(JSON.stringify(nextContactDateSchema, null, 2));
@@ -456,7 +457,7 @@ test("реальный UI path передаёт metadata и проводит о�
     mode: "manual",
   });
   expect(case1Stage).toMatchObject({
-    output: { detected: true, next_contact_at: "2026-08-13T10:40:00+03:00", precision: "range", actor: "agent", action: "message", raw_time_expression: "через 30–40 минут", confidence: 0.95 },
+    output: { detected: true, next_contact_at: "2026-08-13T10:40:00+03:00", precision: "range", actor: "agent", action: "message", raw_time_expression: "минут через т30ать; через 30—4к", confidence: 0.95 },
     tokens: expect.any(Number),
     contract_audit: { structured_output_requested: true, structured_output_applied: true, parse_status: "SUCCESS", schema_status: "VALID" },
     context_audit: { resolved_context_keys: { transcript: true, call_datetime: true, timezone: true, call_end_datetime: true } },
@@ -564,9 +565,15 @@ test("browser E2E CASE A–J: UI → resolver → normalizer → Judge → Gate 
     { id: "B", transcript: "Агент: Завтра вечером вам позвоню.\nКлиент: Хорошо, буду ждать.", expected: "2026-08-14T18:00:00+03:00", precision: "daypart", action: "SET" },
     { id: "C", transcript: "Агент: Через 30 минут вам перезвоню.\nКлиент: Хорошо.", end: "2026-08-13T10:05", expected: "2026-08-13T10:35:00+03:00", precision: "exact", action: "SET" },
     { id: "D", transcript: "Агент: Мне нужно будет там, я минут через 30 вам пару вопросиков там напишу.\nКлиент: Хорошо.\nАгент: Всё, тогда напишу минут через 30–40.", end: "2026-08-13T10:05", expected: "2026-08-13T10:40:00+03:00", precision: "range", action: "SET" },
+    { id: "D1", transcript: "Агент: Я вам напишу через 30-40 минут.\nКлиент: Хорошо.", expected: "2026-08-13T10:35:00+03:00", precision: "range", action: "SET" },
+    { id: "D2", transcript: "Агент: Минут через 30-40 вам напишу.\nКлиент: Хорошо.", expected: "2026-08-13T10:35:00+03:00", precision: "range", action: "SET" },
+    { id: "D3", transcript: "Агент: Минут через тридцать вам напишу.\nКлиент: Хорошо.", expected: "2026-08-13T10:30:00+03:00", precision: "exact", action: "SET" },
+    { id: "D4", transcript: "Агент: Я вам напишу через т30ать.\nКлиент: Хорошо.", expected: "2026-08-13T10:30:00+03:00", precision: "exact", action: "SET" },
+    { id: "D5", transcript: "Агент: Я вам напишу через 30—4к.\nКлиент: Хорошо.", expected: "2026-08-13T10:35:00+03:00", precision: "range", action: "SET" },
     { id: "E", transcript: "Клиент: Я завтра вам сам позвоню.\nАгент: Хорошо.", expected: null, precision: "none", action: "SKIP" },
     { id: "F", transcript: "Клиент: Показ в субботу в 10:30.\nАгент: Хорошо, записал.", expected: null, precision: "none", action: "SKIP" },
     { id: "G", transcript: "Агент: Как-нибудь созвонимся.\nКлиент: Хорошо.", expected: null, precision: "none", action: "SKIP" },
+    { id: "G1", transcript: "Агент: Сегодня отправлю документы в юридический отдел.\nКлиент: Хорошо.", expected: null, precision: "none", action: "SKIP" },
   ];
   for (const item of cases) {
     const result = await run(item);
@@ -637,12 +644,14 @@ test("текущий полный production case нормализуется н�
     raw_time_expression: "в пятницу",
     reference_datetime: "2026-08-13T10:00:00+03:00",
     call_end_datetime: null,
+    relative_time_reference: "2026-08-13T10:00:00+03:00",
+    relative_time_reference_source: "pipeline_lab_manual_reference",
     timezone: "Europe/Moscow",
     strategy: "nearest_future_weekday",
     normalized_datetime: "2026-08-14T10:00:00+03:00",
     precision: "date",
   });
-  expect(result.extractor).toMatchObject({ detected: true, actor: "agent", action: "confirm", raw_time_expression: "в пятницу", next_contact_at: "2026-08-14T10:00:00+03:00", precision: "date", confidence: 0.95 });
+  expect(result.extractor).toMatchObject({ detected: true, actor: "agent", action: "callback", raw_time_expression: "в пятницу", next_contact_at: "2026-08-14T10:00:00+03:00", precision: "date", confidence: 0.95 });
   expect(result.judge).toMatchObject({ attribute_statuses: { next_contact_date: "ready" }, decisions: { next_contact_date: "approve" }, attributes: { interest: [], funding_source: "ипотека одобрена", purchase_term: "не определено", next_contact_date: { next_contact_at: "2026-08-14T10:00:00+03:00" } } });
   expect(result.gate).toMatchObject({ decisions: { next_contact_date: "AUTO_SAVE" }, gate_status: "READY" });
   expect(result.crm).toMatchObject({ attributes: { interest: [], funding_source: "ипотека одобрена", purchase_term: "не определено", next_contact_date: "2026-08-14T10:00:00+03:00" }, update_actions: { next_contact_date: "SET" }, pipeline_status: "READY" });
@@ -655,6 +664,100 @@ test("текущий полный production case нормализуется н�
   const report = await page.evaluate(() => (window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport!);
   await testInfo.attach("current-production-pipeline-report.json", { body: Buffer.from(report), contentType: "application/json" });
   await testInfo.attach("current-production-result.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+});
+
+test("real reports A/B/C проходят 60/60 production-like UI runs", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  await page.goto(projectUrl);
+  await page.evaluate(() => {
+    const original = renderFinal;
+    renderFinal = (totalTokens, totalCost, stageReports) => {
+      (window as Window & { __lastApplicationStageReports?: unknown[] }).__lastApplicationStageReports = stageReports;
+      return original(totalTokens, totalCost, stageReports);
+    };
+  });
+  const cases = [
+    { id: "A", transcript: realCases.caseA, expected: "2026-08-14T10:00:00+03:00", precision: "date", action: "callback" },
+    { id: "B", transcript: realCases.caseB, expected: "2026-08-13T18:00:00+03:00", precision: "daypart", action: "callback" },
+    { id: "C", transcript: realCases.caseC, expected: "2026-08-13T16:01:00+03:00", precision: "range", action: "message" },
+  ];
+  const reports: Array<Record<string, unknown>> = [];
+  for (const item of cases) {
+    for (let run = 1; run <= 20; run++) {
+      await page.locator("#transcript").fill(item.transcript);
+      await page.locator("#applicationCallDatetime").fill("2026-08-13T15:26");
+      await page.locator("#applicationCallEndDatetime").fill("");
+      await page.locator("#applicationCallTimezone").selectOption("Europe/Moscow");
+      await page.locator("#runBtn").click();
+      await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+      const report = await page.evaluate(() => {
+        const stage = ((window as Window & { __lastApplicationStageReports?: Array<{ stage: { outKey: string }; report: unknown }> }).__lastApplicationStageReports || []).find((entry) => entry.stage.outKey === "next_contact_date_extractor")?.report;
+        return { extractor: ctx.next_contact_date_extractor, judge: ctx.attributes_judge, gate: ctx.attributes_quality_gate, crm: ctx.crm_attributes_result, metrics: ctx.attributes_metrics, temporal: ctx.temporal_normalization_audit, stage };
+      });
+      expect(report.extractor, `${item.id}-${run}`).toMatchObject({ detected: true, next_contact_at: item.expected, precision: item.precision, actor: "agent", action: item.action });
+      expect(report.judge.attribute_statuses.next_contact_date, `${item.id}-${run}`).toBe("ready");
+      expect(report.judge.decisions.next_contact_date, `${item.id}-${run}`).toBe("approve");
+      expect(report.gate.decisions.next_contact_date, `${item.id}-${run}`).toBe("AUTO_SAVE");
+      expect(report.crm.update_actions.next_contact_date, `${item.id}-${run}`).toBe("SET");
+      expect(report.crm.attributes.next_contact_date, `${item.id}-${run}`).toBe(item.expected);
+      expect(report.stage.contract_audit, `${item.id}-${run}`).toMatchObject({ parse_status: "SUCCESS", schema_status: "VALID" });
+      expect(report.stage.parseErr, `${item.id}-${run}`).toBeNull();
+      reports.push({ case: item.id, run, ...report });
+    }
+  }
+  expect(reports).toHaveLength(60);
+  await testInfo.attach("application-attributes-real-cases-60-runs.json", { body: Buffer.from(JSON.stringify(reports, null, 2)), contentType: "application/json" });
+});
+
+test("forced TRUNCATED_JSON и empty response повторяют тот же stage и завершают CRM SET", async ({ page }, testInfo) => {
+  await page.goto(projectUrl);
+  await page.evaluate(() => {
+    const original = renderFinal;
+    renderFinal = (totalTokens, totalCost, stageReports) => {
+      (window as Window & { __lastApplicationStageReports?: unknown[] }).__lastApplicationStageReports = stageReports;
+      return original(totalTokens, totalCost, stageReports);
+    };
+  });
+  await page.locator("#transcript").fill("[FORCE_TRUNCATED_ONCE]\nАгент: Я вам в пятницу позвоню.\nКлиент: Хорошо, до пятницы.");
+  await page.locator("#applicationCallDatetime").fill("2026-08-13T10:00");
+  await page.locator("#applicationCallEndDatetime").fill("");
+  await page.locator("#runBtn").click();
+  await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+  const report = await page.evaluate(() => {
+    const stage = ((window as Window & { __lastApplicationStageReports?: Array<{ stage: { outKey: string }; report: unknown }> }).__lastApplicationStageReports || []).find((entry) => entry.stage.outKey === "next_contact_date_extractor")?.report;
+    return { stage, extractor: ctx.next_contact_date_extractor, crm: ctx.crm_attributes_result };
+  });
+  expect(report.stage).toMatchObject({ retry_count: 1, parseErr: null, provider_attempts: [{ provider_finish_reason: "length", structured_output_payload_present: false }, { provider_finish_reason: "stop", structured_output_payload_present: true }], contract_audit: { parse_status: "SUCCESS", schema_status: "VALID", repair_attempted: true, repair_result: "SUCCESS" } });
+  expect(report.extractor.next_contact_at).toBe("2026-08-14T10:00:00+03:00");
+  expect(report.crm).toMatchObject({ attributes: { next_contact_date: "2026-08-14T10:00:00+03:00" }, update_actions: { next_contact_date: "SET" } });
+  await testInfo.attach("forced-truncated-retry-report.json", { body: Buffer.from(JSON.stringify(report, null, 2)), contentType: "application/json" });
+
+  await page.locator("#transcript").fill("[FORCE_EMPTY_ONCE]\nАгент: Я вам в пятницу позвоню.\nКлиент: Хорошо, до пятницы.");
+  await page.locator("#runBtn").click();
+  await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+  const emptyReport = await page.evaluate(() => {
+    const stage = ((window as Window & { __lastApplicationStageReports?: Array<{ stage: { outKey: string }; report: unknown }> }).__lastApplicationStageReports || []).find((entry) => entry.stage.outKey === "next_contact_date_extractor")?.report;
+    return { stage, extractor: ctx.next_contact_date_extractor, crm: ctx.crm_attributes_result };
+  });
+  expect(emptyReport.stage).toMatchObject({ retry_count: 1, parseErr: null, provider_attempts: [{ provider_finish_reason: "stop", structured_output_payload_present: false }, { provider_finish_reason: "stop", structured_output_payload_present: true }], contract_audit: { parse_status: "SUCCESS", schema_status: "VALID", repair_result: "SUCCESS" } });
+  expect(emptyReport.crm.update_actions.next_contact_date).toBe("SET");
+  await testInfo.attach("forced-empty-retry-report.json", { body: Buffer.from(JSON.stringify(emptyReport, null, 2)), contentType: "application/json" });
+});
+
+test("independent candidate alarm ставит likely_missed и снижает quality", async ({ page }, testInfo) => {
+  await page.goto(projectUrl);
+  await page.locator("#transcript").fill("[FORCE_FALSE_NEGATIVE]\nАгент:\n— Я вам завтра вечером позвоню.\nКлиент:\n— Хорошо, буду ждать.");
+  await page.locator("#applicationCallDatetime").fill("2026-08-13T10:00");
+  await page.locator("#runBtn").click();
+  await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+  const result = await page.evaluate(() => ({ metrics: ctx.attributes_metrics, candidate: ctx.__next_contact_candidate_audit, extractor: ctx.next_contact_date_extractor }));
+  expect(result.extractor.detected).toBe(false);
+  expect(result.candidate).toMatchObject({ possible_next_contact_candidate: true, action_marker: "позвоню", temporal_marker: "завтра" });
+  expect(result.metrics.calculation.next_contact_date).toMatchObject({ possible_next_contact_candidate: true, likely_missed: true });
+  expect(result.metrics.quality_criteria.extractor_correctness).toBeLessThan(100);
+  expect(result.metrics.quality_criteria.evidence_quality).toBeLessThan(100);
+  expect(result.metrics.quality_score).toBeLessThan(100);
+  await testInfo.attach("likely-missed-report.json", { body: Buffer.from(JSON.stringify(result, null, 2)), contentType: "application/json" });
 });
 
 test("AI Атрибуты заявки выполняет 7 этапов с отдельным LLM Agent даты следующего контакта", async ({ page }) => {
