@@ -250,8 +250,8 @@
           </div>
 
           <div id="applicationCallMetadataPanel" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
-            <label class="fld" style="margin:0 0 6px">Metadata звонка для определения следующего контакта</label>
-            <div class="hintbar" style="margin:0 0 10px">Для вручную вставленной транскрипции укажите фактическое время звонка. Время окончания можно не заполнять, если в разговоре нет формулировок «через N минут/часов».</div>
+            <label class="fld" style="margin:0 0 6px">Контекст звонка</label>
+            <div class="hintbar" style="margin:0 0 10px">Для ручной транскрипции дата звонка заполняется текущим временем выбранной timezone. Вы можете изменить её. Время окончания необязательно.</div>
             <div class="row" style="align-items:flex-end;flex-wrap:wrap">
               <label style="flex:1;min-width:190px"><span class="fld">Дата и время звонка</span><input id="applicationCallDatetime" type="datetime-local" step="1"></label>
               <label style="flex:1;min-width:190px"><span class="fld">Дата и время окончания звонка</span><input id="applicationCallEndDatetime" type="datetime-local" step="1"></label>
@@ -357,6 +357,7 @@
 <script src="/ai-application-attributes-pipeline-v21.js"></script>
 <script src="/ai-application-attributes-pipeline-v22.js"></script>
 <script src="/ai-application-attributes-pipeline-v23.js"></script>
+<script src="/ai-application-attributes-pipeline-v24.js"></script>
 <script src="/ai-summary-10-08-pipeline-v1.js"></script>
 <script src="/ai-summary-10-08-store-cleaner.js"></script>
 <script src="/ai-summary-10-08-conversation-judge-v5.js"></script>
@@ -1947,7 +1948,7 @@ function restoreApplicationAttributesPipelineConfig(){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT) return null;
   try{
     const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
-    if(!seed||seed.version!==14||Number(seed.revision)<23||!Array.isArray(seed.stages)||seed.stages.length!==7) return null;
+    if(!seed||seed.version!==14||Number(seed.revision)<24||!Array.isArray(seed.stages)||seed.stages.length!==7) return null;
     deletedStageOutKeys=Array.isArray(seed.deletedStageOutKeys)?seed.deletedStageOutKeys.filter(Boolean):[];
     const restored=seed.stages.map(stage=>({id:s(),...stage}));
     localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({
@@ -2069,12 +2070,12 @@ function migrateApplicationAttributesNextContactDateContract(stages){
 function migrateApplicationAttributesCallMetadataRuntime(stages){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT||!Array.isArray(stages)) return false;
   const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
-  if(!seed||Number(seed.revision)<23||!Array.isArray(seed.stages)) return false;
+  if(!seed||Number(seed.revision)<24||!Array.isArray(seed.stages)) return false;
   const seedByKey=Object.fromEntries(seed.stages.map(stage=>[stage.outKey,stage]));
   let migrated=false;
   const nextContact=stages.find(stage=>stage&&stage.outKey==='next_contact_date_extractor');
   const seedNextContact=seedByKey.next_contact_date_extractor;
-  if(nextContact&&seedNextContact&&nextContact.promptSource==='system_default'&&!nextContact.promptEdited&&Number(nextContact.promptVersion)<23){
+  if(nextContact&&seedNextContact&&nextContact.promptSource==='system_default'&&!nextContact.promptEdited&&Number(nextContact.promptVersion)<24){
     nextContact.prompt=seedNextContact.prompt;
     nextContact.promptVersion=seedNextContact.promptVersion;
     migrated=true;
@@ -2124,7 +2125,7 @@ function loadPipelineConfig(){
         version:PIPELINE_VERSION,
         createdAt:pipelineConfigCreatedAt,
         updatedAt:new Date().toISOString(),
-        restoredFrom:applicationAttributesCallMetadataRuntimeMigrated?'ai-application-attributes-call-metadata-runtime-v22':applicationAttributesNextContactDateContractMigrated?'ai-application-attributes-next-contact-date-contract-v1':applicationAttributesNextContactDateAdded?'ai-application-attributes-next-contact-date-v1':aiSummaryFinalizationAdded?'ai-summary-10-08-finalization-v1':aiSummarySummaryJudgeAdded?'ai-summary-10-08-summary-judge-recovery-v1':aiSummarySummaryGeneratorAdded?'ai-summary-10-08-summary-generator-v1':aiSummaryRuntimeContractsMigrated?'ai-summary-10-08-runtime-contracts-v2':aiSummaryStoreCleanerAdded?'ai-summary-10-08-store-cleaner-v1':'ai-summary-10-08-token-budget-v2',
+        restoredFrom:applicationAttributesCallMetadataRuntimeMigrated?'ai-application-attributes-temporal-runtime-v24':applicationAttributesNextContactDateContractMigrated?'ai-application-attributes-next-contact-date-contract-v1':applicationAttributesNextContactDateAdded?'ai-application-attributes-next-contact-date-v1':aiSummaryFinalizationAdded?'ai-summary-10-08-finalization-v1':aiSummarySummaryJudgeAdded?'ai-summary-10-08-summary-judge-recovery-v1':aiSummarySummaryGeneratorAdded?'ai-summary-10-08-summary-generator-v1':aiSummaryRuntimeContractsMigrated?'ai-summary-10-08-runtime-contracts-v2':aiSummaryStoreCleanerAdded?'ai-summary-10-08-store-cleaner-v1':'ai-summary-10-08-token-budget-v2',
         deletedStageOutKeys,
         stages:restored.map(sanitize)
       }));
@@ -3157,6 +3158,13 @@ function applicationAttributesLocalDateTimeToIso(value,timezone){
   }catch(error){return null;}
 }
 
+function applicationAttributesCurrentLocalInput(timezone){
+  try{
+    const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+  }catch(error){return '';}
+}
+
 function applicationAttributesUiCallMetadata(){
   const start=document.getElementById('applicationCallDatetime');
   const end=document.getElementById('applicationCallEndDatetime');
@@ -3166,7 +3174,8 @@ function applicationAttributesUiCallMetadata(){
   const callDatetime=applicationAttributesLocalDateTimeToIso(start.value,zone);
   const parsedEnd=end&&end.value?applicationAttributesLocalDateTimeToIso(end.value,zone):null;
   const callEndDatetime=parsedEnd&&callDatetime&&Date.parse(parsedEnd)>=Date.parse(callDatetime)?parsedEnd:null;
-  return {source:'pipeline_lab_input',provider:'Pipeline Lab UI',call_datetime:callDatetime,call_end_datetime:callEndDatetime,timezone:zone,call_datetime_source:'pipeline_lab_input',call_end_datetime_source:callEndDatetime?'pipeline_lab_input':null,timezone_source:'pipeline_lab_input'};
+  const manualDefault=start.dataset.manualDefault==='true';
+  return {source:manualDefault?'pipeline_lab_manual_default':'pipeline_lab_input',provider:'Pipeline Lab UI',call_datetime:callDatetime,call_end_datetime:callEndDatetime,timezone:zone,call_datetime_source:callDatetime?(manualDefault?'pipeline_lab_manual_default':'pipeline_lab_input'):null,call_end_datetime_source:callEndDatetime?'pipeline_lab_input':null,timezone_source:'pipeline_lab_input'};
 }
 
 function applicationAttributesCallMetadata(metadata){
@@ -3201,18 +3210,29 @@ function applicationAttributesCallMetadata(metadata){
 }
 
 function applicationAttributesAttachCallMetadata(ctx){
-  const communication=applicationAttributesCallMetadata(ctx.stt_metadata||null);
-  const ui=applicationAttributesCallMetadata(applicationAttributesUiCallMetadata());
+  const communicationEnvelope=ctx.stt_metadata||window.__applicationAttributesCommunicationMetadata||null;
+  const communicationMode=Boolean(communicationEnvelope);
+  const communication=applicationAttributesCallMetadata(communicationEnvelope);
+  let ui=applicationAttributesCallMetadata(applicationAttributesUiCallMetadata());
   const legacy=applicationAttributesCallMetadata(window.__applicationAttributesCallMetadata||null);
-  const callSource=communication.call_datetime?communication:ui.call_datetime?ui:legacy;
+  if(!communicationMode&&!ui.call_datetime){
+    const zone=ui.timezone||legacy.timezone||'Europe/Moscow';
+    const input=document.getElementById('applicationCallDatetime');
+    if(input){input.value=applicationAttributesCurrentLocalInput(zone);input.dataset.manualDefault='true';persistApplicationCallMetadata();}
+    ui=applicationAttributesCallMetadata(applicationAttributesUiCallMetadata());
+  }
+  const callSource=communicationMode?communication:ui.call_datetime?ui:legacy;
   const endSource=communication.call_end_datetime?communication:ui.call_end_datetime?ui:legacy.call_end_datetime?legacy:null;
-  const timezoneSource=communication.timezone?communication:ui.timezone?ui:legacy.timezone?legacy:null;
+  const companyTimezone=String(window.__applicationAttributesCompanyTimezone||'').trim();
+  const company=companyTimezone?applicationAttributesCallMetadata({timezone:companyTimezone,source:'company_timezone'}):null;
+  const timezoneSource=communication.timezone?communication:company&&company.timezone?company:ui.timezone?ui:legacy.timezone?legacy:null;
   const resolved={
     call_datetime:callSource.call_datetime||null,
     call_end_datetime:endSource&&endSource.call_end_datetime||null,
     timezone:timezoneSource&&timezoneSource.timezone||null,
-    source:communication.call_datetime?'communication_metadata':callSource.source||(timezoneSource&&timezoneSource.source)||(endSource&&endSource.source)||null,
-    call_datetime_source:communication.call_datetime?'communication_metadata':callSource.call_datetime_source||null,
+    mode:communicationMode?'communication':'manual',
+    source:communicationMode?'communication_metadata':callSource.source||(timezoneSource&&timezoneSource.source)||(endSource&&endSource.source)||null,
+    call_datetime_source:communicationMode&&communication.call_datetime?'communication_metadata':callSource.call_datetime_source||null,
     call_end_datetime_source:endSource&&(endSource===communication?communication.call_end_datetime_source:endSource.call_end_datetime_source)||null,
     timezone_source:timezoneSource&&(communication.timezone?'communication_metadata':timezoneSource.timezone_source)||null
   };
@@ -3220,6 +3240,126 @@ function applicationAttributesAttachCallMetadata(ctx){
   if(resolved.call_end_datetime) ctx.call_end_datetime=resolved.call_end_datetime;
   if(resolved.timezone) ctx.timezone=resolved.timezone;
   ctx.__call_metadata_audit=resolved;
+  return resolved;
+}
+
+function applicationAttributesPreflight(ctx,transcript){
+  const audit=ctx.__call_metadata_audit||{};
+  let message='';
+  if(audit.mode==='communication'&&!audit.call_datetime) message='Не удалось получить дату исходной коммуникации';
+  else if(!audit.call_datetime) message='Не удалось определить дату звонка для ручной транскрипции';
+  else if(!audit.timezone) message='Не удалось определить timezone звонка';
+  else if(applicationAttributesNeedsCallEnd(transcript)&&!audit.call_end_datetime) message='Для относительного времени укажите дату и время окончания звонка';
+  if(!message) return true;
+  if(applicationCallMetadataStatus) applicationCallMetadataStatus.textContent=message+'. Пайплайн не запущен.';
+  runStatus.textContent='ошибка контекста звонка';
+  toast(message);
+  return false;
+}
+
+const APPLICATION_ATTRIBUTES_WEEKDAYS=Object.freeze({воскресенье:0,понедельник:1,вторник:2,среда:3,четверг:4,пятница:5,суббота:6});
+const APPLICATION_ATTRIBUTES_MONTHS=Object.freeze({января:1,февраля:2,марта:3,апреля:4,мая:5,июня:6,июля:7,августа:8,сентября:9,октября:10,ноября:11,декабря:12});
+const APPLICATION_ATTRIBUTES_DAYPARTS=Object.freeze([
+  {pattern:/после работы/i,hour:19,strategy:'daypart_after_work'},
+  {pattern:/ближе к вечеру/i,hour:17,strategy:'daypart_toward_evening'},
+  {pattern:/после обеда/i,hour:15,strategy:'daypart_after_lunch'},
+  {pattern:/ближе к обеду/i,hour:12,strategy:'daypart_toward_lunch'},
+  {pattern:/первая половина дня/i,hour:10,strategy:'daypart_first_half'},
+  {pattern:/утр(?:ом|а)/i,hour:10,strategy:'daypart_morning'},
+  {pattern:/дн[её]м/i,hour:14,strategy:'daypart_afternoon'},
+  {pattern:/вечер(?:ом|а)/i,hour:18,strategy:'daypart_evening'}
+]);
+
+function applicationAttributesLocalParts(value,timezone){
+  try{return Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',weekday:'long',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));}catch(error){return null;}
+}
+
+function applicationAttributesCalendarDate(parts,days){
+  const date=new Date(Date.UTC(Number(parts.year),Number(parts.month)-1,Number(parts.day)+days));
+  return {year:date.getUTCFullYear(),month:date.getUTCMonth()+1,day:date.getUTCDate()};
+}
+
+function applicationAttributesCalendarIso(date,hour,minute,timezone,second=0){
+  const local=`${String(date.year).padStart(4,'0')}-${String(date.month).padStart(2,'0')}-${String(date.day).padStart(2,'0')}T${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}:${String(second).padStart(2,'0')}`;
+  return applicationAttributesLocalDateTimeToIso(local,timezone);
+}
+
+function applicationAttributesInstantIso(value,timezone){
+  const parts=applicationAttributesLocalParts(value,timezone);
+  return parts?applicationAttributesCalendarIso({year:Number(parts.year),month:Number(parts.month),day:Number(parts.day)},Number(parts.hour),Number(parts.minute),timezone,Number(parts.second)):null;
+}
+
+function applicationAttributesTemporalNormalize(rawExpression,ctx){
+  const raw=String(rawExpression||'').trim(),source=raw.toLowerCase().replace(/ё/g,'е'),timezone=String(ctx.timezone||''),reference=String(ctx.call_datetime||'');
+  const audit={raw_time_expression:raw||null,reference_datetime:reference||null,call_end_datetime:ctx.call_end_datetime||null,timezone:timezone||null,strategy:'unresolved',normalized_datetime:null,precision:'none'};
+  if(!raw||!reference||!timezone) return audit;
+  const callParts=applicationAttributesLocalParts(reference,timezone);
+  if(!callParts) return audit;
+  const finish=(strategy,datetime,precision)=>({...audit,strategy,normalized_datetime:datetime,precision});
+  const relativeRange=source.match(/через\s+(\d+)\s*[–—-]\s*(\d+)\s*(минут|минуты|час|часа|часов)/i);
+  if(relativeRange){
+    const base=ctx.call_end_datetime;if(!base) return {...audit,strategy:'call_end_required'};
+    const midpoint=(Number(relativeRange[1])+Number(relativeRange[2]))/2,multiplier=relativeRange[3].startsWith('час')?60:1;
+    return finish('relative_range_midpoint',applicationAttributesInstantIso(new Date(Date.parse(base)+midpoint*multiplier*60000),timezone),'range');
+  }
+  const relative=source.match(/через\s+(\d+)\s*(минут|минуты|час|часа|часов|день|дня|дней)/i);
+  if(relative){
+    const amount=Number(relative[1]),unit=relative[2];
+    if(unit.startsWith('д')){
+      const date=applicationAttributesCalendarDate(callParts,amount);
+      return finish('relative_days',applicationAttributesCalendarIso(date,10,0,timezone),'date');
+    }
+    const base=ctx.call_end_datetime;if(!base) return {...audit,strategy:'call_end_required'};
+    const minutes=amount*(unit.startsWith('час')?60:1);
+    return finish('relative_duration',applicationAttributesInstantIso(new Date(Date.parse(base)+minutes*60000),timezone),'exact');
+  }
+  let dayOffset=/послезавтра/i.test(source)?2:/завтра/i.test(source)?1:/сегодня/i.test(source)?0:null;
+  let strategy=dayOffset===2?'relative_day_after_tomorrow':dayOffset===1?'relative_tomorrow':dayOffset===0?'relative_today':null;
+  const weekdayEntry=Object.entries(APPLICATION_ATTRIBUTES_WEEKDAYS).find(([name])=>source.includes(name.slice(0,-1)));
+  if(weekdayEntry){
+    const currentDay=new Date(Date.UTC(Number(callParts.year),Number(callParts.month)-1,Number(callParts.day))).getUTCDay(),target=weekdayEntry[1];
+    dayOffset=(target-currentDay+7)%7;
+    if(dayOffset===0||/следующ/i.test(source)) dayOffset+=7;
+    strategy=/следующ/i.test(source)?'next_calendar_weekday':'nearest_future_weekday';
+  }
+  let explicitDate=null;
+  const dateMatch=source.match(/\b(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+(\d{4}))?/i);
+  if(dateMatch){
+    let year=Number(dateMatch[3]||callParts.year),month=APPLICATION_ATTRIBUTES_MONTHS[dateMatch[2]],day=Number(dateMatch[1]);
+    explicitDate={year,month,day};
+    let candidate=applicationAttributesCalendarIso(explicitDate,10,0,timezone);
+    if(!dateMatch[3]&&Date.parse(candidate)<=Date.parse(reference)){explicitDate.year++;candidate=applicationAttributesCalendarIso(explicitDate,10,0,timezone);}
+    strategy='explicit_calendar_date';
+  }
+  if(!explicitDate){
+    const ordinalDays={первого:1,второго:2,третьего:3,четвертого:4,пятого:5,шестого:6,седьмого:7,восьмого:8,девятого:9,десятого:10,одиннадцатого:11,двенадцатого:12,тринадцатого:13,четырнадцатого:14,пятнадцатого:15,шестнадцатого:16,семнадцатого:17,восемнадцатого:18,девятнадцатого:19,двадцатого:20};
+    const ordinal=Object.entries(ordinalDays).find(([word])=>source.includes(word));
+    if(ordinal){
+      explicitDate={year:Number(callParts.year),month:Number(callParts.month),day:ordinal[1]};
+      if(Date.parse(applicationAttributesCalendarIso(explicitDate,10,0,timezone))<=Date.parse(reference)){explicitDate.month++;if(explicitDate.month>12){explicitDate.month=1;explicitDate.year++;}}
+      strategy='explicit_ordinal_date';
+    }
+  }
+  if(dayOffset===null&&!explicitDate) return audit;
+  const date=explicitDate||applicationAttributesCalendarDate(callParts,dayOffset);
+  const daypart=APPLICATION_ATTRIBUTES_DAYPARTS.find(item=>item.pattern.test(source));
+  const timeMatch=source.match(/(?:^|\s|в\s)([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s|$)/);
+  const hour=timeMatch?Number(timeMatch[1]):daypart?daypart.hour:10,minute=timeMatch?Number(timeMatch[2]):0;
+  const precision=timeMatch?'exact':daypart?'daypart':'date';
+  const finalStrategy=daypart?`${strategy}+${daypart.strategy}`:timeMatch?`${strategy}+explicit_time`:strategy;
+  return finish(finalStrategy,applicationAttributesCalendarIso(date,hour,minute,timezone),precision);
+}
+
+function applicationAttributesNormalizeNextContact(value,ctx){
+  if(!value||value.detected!==true){
+    const audit={raw_time_expression:value&&value.raw_time_expression||null,reference_datetime:ctx.call_datetime||null,call_end_datetime:ctx.call_end_datetime||null,timezone:ctx.timezone||null,strategy:'not_detected',normalized_datetime:null,precision:'none'};
+    ctx.temporal_normalization_audit=audit;
+    return {...value,next_contact_at:null,precision:'none'};
+  }
+  const audit=applicationAttributesTemporalNormalize(value.raw_time_expression,ctx);
+  ctx.temporal_normalization_audit=audit;
+  if(!audit.normalized_datetime) return {detected:false,next_contact_at:null,precision:'none',action:'none',actor:'none',raw_time_expression:value.raw_time_expression||null,evidence:value.evidence||null,confidence:0};
+  return {...value,next_contact_at:audit.normalized_datetime,precision:audit.precision};
 }
 
 const SUMMARY_NEW_JSON_SCHEMA={
@@ -7834,13 +7974,15 @@ function mockApplicationNextContactDate(prompt){
   if(/я вам завтра сам позвоню/i.test(source)) return no;
   if(/в субботу в 10:30[\s\S]*хорошо, записал/i.test(source)&&!/(перезвон|позвон|набер|напиш)/i.test(source)) return no;
   if(/давайте уточню, перезвоню/i.test(source)&&!/(сегодня|завтра|послезавтра|пятниц|суббот|воскрес|понедель|вторник|сред|четверг|через\s+\d+)/i.test(source)) return no;
-  if(/минут через 30[\s\S]*вам пару вопросик(?:ов|и)?[\s\S]*напишу[\s\S]*через 30[–—-]40/i.test(source)&&end) return {detected:true,next_contact_at:addMinutesIso(end,35),precision:'exact',action:'message',actor:'agent',raw_time_expression:'через 30–40 минут',evidence:'Агент: «мне нужно будет там, я минут через 30 ... вам пару вопросиков там напишу»; «Минут ... через 30–40»',confidence:.95};
-  if(/могу вам сегодня вечером точно сказать, перезвонить или написать/i.test(source)&&/сможете позвонить сегодня вечером[\s\S]*буду ждать звонка/i.test(source)&&call) return {detected:true,next_contact_at:isoAt(call,0,18,0),precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'сегодня вечером',evidence:'Агент: «Могу вам сегодня вечером точно сказать, перезвонить или написать?»; Клиент: «Хорошо, сможете позвонить сегодня вечером?» — «Да, конечно. Всё, буду ждать звонка.»',confidence:.96};
-  if(/через 30 минут вам перезвоню/i.test(source)&&end) return {detected:true,next_contact_at:addMinutesIso(end,30),precision:'exact',action:'callback',actor:'agent',raw_time_expression:'через 30 минут',evidence:'Агент: «Через 30 минут вам перезвоню.»',confidence:.98};
-  if(/завтра ближе к вечеру позвоню/i.test(source)&&call) return {detected:true,next_contact_at:isoAt(call,1,17,0),precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра ближе к вечеру',evidence:'Агент: «Завтра ближе к вечеру позвоню.»',confidence:.96};
-  if(/завтра перезвоните мне, да, вечером[\s\S]*да, конечно/i.test(source)&&call) return {detected:true,next_contact_at:isoAt(call,1,18,0),precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Клиент: «Завтра перезвоните мне, да, вечером?» Агент: «Да, конечно.»',confidence:.95};
-  if(/в пятницу накануне наберу, позвоню/i.test(source)&&call){const d=new Date(call),localDay=new Date(d.getTime()+3*3600000).getUTCDay(),days=(5-localDay+7)%7||7;return {detected:true,next_contact_at:isoAt(call,days,12,0).slice(0,10),precision:'date',action:'confirm',actor:'agent',raw_time_expression:'в пятницу накануне',evidence:'Агент: «Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.» Клиент: «До пятницы, до завтра.»',confidence:.95};}
-  if(/пятнадцатого,? в 14:00/i.test(source)) return {detected:true,next_contact_at:'2026-08-15T14:00:00+03:00',precision:'exact',action:'callback',actor:'agent',raw_time_expression:'пятнадцатого в 14:00',evidence:'Встретимся в пятницу, пятнадцатого, в 14:00',confidence:.98};
+  if(/минут через 30[\s\S]*вам пару вопросик(?:ов|и)?[\s\S]*напишу[\s\S]*через 30[–—-]40/i.test(source)&&end) return {detected:true,next_contact_at:null,precision:'range',action:'message',actor:'agent',raw_time_expression:'через 30–40 минут',evidence:'Агент: «мне нужно будет там, я минут через 30 ... вам пару вопросиков там напишу»; «Минут ... через 30–40»',confidence:.95};
+  if(/могу вам сегодня вечером точно сказать, перезвонить или написать/i.test(source)&&/сможете позвонить сегодня вечером[\s\S]*буду ждать звонка/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'сегодня вечером',evidence:'Агент: «Могу вам сегодня вечером точно сказать, перезвонить или написать?»; Клиент: «Хорошо, сможете позвонить сегодня вечером?» — «Да, конечно. Всё, буду ждать звонка.»',confidence:.96};
+  if(/через 30 минут вам перезвоню/i.test(source)&&end) return {detected:true,next_contact_at:null,precision:'exact',action:'callback',actor:'agent',raw_time_expression:'через 30 минут',evidence:'Агент: «Через 30 минут вам перезвоню.»',confidence:.98};
+  if(/агент:[^\n]*завтра вечером[^\n]*(?:позвон|перезвон|набер)/i.test(source)||/агент:[^\n]*(?:позвон|перезвон|набер)[^\n]*завтра вечером/i.test(source)) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Агент подтвердил звонок завтра вечером.',confidence:.96};
+  if(/завтра ближе к вечеру позвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра ближе к вечеру',evidence:'Агент: «Завтра ближе к вечеру позвоню.»',confidence:.96};
+  if(/завтра перезвоните мне, да, вечером[\s\S]*да, конечно/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Клиент: «Завтра перезвоните мне, да, вечером?» Агент: «Да, конечно.»',confidence:.95};
+  if(/в пятницу накануне наберу, позвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'date',action:'confirm',actor:'agent',raw_time_expression:'в пятницу',evidence:'Агент: «Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.» Клиент: «До пятницы, до завтра.»',confidence:.95};
+  if(/агент:[^\n]*(?:в пятницу[^\n]*(?:позвон|перезвон|набер)|(?:позвон|перезвон|набер)[^\n]*в пятницу)/i.test(source)) return {detected:true,next_contact_at:null,precision:'date',action:'callback',actor:'agent',raw_time_expression:'в пятницу',evidence:'Агент подтвердил звонок в пятницу.',confidence:.96};
+  if(/пятнадцатого,? в 14:00/i.test(source)) return {detected:true,next_contact_at:null,precision:'exact',action:'callback',actor:'agent',raw_time_expression:'пятнадцатого в 14:00',evidence:'Встретимся в пятницу, пятнадцатого, в 14:00',confidence:.98};
   return no;
 }
 
@@ -7848,9 +7990,10 @@ function mockPipelineResponse(prompt){
   const source=String(prompt||'');
   if(IS_APPLICATION_ATTRIBUTES_PROJECT){
     const fundingFault=source.includes('[FAULT_FUNDING_EXTRACTOR]')||source.includes('"decision": "technical_error"')||source.includes('"funding_source": "technical_error"');
-    if(source.startsWith('Ты определяешь только атрибут заявки «Интересует»')) return {value:['Новостройки'],evidence:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»']};
-    if(source.startsWith('Ты определяешь только атрибут заявки «Источник средств»')) return {value:'ипотека в процессе',evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.'};
-    if(source.startsWith('Ты определяешь только атрибут заявки «Срок покупки»')) return fundingFault?{value:'не определено',evidence:''}:{value:'2–3 месяца',evidence:'Хотелось бы в ближайшие два-три месяца определиться.'};
+    const currentProductionCase=source.includes('по квартире Шелгунова')&&source.includes('До пятницы, до завтра');
+    if(source.startsWith('Ты определяешь только атрибут заявки «Интересует»')) return currentProductionCase?{value:[],evidence:[]}:{value:['Новостройки'],evidence:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»']};
+    if(source.startsWith('Ты определяешь только атрибут заявки «Источник средств»')) return currentProductionCase?{value:'ипотека одобрена',evidence:'Клиент: «Угу. Да-да, уже одобряли.»'}:{value:'ипотека в процессе',evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.'};
+    if(source.startsWith('Ты определяешь только атрибут заявки «Срок покупки»')) return currentProductionCase||fundingFault?{value:'не определено',evidence:''}:{value:'2–3 месяца',evidence:'Хотелось бы в ближайшие два-три месяца определиться.'};
     if(source.startsWith('Ты — единый независимый Attributes Judge')){
       const technical=attribute=>source.includes('"'+attribute+'":{"status":"technical_error"');
       const nextTechnical=technical('next_contact_date');
@@ -7859,10 +8002,10 @@ function mockPipelineResponse(prompt){
       const nextInput=Boolean(nextResult&&nextResult.detected);
       const nextValue=nextInput?Object.fromEntries(Object.entries(nextResult).filter(([key])=>key!=='evidence')):null;
       return {
-        attributes:{interest:technical('interest')?null:['Новостройки'],funding_source:technical('funding_source')?null:'ипотека в процессе',purchase_term:technical('purchase_term')?null:(fundingFault?'не определено':'2–3 месяца'),next_contact_date:nextValue},
+        attributes:{interest:technical('interest')?null:(currentProductionCase?[]:['Новостройки']),funding_source:technical('funding_source')?null:(currentProductionCase?'ипотека одобрена':'ипотека в процессе'),purchase_term:technical('purchase_term')?null:(currentProductionCase||fundingFault?'не определено':'2–3 месяца'),next_contact_date:nextValue},
         attribute_statuses:{interest:technical('interest')?'technical_error':'ready',funding_source:technical('funding_source')?'technical_error':'ready',purchase_term:technical('purchase_term')?'technical_error':'ready',next_contact_date:nextTechnical?'technical_error':'ready'},
         decisions:{interest:technical('interest')?'technical_error':'approve',funding_source:technical('funding_source')?'technical_error':'approve',purchase_term:technical('purchase_term')?'technical_error':'approve',next_contact_date:nextTechnical?'technical_error':'approve'},
-        evidence:{interest:technical('interest')?[]:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:technical('funding_source')?'':'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:technical('purchase_term')?'':(fundingFault?'':'Хотелось бы в ближайшие два-три месяца определиться.'),next_contact_date:nextInput?String(nextResult.evidence||''):''},
+        evidence:{interest:technical('interest')||currentProductionCase?[]:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:technical('funding_source')?'':currentProductionCase?'Клиент: «Угу. Да-да, уже одобряли.»':'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:technical('purchase_term')||currentProductionCase||fundingFault?'':'Хотелось бы в ближайшие два-три месяца определиться.',next_contact_date:nextInput?String(nextResult.evidence||''):''},
         reason_codes:{interest:technical('interest')?['technical_input_error']:['direct_confirmation'],funding_source:technical('funding_source')?['technical_input_error']:['mortgage_in_process_confirmed'],purchase_term:technical('purchase_term')?['technical_input_error']:[fundingFault?'no_confirmed_purchase_term':'purchase_2_3_months'],next_contact_date:nextTechnical?['technical_input_error']:nextInput?['next_contact_confirmed']:['next_contact_not_confirmed']}
       };
     }
@@ -13300,7 +13443,7 @@ const APPLICATION_INTEREST_REASON_CODES=Object.freeze(['direct_confirmation','so
 const APPLICATION_FUNDING_REASON_CODES=Object.freeze(['cash_or_deposit_confirmed','mortgage_approved_confirmed','mortgage_in_process_confirmed','property_sale_dependency','cash_payment_not_funding_source','mixed_funding_priority','conflicting_statements','missing_evidence','unsupported_value','insufficient_information','no_confirmed_funding_source','technical_input_error']);
 const APPLICATION_PURCHASE_REASON_CODES=Object.freeze(['purchase_within_1_month','purchase_2_3_months','purchase_3_6_months','purchase_over_6_months','derived_from_linked_event','viewing_is_not_purchase','callback_is_not_purchase','handover_is_not_purchase','bank_decision_is_not_purchase','missing_evidence','insufficient_information','no_confirmed_purchase_term','technical_input_error']);
 const APPLICATION_NEXT_CONTACT_REASON_CODES=Object.freeze(['next_contact_confirmed','next_contact_not_confirmed','client_initiates_contact','viewing_is_not_next_contact','insufficient_time_precision','invalid_datetime','missing_evidence','incorrect_relative_date','technical_input_error']);
-const APPLICATION_NEXT_CONTACT_JUDGE_VALUE_SCHEMA=Object.freeze({type:['object','null'],additionalProperties:false,required:['detected','next_contact_at','precision','action','actor','raw_time_expression','confidence'],properties:{detected:{type:'boolean'},next_contact_at:{type:'string'},precision:{type:'string',enum:['exact','daypart','date']},action:{type:'string',enum:['callback','message','send_information','confirm','other']},actor:{type:'string',enum:['agent']},raw_time_expression:{type:['string','null']},confidence:{type:'number',minimum:0,maximum:1}}});
+const APPLICATION_NEXT_CONTACT_JUDGE_VALUE_SCHEMA=Object.freeze({type:['object','null'],additionalProperties:false,required:['detected','next_contact_at','precision','action','actor','raw_time_expression','confidence'],properties:{detected:{type:'boolean'},next_contact_at:{type:'string'},precision:{type:'string',enum:['exact','range','daypart','date']},action:{type:'string',enum:['callback','message','send_information','confirm','other']},actor:{type:'string',enum:['agent']},raw_time_expression:{type:['string','null']},confidence:{type:'number',minimum:0,maximum:1}}});
 const APPLICATION_ATTRIBUTE_EXTRACTOR_SCHEMAS=Object.freeze({
   interest_extractor:{type:'object',additionalProperties:false,required:['value','evidence'],properties:{value:{type:'array',items:{type:'string',enum:[...APPLICATION_INTEREST_VALUES]}},evidence:{type:'array',items:{type:'string'}}}},
   funding_source_extractor:{type:'object',additionalProperties:false,required:['value','evidence'],properties:{value:{type:'string',enum:[...APPLICATION_FUNDING_VALUES]},evidence:{type:'string'}}},
@@ -13408,7 +13551,7 @@ function validateApplicationAttributesExtractor(key,value){
     applicationAttributesExactObject(value,fields,key);
     if(typeof value.detected!=='boolean') applicationAttributesContractError(key+'.detected: expected boolean');
     if(!(typeof value.next_contact_at==='string'||value.next_contact_at===null)) applicationAttributesContractError(key+'.next_contact_at: expected string or null');
-    if(!['exact','daypart','date','none'].includes(value.precision)) applicationAttributesContractError(key+'.precision: invalid');
+    if(!['exact','range','daypart','date','none'].includes(value.precision)) applicationAttributesContractError(key+'.precision: invalid');
     if(!['callback','message','send_information','confirm','other','none'].includes(value.action)) applicationAttributesContractError(key+'.action: invalid');
     if(!['agent','none'].includes(value.actor)) applicationAttributesContractError(key+'.actor: invalid');
     if(!(typeof value.raw_time_expression==='string'||value.raw_time_expression===null)) applicationAttributesContractError(key+'.raw_time_expression: expected string or null');
@@ -13529,7 +13672,7 @@ function validateApplicationAttributesCombinedJudge(value,ctx){
         if(typeof proof!=='string'||proof!==''||!codes.some(code=>['next_contact_not_confirmed','client_initiates_contact','viewing_is_not_next_contact','insufficient_time_precision','invalid_datetime','missing_evidence','incorrect_relative_date'].includes(code))) applicationAttributesContractError('attributes_judge.next_contact_date: invalid empty result');
       }else{
         applicationAttributesExactObject(finalValue,['detected','next_contact_at','precision','action','actor','raw_time_expression','confidence'],'attributes_judge.attributes.next_contact_date');
-        if(finalValue.detected!==true||!applicationAttributesValidIsoDate(finalValue.next_contact_at)||!['exact','daypart','date'].includes(finalValue.precision)||!['callback','message','send_information','confirm','other'].includes(finalValue.action)||finalValue.actor!=='agent'||typeof proof!=='string'||!proof.trim()||finalValue.confidence<.9) applicationAttributesContractError('attributes_judge.next_contact_date: invalid confirmed result');
+        if(finalValue.detected!==true||!applicationAttributesValidIsoDate(finalValue.next_contact_at)||!['exact','range','daypart','date'].includes(finalValue.precision)||!['callback','message','send_information','confirm','other'].includes(finalValue.action)||finalValue.actor!=='agent'||typeof proof!=='string'||!proof.trim()||finalValue.confidence<.9) applicationAttributesContractError('attributes_judge.next_contact_date: invalid confirmed result');
       }
     }else{
       const allowed=attribute==='funding_source'?APPLICATION_FUNDING_VALUES:APPLICATION_PURCHASE_TERM_VALUES;
@@ -14203,6 +14346,7 @@ async function runStage(stage, ctx){
         const recovered=recoverLegacyNeedInterestStrings(parsed);parsed=recovered.value;contractWarnings.push(...recovered.warnings);if(recovered.audit) extractionAudit=recovered.audit;
       }
       if(aiSummaryCustomContract) parsed=aiSummaryCustomContract.validate(parsed);
+      if(applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY) parsed=applicationAttributesNormalizeNextContact(parsed,ctx);
       if(applicationExtractorKey) parsed=validateApplicationAttributesExtractor(applicationExtractorKey,parsed);
       if(applicationAttributesJudgeSourceKey(stage)) parsed=validateApplicationAttributesJudge(stage,parsed);
       if(isApplicationAttributesJudge){const normalized=normalizeApplicationAttributesCombinedDecision(parsed,ctx);applicationJudgeNormalizations.push(...normalized.normalized);parsed=validateApplicationAttributesCombinedJudge(normalized.value,ctx);}
@@ -14339,7 +14483,7 @@ async function runStage(stage, ctx){
         ,decision_normalizations:applicationJudgeNormalizations
       },
       extraction_audit:extractionAudit,
-      ...(applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?{normalized_result:output}:{}),
+      ...(applicationExtractorKey===APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY?{normalized_result:output,temporal_normalization_audit:ctx.temporal_normalization_audit||null}:{}),
       ...(aiSummaryOutcomeEvidenceAudit?{outcome_evidence_audit:aiSummaryOutcomeEvidenceAudit}:{}),
       ...(aiSummaryInputProvenance?{provenance_validation:aiSummaryInputProvenance}:{}),
       status: isSummaryNewStage(stage)?(summaryNewFailure?'bad':'ok'):(parseErr?'bad':contractWarnings.length?'warn':'ok'),
@@ -14747,7 +14891,10 @@ async function runPipeline(){
   // симулированному режиму transcript_quality_check, а не выдаст metadata
   // от аудио за подтверждение для текста, которого Nexara не расшифровывала.
   if(window.__nexaraSttMetadata && window.__nexaraSttMetadataTranscript===transcript) ctx.stt_metadata=window.__nexaraSttMetadata;
-  if(IS_APPLICATION_ATTRIBUTES_PROJECT) applicationAttributesAttachCallMetadata(ctx);
+  if(IS_APPLICATION_ATTRIBUTES_PROJECT){
+    applicationAttributesAttachCallMetadata(ctx);
+    if(!applicationAttributesPreflight(ctx,transcript)) return;
+  }
   reportsEl.innerHTML=''; emptyState.style.display='none';
   runBtn.disabled=true; progBar.style.width='0%';
   let totalTokens=0, totalCost=0, errorCount=0, warningCount=0;
@@ -15862,14 +16009,14 @@ function updateApplicationCallMetadataStatus(){
   const start=applicationCallDatetimeInput.value;
   const end=applicationCallEndDatetimeInput.value;
   const needsEnd=applicationAttributesNeedsCallEnd(ta.value);
-  if(!start){applicationCallMetadataStatus.textContent='Укажите фактические дату и время звонка — без них этап даты следующего контакта не запускается.';return;}
+  if(!start){applicationCallMetadataStatus.textContent='Дата звонка будет автоматически создана перед ручным запуском.';return;}
   if(end&&Date.parse(end)<Date.parse(start)){applicationCallMetadataStatus.textContent='Время окончания звонка не может быть раньше времени начала.';return;}
   if(needsEnd&&!end){applicationCallMetadataStatus.textContent='В этой транскрипции есть относительное время от конца разговора. Укажите дату и время окончания звонка.';return;}
-  applicationCallMetadataStatus.textContent=end?'Metadata заполнены и будут переданы в runtime context.':'Дата звонка и timezone заполнены. Время окончания для этой транскрипции не требуется.';
+  applicationCallMetadataStatus.textContent=end?'Контекст заполнен и будет передан в runtime.':applicationCallDatetimeInput.dataset.manualDefault==='true'?'Используется явно обозначенное текущее время Pipeline Lab. Время окончания необязательно.':'Дата звонка и timezone заполнены. Время окончания необязательно.';
 }
 function persistApplicationCallMetadata(){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT) return;
-  localStorage.setItem(applicationCallMetadataStorageKey,JSON.stringify({call_datetime:applicationCallDatetimeInput.value,call_end_datetime:applicationCallEndDatetimeInput.value,timezone:applicationCallTimezoneInput.value}));
+  localStorage.setItem(applicationCallMetadataStorageKey,JSON.stringify({call_datetime:applicationCallDatetimeInput.value,call_end_datetime:applicationCallEndDatetimeInput.value,timezone:applicationCallTimezoneInput.value,manual_default:applicationCallDatetimeInput.dataset.manualDefault==='true'}));
   updateApplicationCallMetadataStatus();
 }
 if(IS_APPLICATION_ATTRIBUTES_PROJECT){
@@ -15877,12 +16024,21 @@ if(IS_APPLICATION_ATTRIBUTES_PROJECT){
   try{
     const saved=JSON.parse(localStorage.getItem(applicationCallMetadataStorageKey)||'{}');
     applicationCallDatetimeInput.value=String(saved.call_datetime||'');
+    applicationCallDatetimeInput.dataset.manualDefault=saved.manual_default===true?'true':'false';
     applicationCallEndDatetimeInput.value=String(saved.call_end_datetime||'');
     if([...applicationCallTimezoneInput.options].some(option=>option.value===saved.timezone)) applicationCallTimezoneInput.value=saved.timezone;
   }catch(error){}
-  applicationCallDatetimeInput.addEventListener('input',persistApplicationCallMetadata);
+  if(!applicationCallDatetimeInput.value){
+    applicationCallDatetimeInput.value=applicationAttributesCurrentLocalInput(applicationCallTimezoneInput.value||'Europe/Moscow');
+    applicationCallDatetimeInput.dataset.manualDefault='true';
+    persistApplicationCallMetadata();
+  }else if(applicationCallDatetimeInput.dataset.manualDefault!=='true') applicationCallDatetimeInput.dataset.manualDefault='false';
+  applicationCallDatetimeInput.addEventListener('input',()=>{applicationCallDatetimeInput.dataset.manualDefault='false';persistApplicationCallMetadata();});
   applicationCallEndDatetimeInput.addEventListener('input',persistApplicationCallMetadata);
-  applicationCallTimezoneInput.addEventListener('change',persistApplicationCallMetadata);
+  applicationCallTimezoneInput.addEventListener('change',()=>{
+    if(applicationCallDatetimeInput.dataset.manualDefault==='true') applicationCallDatetimeInput.value=applicationAttributesCurrentLocalInput(applicationCallTimezoneInput.value);
+    persistApplicationCallMetadata();
+  });
   updateApplicationCallMetadataStatus();
 }
 ta.addEventListener('input',()=>{updateCount();updateApplicationCallMetadataStatus();});

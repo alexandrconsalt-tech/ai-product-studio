@@ -7,7 +7,7 @@ const projectId = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
 
 function readRecoveredConfig() {
   const context = { window: {} as Record<string, unknown> };
-  for (const file of ["ai-application-attributes-pipeline-v14.js", "ai-application-attributes-pipeline-v15.js", "ai-application-attributes-pipeline-v16.js", "ai-application-attributes-pipeline-v17.js", "ai-application-attributes-pipeline-v18.js", "ai-application-attributes-pipeline-v19.js", "ai-application-attributes-pipeline-v20.js", "ai-application-attributes-pipeline-v21.js", "ai-application-attributes-pipeline-v22.js", "ai-application-attributes-pipeline-v23.js"]) {
+  for (const file of ["ai-application-attributes-pipeline-v14.js", "ai-application-attributes-pipeline-v15.js", "ai-application-attributes-pipeline-v16.js", "ai-application-attributes-pipeline-v17.js", "ai-application-attributes-pipeline-v18.js", "ai-application-attributes-pipeline-v19.js", "ai-application-attributes-pipeline-v20.js", "ai-application-attributes-pipeline-v21.js", "ai-application-attributes-pipeline-v22.js", "ai-application-attributes-pipeline-v23.js", "ai-application-attributes-pipeline-v24.js"]) {
     runInNewContext(readFileSync(resolve(process.cwd(), "public", file), "utf8"), context);
   }
   return context.window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__ as {
@@ -19,11 +19,11 @@ function readRecoveredConfig() {
 }
 
 describe("AI Атрибуты в Заявке recovery preset", () => {
-  it("contains the recovered v23 seven-stage application-attributes pipeline", () => {
+  it("contains the recovered v24 seven-stage application-attributes pipeline", () => {
     const config = readRecoveredConfig();
 
     expect(config.version).toBe(14);
-    expect(config.revision).toBe(23);
+    expect(config.revision).toBe(24);
     expect(config.deletedStageOutKeys).toEqual(["interest_judge", "funding_source_judge", "purchase_term_judge", "attributes_merger"]);
     expect(config.stages.map((stage) => stage.outKey)).toEqual([
       "interest_extractor",
@@ -54,9 +54,9 @@ describe("AI Атрибуты в Заявке recovery preset", () => {
     expect(config.stages[3].prompt).toContain("{{call_datetime}}");
     expect(config.stages[3].prompt).toContain("{{call_end_datetime}}");
     expect(config.stages[3].prompt).toContain("{{timezone}}");
-    expect(config.stages[3].prompt).toContain("сегодня вечером");
-    expect(config.stages[3].prompt).toContain("call_end_datetime + 35 минут");
-    expect(config.stages[3].prompt.startsWith("Ты — AI-экстрактор атрибута заявки «Дата следующего контакта»")).toBe(true);
+    expect(config.stages[3].prompt).toContain("семантику, а не выполнять календарную арифметику");
+    expect(config.stages[3].prompt).toContain("next_contact_at верни null");
+    expect(config.stages[3].prompt.startsWith("Ты — AI-экстрактор смысла атрибута заявки «Дата следующего контакта»")).toBe(true);
     expect(config.stages[4].sourceOutKey).toContain("next_contact_date_extractor");
     expect(config.stages[4].prompt).toContain("{{attributes_judge_input}}");
     expect(config.stages[4].prompt).toContain("{{transcript}}");
@@ -118,6 +118,7 @@ describe("AI Атрибуты в Заявке recovery preset", () => {
     expect(html).toContain('<script src="/ai-application-attributes-pipeline-v21.js"></script>');
     expect(html).toContain('<script src="/ai-application-attributes-pipeline-v22.js"></script>');
     expect(html).toContain('<script src="/ai-application-attributes-pipeline-v23.js"></script>');
+    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v24.js"></script>');
     expect(html).toContain(`const APPLICATION_ATTRIBUTES_PROJECT_ID = '${projectId}';`);
     expect(html).toContain("restoreApplicationAttributesPipelineConfig()||restoreAiSummaryTenAugustPipelineConfig()||restoreTranscriptionModulePipelineConfig()");
     expect(html).toContain("if(IS_APPLICATION_ATTRIBUTES_PROJECT){");

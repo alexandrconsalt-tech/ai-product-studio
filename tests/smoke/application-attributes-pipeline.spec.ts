@@ -3,6 +3,96 @@ import { expect, test } from "@playwright/test";
 const projectId = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
 const projectUrl = `/pipeline-lab-v3.html?projectId=${projectId}&productName=${encodeURIComponent("AI Атрибуты в Заявке")}`;
 const callMetadataStorageKey = `pipelineLabV3.applicationCallMetadata.${projectId}`;
+const currentProductionTranscript = `Оператор:
+— Здравствуйте.
+Клиент:
+— Алло, Шелгунов.
+Оператор:
+— А, здравствуйте. А-а, по квартире Шелгунова, 10, э-э, подскажите, возможен просмотр сегодня?
+Оператор:
+— Минутотку.
+Оператор:
+— Двухкомнатная, пятый этаж, 46,1 кв. м, за 9 2090. Всё верно. Квартиру показывает Валерий, наш агент. Я вас с ней соединю, согласуете просмотр. Вас как представить?
+Клиент:
+— Николай.
+Оператор:
+— Николай, очень приятно. Смотрите, для себя или вы агента для клиента подбираете?
+Клиент:
+— Для себя.
+Оператор:
+— И ваш номер телефона для связи 89-69 заканчивается. Всё верно?
+Клиент:
+— Всё верно.
+Оператор:
+— Николай, подскажите, пожалуйста, рассматриваете ли вы новостройки?
+Клиент:
+— Ну а где? Рядом тут, как говорится, в той стороне будет дорого, а где-то далеко, вроде Новосаратовски или Янино, нам неудобно.
+Оператор:
+— Поняла вас, консультация по ипотеке нужна будет?
+Клиент:
+— Нет, пока не нужно.
+Оператор:
+— Хорошо, оставайтесь на линии.
+Клиент:
+— Консультация нам по ипотеке же пока не нужна. Новостройки хотел мне предложить.
+Агент:
+— Николай, добрый день.
+Клиент:
+— Здравствуйте.
+Агент:
+— Да, это Валерия Пуша Логунова, слушаю вас.
+Клиент:
+— Ага. Валерия, подскажите, пожалуйста, возможен сегодня просмотр?
+Агент:
+— Нет, сегодня не мо-не можем показать, потому что у нас собственник за городом. В субботу-воскресенье, скорее всего, начинаем показывать. Там у нас уже человек три набралось. Вот, могу в субботу-воскресенье вас записать предварительно, если удобно. Ну, либо потом там понедельник-вторник, вечерком можно.
+Клиент:
+— В субботу в какое время?
+Агент:
+— Либо утром, э-э, часиков в 10—10:30, либо вечером, в 7:0-вос:0ь вечера.
+Агент:
+— Так ещё раз, утром либо вечером по времени.
+Клиент:
+— Утром.
+Агент:
+— Утром до 10:30, ну, 10:30 самое позднее, а вечером, э-э, начиная с 7:00.
+Клиент:
+— 10:30.
+Агент:
+— На 10:30. Хорошо.
+Агент:
+— Николай, вы подскажите мне ещё, как вы планировали покупать недвижимость? С ипотекой, может быть, сертификаты какие-то будут?
+Клиент:
+— Просто наличные деньги с ипотекой.
+Агент:
+— Ага. А вы одобряли уже в каком-то банке?
+Клиент:
+— Нет?
+Клиент:
+— Угу. Да-да, уже одобряли.
+Агент:
+— Давайте тогда сделаем как по сделке, вот по данной квартире. Насколько быстро клиенты готовы? Или там...
+Агент:
+— Ну, смотрите, у нас два собственника, у нас нет никаких обременений в плане подготовки к сделке. Взамен мы можем купить и одновременно, а можем не покупать, то есть мы не привязаны к покупке. Поэтому, ну, сделаем быстро, если вам быстро нужно.
+Агент:
+— А как быстро они съедут в проц, ну, вот в процессе сделки? Тоже есть где жить, э-э, ну, это уже договоримся, как съедут. Ну, то есть есть где жить, имеется в виду в плане, что можно будет быстро, оперативно оттуда переехать.
+Клиент:
+— Угу.
+Агент:
+— Подскажите ваш прямой номер для связи, чтобы... Запишите.
+Клиент:
+— Да, запишите: 8903 Дальше? Д9 2 с7мь. 9 9 09.
+Клиент:
+— Агу. Всё. Угу. Маленько.
+Агент:
+— Всё, я вам в пятницу накануне наберу, позвоню, им, чтобы точно всем-увсех всё получилось.
+Клиент:
+— Угу. Всё хорошо. Угу, угу.
+Агент:
+— Всё, Николай, до связи.
+Клиент:
+— До пятницы, до завтра.
+Агент:
+— До свидания. Всего доброго.`;
 const nextContactDateSchema = {
   type: "object",
   additionalProperties: false,
@@ -10,7 +100,7 @@ const nextContactDateSchema = {
   properties: {
     detected: { type: "boolean" },
     next_contact_at: { type: ["string", "null"] },
-    precision: { type: "string", enum: ["exact", "daypart", "date", "none"] },
+    precision: { type: "string", enum: ["exact", "range", "daypart", "date", "none"] },
     action: { type: "string", enum: ["callback", "message", "send_information", "confirm", "other", "none"] },
     actor: { type: "string", enum: ["agent", "none"] },
     raw_time_expression: { type: ["string", "null"] },
@@ -62,7 +152,7 @@ test("миграция добавляет новый шаг в сохранён�
     history: localStorage.getItem(runHistoryKey),
   }), { scopedConfigKey: configKey, runHistoryKey: historyKey });
 
-  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-call-metadata-runtime-v22");
+  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-temporal-runtime-v24");
   expect(migrated.config.stages.map((stage: { outKey: string }) => stage.outKey)).toEqual([
     "interest_extractor",
     "funding_source_extractor",
@@ -110,7 +200,7 @@ test("миграция отделяет ошибочно сохранённую 
   const nextStage = migrated.config.stages.find((stage: { outKey: string }) => stage.outKey === "next_contact_date_extractor");
   const interestStage = migrated.config.stages.find((stage: { outKey: string }) => stage.outKey === "interest_extractor");
 
-  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-call-metadata-runtime-v22");
+  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-temporal-runtime-v24");
   expect(nextStage.responseContract).toBe("application_next_contact_date_extractor_v1");
   expect(nextStage.prompt).toContain("{{transcript}}");
   expect(nextStage.prompt).not.toBe(JSON.stringify(nextContactDateSchema, null, 2));
@@ -260,7 +350,7 @@ test("Golden A–G: дата следующего контакта проход�
   await page.goto(projectUrl);
   const cases = [
     { id: "A", transcript: "Клиент: Тогда, если сможете показать в четверг, завтра перезвоните мне, да, вечером?\nАгент: Да, конечно.", detected: true, next: "2026-08-14T18:00:00+03:00", precision: "daypart", action: "SET" },
-    { id: "B", transcript: "Агент: Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.\nКлиент: До пятницы, до завтра.", detected: true, next: "2026-08-14", precision: "date", action: "SET" },
+    { id: "B", transcript: "Агент: Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.\nКлиент: До пятницы, до завтра.", detected: true, next: "2026-08-14T10:00:00+03:00", precision: "date", action: "SET" },
     { id: "C", transcript: "Агент: Давайте уточню, перезвоню.\nКлиент: Хорошо.", detected: false, next: null, precision: "none", action: "SKIP" },
     { id: "D", transcript: "Клиент: Я вам завтра сам позвоню.\nАгент: Хорошо.", detected: false, next: null, precision: "none", action: "SKIP" },
     { id: "E", transcript: "Клиент: В субботу в 10:30.\nАгент: Хорошо, записал.", detected: false, next: null, precision: "none", action: "SKIP" },
@@ -303,19 +393,21 @@ test("Golden A–G: дата следующего контакта проход�
   }
 });
 
-test("отсутствие call metadata даёт technical error и не позволяет quality_score=100", async ({ page }) => {
+test("manual mode автоматически создаёт call_datetime вместо REQUIRED_CALL_CONTEXT_MISSING", async ({ page }) => {
   await page.addInitScript((metadataStorageKey) => localStorage.removeItem(metadataStorageKey), callMetadataStorageKey);
   await page.goto(projectUrl);
   const result = await page.evaluate(async () => {
     (document.getElementById("transcript") as HTMLTextAreaElement).value = "Агент: Завтра вам перезвоню.\nКлиент: Хорошо.";
     await runPipeline();
-    return { extractor: ctx.next_contact_date_extractor, judge: ctx.attributes_judge, gate: ctx.attributes_quality_gate, crm: ctx.crm_attributes_result, metrics: ctx.attributes_metrics };
+    return { audit: ctx.__call_metadata_audit, extractor: ctx.next_contact_date_extractor, judge: ctx.attributes_judge, gate: ctx.attributes_quality_gate, crm: ctx.crm_attributes_result, metrics: ctx.attributes_metrics };
   });
-  expect(result.extractor).toMatchObject({ status: "technical_error", error_code: "REQUIRED_CALL_CONTEXT_MISSING" });
-  expect(result.judge.attribute_statuses.next_contact_date).toBe("technical_error");
-  expect(result.gate.decisions.next_contact_date).toBe("TECHNICAL_ERROR");
-  expect(result.crm.update_actions.next_contact_date).toBe("ERROR");
-  expect(result.metrics.quality_score).toBeLessThan(100);
+  expect(result.audit).toMatchObject({ mode: "manual", call_datetime_source: "pipeline_lab_manual_default", timezone: "Europe/Moscow" });
+  expect(result.audit.call_datetime).not.toBeNull();
+  expect(result.extractor).not.toMatchObject({ error_code: "REQUIRED_CALL_CONTEXT_MISSING" });
+  expect(result.judge.attribute_statuses.next_contact_date).toBe("ready");
+  expect(result.gate.decisions.next_contact_date).toBe("DO_NOT_UPDATE");
+  expect(result.crm.update_actions.next_contact_date).toBe("SKIP");
+  expect(result.metrics.quality_score).toBeGreaterThan(0);
 });
 
 test("реальный UI path передаёт metadata и проводит оба production-кейса до CRM и результата", async ({ page }, testInfo) => {
@@ -361,9 +453,10 @@ test("реальный UI path передаёт metadata и проводит о�
     call_datetime_source: "pipeline_lab_input",
     call_end_datetime_source: "pipeline_lab_input",
     timezone_source: "pipeline_lab_input",
+    mode: "manual",
   });
   expect(case1Stage).toMatchObject({
-    output: { detected: true, next_contact_at: "2026-08-13T10:40:00+03:00", actor: "agent", action: "message", raw_time_expression: "через 30–40 минут", confidence: 0.95 },
+    output: { detected: true, next_contact_at: "2026-08-13T10:40:00+03:00", precision: "range", actor: "agent", action: "message", raw_time_expression: "через 30–40 минут", confidence: 0.95 },
     tokens: expect.any(Number),
     contract_audit: { structured_output_requested: true, structured_output_applied: true, parse_status: "SUCCESS", schema_status: "VALID" },
     context_audit: { resolved_context_keys: { transcript: true, call_datetime: true, timezone: true, call_end_datetime: true } },
@@ -373,7 +466,7 @@ test("реальный UI path передаёт metadata и проводит о�
   expect(case1.result.attributes_judge.attribute_statuses.next_contact_date).toBe("ready");
   expect(case1.result.attributes_quality_gate.decisions.next_contact_date).toBe("AUTO_SAVE");
   expect(case1.result.crm_attributes_result).toMatchObject({ attributes: { next_contact_date: "2026-08-13T10:40:00+03:00" }, update_actions: { next_contact_date: "SET" } });
-  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13.08.2026, 10:40");
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13.08.2026");
   await testInfo.attach("pipeline-report-case-1.json", { body: Buffer.from(JSON.stringify(case1, null, 2)), contentType: "application/json" });
 
   const case2 = await runFromUi({
@@ -426,8 +519,142 @@ test("metadata коммуникации приоритетнее ручных п
     call_datetime_source: "communication_metadata",
     call_end_datetime_source: "calculated_from_duration",
     timezone_source: "communication_metadata",
+    mode: "communication",
   });
   expect(result.nextContact).toMatchObject({ detected: true, next_contact_at: "2026-08-13T10:35:00+03:00", action: "callback", actor: "agent" });
+});
+
+test("browser E2E CASE A–J: UI → resolver → normalizer → Judge → Gate → CRM → report", async ({ page }) => {
+  await page.goto(projectUrl);
+  await page.evaluate(() => {
+    const original = callModelWithTransientRetry;
+    (window as Window & { __applicationModelCalls?: number }).__applicationModelCalls = 0;
+    callModelWithTransientRetry = async (...args: Parameters<typeof original>) => {
+      (window as Window & { __applicationModelCalls?: number }).__applicationModelCalls!++;
+      return original(...args);
+    };
+  });
+
+  const run = async ({ transcript, start = "2026-08-13T10:00", end = "", communication }: { transcript: string; start?: string; end?: string; communication?: Record<string, unknown> }) => {
+    await page.evaluate(({ sourceTranscript, metadata }) => {
+      (window as Window & { __nexaraSttMetadata?: unknown; __nexaraSttMetadataTranscript?: string }).__nexaraSttMetadata = metadata || undefined;
+      (window as Window & { __nexaraSttMetadataTranscript?: string }).__nexaraSttMetadataTranscript = metadata ? sourceTranscript : undefined;
+    }, { sourceTranscript: transcript, metadata: communication || null });
+    await page.locator("#transcript").fill(transcript);
+    await page.locator("#applicationCallDatetime").fill(start);
+    await page.locator("#applicationCallEndDatetime").fill(end);
+    await page.locator("#applicationCallTimezone").selectOption("Europe/Moscow");
+    await page.locator("#runBtn").click();
+    await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+    await expect(page.locator('[data-application-attributes-result="true"]')).toBeVisible();
+    return page.evaluate(() => ({
+      audit: ctx.__call_metadata_audit,
+      temporal: ctx.temporal_normalization_audit,
+      extractor: ctx.next_contact_date_extractor,
+      judge: ctx.attributes_judge,
+      gate: ctx.attributes_quality_gate,
+      crm: ctx.crm_attributes_result,
+      ui: document.querySelector("[data-result-next-contact-date]")?.textContent,
+      calls: (window as Window & { __applicationModelCalls?: number }).__applicationModelCalls,
+    }));
+  };
+
+  const cases = [
+    { id: "A", transcript: "Агент: Я вам в пятницу позвоню.\nКлиент: Хорошо, до пятницы.", expected: "2026-08-14T10:00:00+03:00", precision: "date", action: "SET" },
+    { id: "B", transcript: "Агент: Завтра вечером вам позвоню.\nКлиент: Хорошо, буду ждать.", expected: "2026-08-14T18:00:00+03:00", precision: "daypart", action: "SET" },
+    { id: "C", transcript: "Агент: Через 30 минут вам перезвоню.\nКлиент: Хорошо.", end: "2026-08-13T10:05", expected: "2026-08-13T10:35:00+03:00", precision: "exact", action: "SET" },
+    { id: "D", transcript: "Агент: Мне нужно будет там, я минут через 30 вам пару вопросиков там напишу.\nКлиент: Хорошо.\nАгент: Всё, тогда напишу минут через 30–40.", end: "2026-08-13T10:05", expected: "2026-08-13T10:40:00+03:00", precision: "range", action: "SET" },
+    { id: "E", transcript: "Клиент: Я завтра вам сам позвоню.\nАгент: Хорошо.", expected: null, precision: "none", action: "SKIP" },
+    { id: "F", transcript: "Клиент: Показ в субботу в 10:30.\nАгент: Хорошо, записал.", expected: null, precision: "none", action: "SKIP" },
+    { id: "G", transcript: "Агент: Как-нибудь созвонимся.\nКлиент: Хорошо.", expected: null, precision: "none", action: "SKIP" },
+  ];
+  for (const item of cases) {
+    const result = await run(item);
+    expect(result.extractor.next_contact_at, item.id).toBe(item.expected);
+    expect(result.extractor.precision, item.id).toBe(item.precision);
+    expect(result.judge.attribute_statuses.next_contact_date, item.id).toBe("ready");
+    expect(result.gate.decisions.next_contact_date, item.id).toBe(item.action === "SET" ? "AUTO_SAVE" : "DO_NOT_UPDATE");
+    expect(result.crm.update_actions.next_contact_date, item.id).toBe(item.action);
+  }
+
+  const caseH = await run({ transcript: "Агент: Завтра вечером вам позвоню.\nКлиент: Хорошо.", start: "" });
+  expect(caseH.audit).toMatchObject({ mode: "manual", call_datetime_source: "pipeline_lab_manual_default", timezone: "Europe/Moscow" });
+  expect(caseH.audit.call_datetime).not.toBeNull();
+  expect(caseH.extractor).not.toMatchObject({ error_code: "REQUIRED_CALL_CONTEXT_MISSING" });
+
+  const caseI = await run({
+    transcript: "Агент: Завтра вечером вам позвоню.\nКлиент: Хорошо.",
+    start: "2026-08-01T09:00",
+    communication: { provider: "Nexara", raw: { started_at: "2026-08-20T12:00:00+03:00", timezone: "Europe/Moscow" } },
+  });
+  expect(caseI.audit).toMatchObject({ mode: "communication", call_datetime: "2026-08-20T12:00:00+03:00", call_datetime_source: "communication_metadata" });
+  expect(caseI.extractor.next_contact_at).toBe("2026-08-21T18:00:00+03:00");
+
+  const callsBeforeJ = caseI.calls;
+  const transcriptJ = "Агент: Завтра вечером вам позвоню.\nКлиент: Хорошо.";
+  await page.evaluate((sourceTranscript) => {
+    (window as Window & { __nexaraSttMetadata?: unknown; __nexaraSttMetadataTranscript?: string }).__nexaraSttMetadata = { provider: "Nexara", raw: { timezone: "Europe/Moscow" } };
+    (window as Window & { __nexaraSttMetadataTranscript?: string }).__nexaraSttMetadataTranscript = sourceTranscript;
+  }, transcriptJ);
+  await page.locator("#transcript").fill(transcriptJ);
+  await page.locator("#runBtn").click();
+  await expect(page.locator("#applicationCallMetadataStatus")).toContainText("Не удалось получить дату исходной коммуникации");
+  const caseJ = await page.evaluate(() => ({ calls: (window as Window & { __applicationModelCalls?: number }).__applicationModelCalls, audit: ctx.__call_metadata_audit }));
+  expect(caseJ.calls).toBe(callsBeforeJ);
+  expect(caseJ.audit).toMatchObject({ mode: "communication", call_datetime: null, call_datetime_source: null });
+});
+
+test("текущий полный production case нормализуется на ближайшую пятницу и сохраняется в report", async ({ page }, testInfo) => {
+  await page.goto(projectUrl);
+  await page.locator("#transcript").fill(currentProductionTranscript);
+  await page.locator("#applicationCallDatetime").fill("2026-08-13T10:00");
+  await page.locator("#applicationCallEndDatetime").fill("");
+  await page.locator("#applicationCallTimezone").selectOption("Europe/Moscow");
+  await page.locator("#runBtn").click();
+  await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("14.08.2026");
+
+  const result = await page.evaluate(() => ({
+    audit: ctx.__call_metadata_audit,
+    temporal: ctx.temporal_normalization_audit,
+    extractor: ctx.next_contact_date_extractor,
+    judge: ctx.attributes_judge,
+    gate: ctx.attributes_quality_gate,
+    crm: ctx.crm_attributes_result,
+    stage: document.querySelectorAll("#reports .report").length,
+  }));
+  expect(result.audit).toEqual({
+    call_datetime: "2026-08-13T10:00:00+03:00",
+    call_end_datetime: null,
+    timezone: "Europe/Moscow",
+    mode: "manual",
+    source: "pipeline_lab_input",
+    call_datetime_source: "pipeline_lab_input",
+    call_end_datetime_source: null,
+    timezone_source: "pipeline_lab_input",
+  });
+  expect(result.temporal).toEqual({
+    raw_time_expression: "в пятницу",
+    reference_datetime: "2026-08-13T10:00:00+03:00",
+    call_end_datetime: null,
+    timezone: "Europe/Moscow",
+    strategy: "nearest_future_weekday",
+    normalized_datetime: "2026-08-14T10:00:00+03:00",
+    precision: "date",
+  });
+  expect(result.extractor).toMatchObject({ detected: true, actor: "agent", action: "confirm", raw_time_expression: "в пятницу", next_contact_at: "2026-08-14T10:00:00+03:00", precision: "date", confidence: 0.95 });
+  expect(result.judge).toMatchObject({ attribute_statuses: { next_contact_date: "ready" }, decisions: { next_contact_date: "approve" }, attributes: { interest: [], funding_source: "ипотека одобрена", purchase_term: "не определено", next_contact_date: { next_contact_at: "2026-08-14T10:00:00+03:00" } } });
+  expect(result.gate).toMatchObject({ decisions: { next_contact_date: "AUTO_SAVE" }, gate_status: "READY" });
+  expect(result.crm).toMatchObject({ attributes: { interest: [], funding_source: "ипотека одобрена", purchase_term: "не определено", next_contact_date: "2026-08-14T10:00:00+03:00" }, update_actions: { next_contact_date: "SET" }, pipeline_status: "READY" });
+  await page.evaluate(() => {
+    (window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport = undefined;
+    dl = (blob: Blob) => { void blob.text().then((text) => { (window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport = text; }); };
+  });
+  await page.locator("#dlReport").click();
+  await page.waitForFunction(() => Boolean((window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport));
+  const report = await page.evaluate(() => (window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport!);
+  await testInfo.attach("current-production-pipeline-report.json", { body: Buffer.from(report), contentType: "application/json" });
+  await testInfo.attach("current-production-result.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 });
 
 test("AI Атрибуты заявки выполняет 7 этапов с отдельным LLM Agent даты следующего контакта", async ({ page }) => {
