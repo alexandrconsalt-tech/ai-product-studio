@@ -2,15 +2,435 @@ import { expect, test } from "@playwright/test";
 
 const projectId = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
 const projectUrl = `/pipeline-lab-v3.html?projectId=${projectId}&productName=${encodeURIComponent("AI Атрибуты в Заявке")}`;
+const callMetadataStorageKey = `pipelineLabV3.applicationCallMetadata.${projectId}`;
+const nextContactDateSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["detected", "next_contact_at", "precision", "action", "actor", "raw_time_expression", "evidence", "confidence"],
+  properties: {
+    detected: { type: "boolean" },
+    next_contact_at: { type: ["string", "null"] },
+    precision: { type: "string", enum: ["exact", "daypart", "date", "none"] },
+    action: { type: "string", enum: ["callback", "message", "send_information", "confirm", "other", "none"] },
+    actor: { type: "string", enum: ["agent", "none"] },
+    raw_time_expression: { type: ["string", "null"] },
+    evidence: { type: ["string", "null"] },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+};
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
+  await page.addInitScript(({ metadataStorageKey }) => {
     localStorage.removeItem("pipelineLabV3.pipelineConfig");
     localStorage.setItem("selectedLlmProvider", "mock");
+    localStorage.setItem(metadataStorageKey, JSON.stringify({
+      call_datetime: "2026-08-13T14:20:10",
+      call_end_datetime: "2026-08-13T14:24:37",
+      timezone: "Europe/Moscow",
+    }));
+  }, { metadataStorageKey: callMetadataStorageKey });
+});
+
+test("миграция добавляет новый шаг в сохранённый pipeline без сброса настроек и истории", async ({ page }) => {
+  const configKey = `pipelineLabV3.pipelineConfig.${projectId}`;
+  const historyKey = "ai-product-studio.playground-test-runs.v1";
+  const history = JSON.stringify({ state: { runsByProjectId: { [projectId]: [{ id: "existing-run", report: { preserved: true } }] } }, version: 0 });
+  await page.addInitScript(({ scopedConfigKey, runHistoryKey, runHistory }) => {
+    const stage = (outKey: string, name: string, type = "llm") => ({ enabled: true, type, name, model: "gpt-5-mini", outKey, prompt: `custom:${outKey} {{transcript}}`, provider: "ai-tunnel", temperature: 0, maxTokens: 2000 });
+    localStorage.setItem(scopedConfigKey, JSON.stringify({
+      version: 14,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      deletedStageOutKeys: [],
+      stages: [
+        stage("interest_extractor", "Определение интереса клиента"),
+        stage("funding_source_extractor", "Определение источника средств"),
+        stage("purchase_term_extractor", "Определение срока покупки"),
+        stage("attributes_judge", "Проверка атрибутов", "check"),
+        stage("attributes_quality_gate", "Quality Gate атрибутов", "code"),
+        stage("crm_attributes_result", "Формирование результата для CRM", "code"),
+      ],
+    }));
+    localStorage.setItem(runHistoryKey, runHistory);
+  }, { scopedConfigKey: configKey, runHistoryKey: historyKey, runHistory: history });
+
+  await page.goto(projectUrl);
+
+  const migrated = await page.evaluate(({ scopedConfigKey, runHistoryKey }) => ({
+    config: JSON.parse(localStorage.getItem(scopedConfigKey) || "null"),
+    previous: JSON.parse(localStorage.getItem(`${scopedConfigKey}.previous`) || "null"),
+    history: localStorage.getItem(runHistoryKey),
+  }), { scopedConfigKey: configKey, runHistoryKey: historyKey });
+
+  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-call-metadata-runtime-v22");
+  expect(migrated.config.stages.map((stage: { outKey: string }) => stage.outKey)).toEqual([
+    "interest_extractor",
+    "funding_source_extractor",
+    "purchase_term_extractor",
+    "next_contact_date_extractor",
+    "attributes_judge",
+    "attributes_quality_gate",
+    "crm_attributes_result",
+  ]);
+  expect(migrated.config.stages[0].prompt).toBe("custom:interest_extractor {{transcript}}");
+  expect(migrated.previous.stages).toHaveLength(6);
+  expect(migrated.history).toBe(history);
+});
+
+test("миграция отделяет ошибочно сохранённую schema от Prompt только у нового этапа", async ({ page }) => {
+  const configKey = `pipelineLabV3.pipelineConfig.${projectId}`;
+  const otherPrompt = "Сохранённый Prompt существующего этапа {{transcript}}";
+  await page.addInitScript(({ scopedConfigKey, corruptedPrompt, preservedPrompt }) => {
+    const stage = (outKey: string, name: string, type = "llm", prompt = `custom:${outKey} {{transcript}}`) => ({ enabled: true, type, name, model: "gpt-5-mini", outKey, prompt, provider: "ai-tunnel", temperature: 0, maxTokens: 2000 });
+    localStorage.setItem(scopedConfigKey, JSON.stringify({
+      version: 14,
+      deletedStageOutKeys: [],
+      stages: [
+        stage("interest_extractor", "Определение интереса клиента", "llm", preservedPrompt),
+        stage("funding_source_extractor", "Определение источника средств"),
+        stage("purchase_term_extractor", "Определение срока покупки"),
+        { ...stage("next_contact_date_extractor", "Определение даты следующего контакта", "llm", corruptedPrompt), promptSource: "user_override", promptEdited: true },
+        stage("attributes_judge", "Проверка атрибутов", "check"),
+        stage("attributes_quality_gate", "Quality Gate атрибутов", "code"),
+        stage("crm_attributes_result", "Формирование результата для CRM", "code"),
+      ],
+    }));
+  }, { scopedConfigKey: configKey, corruptedPrompt: JSON.stringify(nextContactDateSchema, null, 2), preservedPrompt: otherPrompt });
+
+  await page.goto(projectUrl);
+
+  const migrated = await page.evaluate((scopedConfigKey) => {
+    const config = JSON.parse(localStorage.getItem(scopedConfigKey) || "null");
+    return {
+      config,
+      previous: JSON.parse(localStorage.getItem(`${scopedConfigKey}.previous`) || "null"),
+      runtime: pipeline.map((stage) => ({ outKey: stage.outKey, prompt: stage.prompt, responseContract: stage.responseContract, promptSource: stage.promptSource })),
+    };
+  }, configKey);
+  const nextStage = migrated.config.stages.find((stage: { outKey: string }) => stage.outKey === "next_contact_date_extractor");
+  const interestStage = migrated.config.stages.find((stage: { outKey: string }) => stage.outKey === "interest_extractor");
+
+  expect(migrated.config.restoredFrom).toBe("ai-application-attributes-call-metadata-runtime-v22");
+  expect(nextStage.responseContract).toBe("application_next_contact_date_extractor_v1");
+  expect(nextStage.prompt).toContain("{{transcript}}");
+  expect(nextStage.prompt).not.toBe(JSON.stringify(nextContactDateSchema, null, 2));
+  expect(nextStage.promptSource).toBe("system_default");
+  expect(interestStage.prompt).toBe(otherPrompt);
+  expect(migrated.previous.stages.find((stage: { outKey: string }) => stage.outKey === "next_contact_date_extractor").prompt).toBe(JSON.stringify(nextContactDateSchema, null, 2));
+  expect(migrated.runtime.find((stage: { outKey: string }) => stage.outKey === "next_contact_date_extractor")).toMatchObject({
+    prompt: nextStage.prompt,
+    responseContract: "application_next_contact_date_extractor_v1",
   });
 });
 
-test("AI Атрибуты заявки выполняет 6 этапов с единым Attributes Judge", async ({ page }) => {
+test("миграция удаляет schema-префикс и дословно сохраняет пользовательский Prompt", async ({ page }) => {
+  const configKey = `pipelineLabV3.pipelineConfig.${projectId}`;
+  const userPrompt = [
+    "Ты — AI-экстрактор атрибута заявки «Дата следующего контакта».",
+    "Пользовательское правило: учитывай только обещание агента.",
+    "Транскрипция: {{transcript}}",
+  ].join("\n\n");
+  const corruptedPrompt = `${JSON.stringify(nextContactDateSchema, null, 2)}\n\n${userPrompt}`;
+  await page.addInitScript(({ scopedConfigKey, damagedPrompt }) => {
+    const stage = (outKey: string, name: string, type = "llm", prompt = `custom:${outKey} {{transcript}}`) => ({ enabled: true, type, name, model: "gpt-5-mini", outKey, prompt, provider: "ai-tunnel", temperature: 0, maxTokens: 2000 });
+    localStorage.setItem(scopedConfigKey, JSON.stringify({
+      version: 20,
+      deletedStageOutKeys: [],
+      stages: [
+        stage("interest_extractor", "Определение интереса клиента"),
+        stage("funding_source_extractor", "Определение источника средств"),
+        stage("purchase_term_extractor", "Определение срока покупки"),
+        { ...stage("next_contact_date_extractor", "Определение даты следующего контакта", "llm", damagedPrompt), responseContract: "application_next_contact_date_extractor_v1", promptSource: "user_override", promptEdited: true },
+        stage("attributes_judge", "Проверка атрибутов", "check"),
+        stage("attributes_quality_gate", "Quality Gate атрибутов", "code"),
+        stage("crm_attributes_result", "Формирование результата для CRM", "code"),
+      ],
+    }));
+  }, { scopedConfigKey: configKey, damagedPrompt: corruptedPrompt });
+
+  await page.goto(projectUrl);
+  const restored = await page.evaluate((scopedConfigKey) => {
+    const config = JSON.parse(localStorage.getItem(scopedConfigKey) || "null");
+    return config.stages.find((stage: { outKey: string }) => stage.outKey === "next_contact_date_extractor");
+  }, configKey);
+
+  expect(restored.prompt).toBe(userPrompt);
+  expect(restored.promptSource).toBe("user_override");
+  expect(restored.promptEdited).toBe(true);
+  expect(restored.responseContract).toBe("application_next_contact_date_extractor_v1");
+});
+
+test("Prompt даты следующего контакта сохраняется через switch, reload и pipeline run отдельно от Response Schema", async ({ page }) => {
+  const customPrompt = [
+    "NEXT_CONTACT_DATE_TEST_PROMPT",
+    "Определи дату следующего контакта только из транскрипции.",
+    "Транскрипция:",
+    "{{transcript}}",
+    "Верни JSON по настроенному response contract.",
+  ].join("\n\n");
+  const transcript = [
+    "Клиент: Я по объявлению звоню, новостройка в центре интересует.",
+    "Клиент: У меня ипотека сейчас в процессе одобрения, Сбербанк.",
+    "Клиент: Хотелось бы в ближайшие два-три месяца определиться.",
+    "Агент: Перезвоню пятнадцатого в 14:00.",
+  ].join("\n");
+  await page.goto(projectUrl);
+  await page.locator("#pipelineToggle").click();
+  let stages = page.locator("#stages .stage");
+  const nextStage = stages.nth(3);
+  await nextStage.locator("[data-toggle]").click();
+  const originalOtherStages = await page.evaluate(() => pipeline.filter((stage) => stage.outKey !== "next_contact_date_extractor").map((stage) => ({ outKey: stage.outKey, prompt: stage.prompt, responseContract: stage.responseContract, model: stage.model })));
+  await nextStage.locator("[data-prompt]").fill(customPrompt);
+  await nextStage.locator("[data-save]").click();
+
+  await stages.nth(2).locator("[data-toggle]").click();
+  await nextStage.locator("[data-toggle]").click();
+  await nextStage.locator("[data-toggle]").click();
+  await expect(nextStage.locator("[data-prompt]")).toHaveValue(customPrompt);
+
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator("#pipelineToggle").click();
+  stages = page.locator("#stages .stage");
+  await stages.nth(3).locator("[data-toggle]").click();
+  await expect(stages.nth(3).locator("[data-prompt]")).toHaveValue(customPrompt);
+
+  const result = await page.evaluate(async ({ sourceTranscript, expectedPrompt }) => {
+    (document.getElementById("transcript") as HTMLTextAreaElement).value = sourceTranscript;
+    const stage = pipeline.find((item) => item.outKey === "next_contact_date_extractor");
+    const promptBeforeRun = stage.prompt;
+    await runPipeline();
+    const promptAfterRun = stage.prompt;
+    const runtimeReport = await runStage(stage, {
+      __transcript: sourceTranscript,
+      call_datetime: "2026-08-13T14:20:10+03:00",
+      call_end_datetime: "2026-08-13T14:24:37+03:00",
+      timezone: "Europe/Moscow",
+    });
+    const stored = JSON.parse(localStorage.getItem(CONFIG_STORAGE_KEY) || "null");
+    return {
+      promptBeforeRun,
+      promptAfterRun,
+      editorPrompt: (document.querySelectorAll("#stages .stage")[3].querySelector("[data-prompt]") as HTMLTextAreaElement).value,
+      storedStage: stored.stages.find((item: { outKey: string }) => item.outKey === "next_contact_date_extractor"),
+      runtimeStage: { prompt: stage.prompt, responseContract: stage.responseContract },
+      runtimeReport,
+      otherStages: pipeline.filter((item) => item.outKey !== "next_contact_date_extractor").map((item) => ({ outKey: item.outKey, prompt: item.prompt, responseContract: item.responseContract, model: item.model })),
+      expectedPrompt,
+    };
+  }, { sourceTranscript: transcript, expectedPrompt: customPrompt });
+
+  expect(result.promptBeforeRun).toBe(customPrompt);
+  expect(result.promptAfterRun).toBe(customPrompt);
+  expect(result.editorPrompt).toBe(customPrompt);
+  expect(result.storedStage).toMatchObject({ prompt: customPrompt, responseContract: "application_next_contact_date_extractor_v1", promptSource: "user_override" });
+  expect(result.runtimeStage).toEqual({ prompt: customPrompt, responseContract: "application_next_contact_date_extractor_v1" });
+  expect(result.otherStages).toEqual(originalOtherStages);
+  expect(result.runtimeReport).toMatchObject({
+    output: {
+      detected: true,
+      next_contact_at: "2026-08-15T14:00:00+03:00",
+      precision: "exact",
+      action: "callback",
+      actor: "agent",
+      confidence: 0.98,
+    },
+    prompt_audit: {
+      transcript_present: true,
+      transcript_injected: true,
+      transcript_available: true,
+      transcript_sent_to_model: true,
+      resolved_prompt_contains_transcript: true,
+    },
+    contract_audit: {
+      prompt_contract_id: "application_next_contact_date_extractor_v1",
+      structured_output_requested: true,
+      structured_output_applied: true,
+      response_schema_id: "application_next_contact_date_extractor_v1",
+      parser_schema_id: "application_next_contact_date_extractor_v1",
+      parse_status: "SUCCESS",
+      schema_status: "VALID",
+    },
+  });
+  expect(result.runtimeReport.resolved_prompt).toContain(transcript);
+  expect(result.runtimeReport.resolved_prompt).not.toContain("{{transcript}}");
+  expect(result.runtimeReport.resolved_prompt).not.toBe(JSON.stringify(nextContactDateSchema, null, 2));
+});
+
+test("Golden A–G: дата следующего контакта проходит Extractor → Judge → Gate → CRM → metrics", async ({ page }) => {
+  await page.goto(projectUrl);
+  const cases = [
+    { id: "A", transcript: "Клиент: Тогда, если сможете показать в четверг, завтра перезвоните мне, да, вечером?\nАгент: Да, конечно.", detected: true, next: "2026-08-14T18:00:00+03:00", precision: "daypart", action: "SET" },
+    { id: "B", transcript: "Агент: Всё, я вам в пятницу накануне наберу, позвоню, чтобы точно у всех всё получилось.\nКлиент: До пятницы, до завтра.", detected: true, next: "2026-08-14", precision: "date", action: "SET" },
+    { id: "C", transcript: "Агент: Давайте уточню, перезвоню.\nКлиент: Хорошо.", detected: false, next: null, precision: "none", action: "SKIP" },
+    { id: "D", transcript: "Клиент: Я вам завтра сам позвоню.\nАгент: Хорошо.", detected: false, next: null, precision: "none", action: "SKIP" },
+    { id: "E", transcript: "Клиент: В субботу в 10:30.\nАгент: Хорошо, записал.", detected: false, next: null, precision: "none", action: "SKIP" },
+    { id: "F", transcript: "Агент: Через 30 минут вам перезвоню.\nКлиент: Хорошо.", detected: true, next: "2026-08-13T14:54:37+03:00", precision: "exact", action: "SET" },
+    { id: "G", transcript: "Агент: Завтра ближе к вечеру позвоню.\nКлиент: Договорились.", detected: true, next: "2026-08-14T17:00:00+03:00", precision: "daypart", action: "SET" },
+  ];
+
+  for (const golden of cases) {
+    const result = await page.evaluate(async ({ transcript }) => {
+      (document.getElementById("transcript") as HTMLTextAreaElement).value = transcript;
+      await runPipeline();
+      const stage = pipeline.find((item) => item.outKey === "next_contact_date_extractor");
+      const report = await runStage(stage, ctx);
+      report.context_audit = stageContextAudit(stage, ctx);
+      return {
+        extractor: ctx.next_contact_date_extractor,
+        judge: ctx.attributes_judge,
+        gate: ctx.attributes_quality_gate,
+        crm: ctx.crm_attributes_result,
+        metrics: ctx.attributes_metrics,
+        report,
+      };
+    }, { transcript: golden.transcript });
+
+    expect(result.extractor.detected, golden.id).toBe(golden.detected);
+    expect(result.extractor.next_contact_at, golden.id).toBe(golden.next);
+    expect(result.extractor.precision, golden.id).toBe(golden.precision);
+    expect(result.judge.attribute_statuses.next_contact_date, golden.id).toBe("ready");
+    expect(result.gate.decisions.next_contact_date, golden.id).toBe(golden.action === "SET" ? "AUTO_SAVE" : "DO_NOT_UPDATE");
+    expect(result.crm.update_actions.next_contact_date, golden.id).toBe(golden.action);
+    expect(result.crm.attributes.next_contact_date, golden.id).toBe(golden.next);
+    expect(result.metrics.quality_score, golden.id).toBe(100);
+    expect(result.metrics.calculation.next_contact_date.crm_action, golden.id).toBe(golden.action);
+    expect(result.report.context_audit.required_context_keys, golden.id).toEqual(golden.id === "F" ? ["transcript", "call_datetime", "timezone", "call_end_datetime"] : ["transcript", "call_datetime", "timezone"]);
+    expect(result.report.context_audit.resolved_context_keys, golden.id).toMatchObject(golden.id === "F" ? { transcript: true, call_datetime: true, call_end_datetime: true, timezone: true } : { transcript: true, call_datetime: true, timezone: true });
+    expect(result.report.resolved_prompt, golden.id).toContain("2026-08-13T14:20:10+03:00");
+    expect(result.report.resolved_prompt, golden.id).toContain("2026-08-13T14:24:37+03:00");
+    expect(result.report.resolved_prompt, golden.id).toContain("Europe/Moscow");
+    expect(result.report.contract_audit, golden.id).toMatchObject({ structured_output_requested: true, structured_output_applied: true, response_schema_id: "application_next_contact_date_extractor_v1", parser_schema_id: "application_next_contact_date_extractor_v1", schema_status: "VALID", parse_status: "SUCCESS" });
+  }
+});
+
+test("отсутствие call metadata даёт technical error и не позволяет quality_score=100", async ({ page }) => {
+  await page.addInitScript((metadataStorageKey) => localStorage.removeItem(metadataStorageKey), callMetadataStorageKey);
+  await page.goto(projectUrl);
+  const result = await page.evaluate(async () => {
+    (document.getElementById("transcript") as HTMLTextAreaElement).value = "Агент: Завтра вам перезвоню.\nКлиент: Хорошо.";
+    await runPipeline();
+    return { extractor: ctx.next_contact_date_extractor, judge: ctx.attributes_judge, gate: ctx.attributes_quality_gate, crm: ctx.crm_attributes_result, metrics: ctx.attributes_metrics };
+  });
+  expect(result.extractor).toMatchObject({ status: "technical_error", error_code: "REQUIRED_CALL_CONTEXT_MISSING" });
+  expect(result.judge.attribute_statuses.next_contact_date).toBe("technical_error");
+  expect(result.gate.decisions.next_contact_date).toBe("TECHNICAL_ERROR");
+  expect(result.crm.update_actions.next_contact_date).toBe("ERROR");
+  expect(result.metrics.quality_score).toBeLessThan(100);
+});
+
+test("реальный UI path передаёт metadata и проводит оба production-кейса до CRM и результата", async ({ page }, testInfo) => {
+  await page.goto(projectUrl);
+  await expect(page.locator("#applicationCallMetadataPanel")).toBeVisible();
+
+  const runFromUi = async ({ transcript, start, end }: { transcript: string; start: string; end?: string }) => {
+    await page.locator("#applicationCallDatetime").fill(start);
+    await page.locator("#applicationCallEndDatetime").fill(end || "");
+    await page.locator("#applicationCallTimezone").selectOption("Europe/Moscow");
+    await page.locator("#transcript").fill(transcript);
+    await page.locator("#runBtn").click();
+    await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+    await expect(page.locator('[data-application-attributes-result="true"]')).toBeVisible();
+    await page.evaluate(() => {
+      (window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport = undefined;
+      dl = (blob: Blob) => {
+        void blob.text().then((text) => {
+          (window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport = text;
+        });
+      };
+    });
+    await page.locator("#dlReport").click();
+    await page.waitForFunction(() => Boolean((window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport));
+    return page.evaluate(() => JSON.parse((window as Window & { __downloadedApplicationAttributesReport?: string }).__downloadedApplicationAttributesReport!));
+  };
+
+  const case1 = await runFromUi({
+    start: "2026-08-13T10:00",
+    end: "2026-08-13T10:05",
+    transcript: [
+      "Агент: Мне нужно будет там, я минут через 30 вам пару вопросиков там напишу.",
+      "Клиент: Хорошо.",
+      "Агент: Всё, хорошо, тогда вам напишу. Минут через 30–40.",
+    ].join("\n"),
+  });
+  const case1Stage = case1.stageReports.find((item: { stage: { outKey: string } }) => item.stage.outKey === "next_contact_date_extractor").report;
+  expect(case1.result.__call_metadata_audit).toEqual({
+    call_datetime: "2026-08-13T10:00:00+03:00",
+    call_end_datetime: "2026-08-13T10:05:00+03:00",
+    timezone: "Europe/Moscow",
+    source: "pipeline_lab_input",
+    call_datetime_source: "pipeline_lab_input",
+    call_end_datetime_source: "pipeline_lab_input",
+    timezone_source: "pipeline_lab_input",
+  });
+  expect(case1Stage).toMatchObject({
+    output: { detected: true, next_contact_at: "2026-08-13T10:40:00+03:00", actor: "agent", action: "message", raw_time_expression: "через 30–40 минут", confidence: 0.95 },
+    tokens: expect.any(Number),
+    contract_audit: { structured_output_requested: true, structured_output_applied: true, parse_status: "SUCCESS", schema_status: "VALID" },
+    context_audit: { resolved_context_keys: { transcript: true, call_datetime: true, timezone: true, call_end_datetime: true } },
+  });
+  expect(case1Stage.tokens).toBeGreaterThan(0);
+  expect(case1Stage.raw).not.toBeNull();
+  expect(case1.result.attributes_judge.attribute_statuses.next_contact_date).toBe("ready");
+  expect(case1.result.attributes_quality_gate.decisions.next_contact_date).toBe("AUTO_SAVE");
+  expect(case1.result.crm_attributes_result).toMatchObject({ attributes: { next_contact_date: "2026-08-13T10:40:00+03:00" }, update_actions: { next_contact_date: "SET" } });
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13.08.2026, 10:40");
+  await testInfo.attach("pipeline-report-case-1.json", { body: Buffer.from(JSON.stringify(case1, null, 2)), contentType: "application/json" });
+
+  const case2 = await runFromUi({
+    start: "2026-08-13T10:00",
+    transcript: [
+      "Агент: Могу вам сегодня вечером точно сказать, перезвонить или написать?",
+      "Клиент: Да, можете, да, конечно.",
+      "Агент: Я вам сразу же даю отмашку — да-да или нет. Хорошо, сможете позвонить сегодня вечером?",
+      "Клиент: Да, конечно. Всё, буду ждать звонка.",
+    ].join("\n"),
+  });
+  const case2Stage = case2.stageReports.find((item: { stage: { outKey: string } }) => item.stage.outKey === "next_contact_date_extractor").report;
+  expect(case2.result.__call_metadata_audit).toMatchObject({ call_datetime: "2026-08-13T10:00:00+03:00", call_end_datetime: null, timezone: "Europe/Moscow", source: "pipeline_lab_input", timezone_source: "pipeline_lab_input" });
+  expect(case2Stage).toMatchObject({
+    output: { detected: true, next_contact_at: "2026-08-13T18:00:00+03:00", actor: "agent", action: "callback", raw_time_expression: "сегодня вечером", precision: "daypart", confidence: 0.96 },
+    contract_audit: { structured_output_requested: true, structured_output_applied: true, parse_status: "SUCCESS", schema_status: "VALID" },
+    context_audit: { required_context_keys: ["transcript", "call_datetime", "timezone"], resolved_context_keys: { transcript: true, call_datetime: true, timezone: true } },
+  });
+  expect(case2Stage.tokens).toBeGreaterThan(0);
+  expect(case2Stage.raw).not.toBeNull();
+  expect(case2.result.attributes_quality_gate.decisions.next_contact_date).toBe("AUTO_SAVE");
+  expect(case2.result.crm_attributes_result).toMatchObject({ attributes: { next_contact_date: "2026-08-13T18:00:00+03:00" }, update_actions: { next_contact_date: "SET" } });
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13.08.2026");
+  await testInfo.attach("pipeline-report-case-2.json", { body: Buffer.from(JSON.stringify(case2, null, 2)), contentType: "application/json" });
+  await testInfo.attach("application-attributes-ui.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+});
+
+test("metadata коммуникации приоритетнее ручных полей, а call_end вычисляется из duration", async ({ page }) => {
+  await page.goto(projectUrl);
+  await page.locator("#applicationCallDatetime").fill("2026-08-12T09:00");
+  await page.locator("#applicationCallEndDatetime").fill("2026-08-12T09:01");
+  const transcript = "Агент: Через 30 минут вам перезвоню.\nКлиент: Хорошо.";
+  await page.locator("#transcript").fill(transcript);
+  await page.evaluate((sourceTranscript) => {
+    (window as Window & { __nexaraSttMetadata?: unknown; __nexaraSttMetadataTranscript?: string }).__nexaraSttMetadata = {
+      provider: "Nexara",
+      raw: { started_at: "2026-08-13T10:00:00+03:00", duration_seconds: 300, timezone: "Europe/Moscow" },
+    };
+    (window as Window & { __nexaraSttMetadataTranscript?: string }).__nexaraSttMetadataTranscript = sourceTranscript;
+  }, transcript);
+  await page.locator("#runBtn").click();
+  await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+
+  const result = await page.evaluate(() => ({ audit: ctx.__call_metadata_audit, nextContact: ctx.next_contact_date_extractor }));
+  expect(result.audit).toEqual({
+    call_datetime: "2026-08-13T10:00:00+03:00",
+    call_end_datetime: "2026-08-13T07:05:00.000Z",
+    timezone: "Europe/Moscow",
+    source: "communication_metadata",
+    call_datetime_source: "communication_metadata",
+    call_end_datetime_source: "calculated_from_duration",
+    timezone_source: "communication_metadata",
+  });
+  expect(result.nextContact).toMatchObject({ detected: true, next_contact_at: "2026-08-13T10:35:00+03:00", action: "callback", actor: "agent" });
+});
+
+test("AI Атрибуты заявки выполняет 7 этапов с отдельным LLM Agent даты следующего контакта", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -22,6 +442,7 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
       "Клиент: Я по объявлению звоню, новостройка в центре интересует.",
       "Клиент: У меня ипотека сейчас в процессе одобрения, Сбербанк.",
       "Клиент: Хотелось бы в ближайшие два-три месяца определиться.",
+      "Агент: Встретимся в пятницу, пятнадцатого, в 14:00.",
     ].join("\n");
     (document.getElementById("transcript") as HTMLTextAreaElement).value = transcript;
     await runPipeline();
@@ -47,6 +468,8 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
       interest: ctx.interest_extractor,
       funding: ctx.funding_source_extractor,
       purchaseTerm: ctx.purchase_term_extractor,
+      nextContactDate: ctx.next_contact_date_extractor,
+      nextContactDateVariable: tmpl("{{ctx.next_contact_date_extractor}}", ctx),
       attributesJudge: ctx.attributes_judge,
       gate: ctx.attributes_quality_gate,
       crm: ctx.crm_attributes_result,
@@ -68,9 +491,9 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
 
   expect(result.execution).toMatchObject({
     pipeline_status: "SUCCESS",
-    steps_total: 6,
-    steps_executed: 6,
-    steps_successful: 6,
+    steps_total: 7,
+    steps_executed: 7,
+    steps_successful: 7,
     stopped_at_stage: null,
     extractor_failures: [],
     judge_failures: [],
@@ -78,11 +501,22 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
   expect(result.interest.value).toEqual(["Новостройки"]);
   expect(result.funding.value).toBe("ипотека в процессе");
   expect(result.purchaseTerm.value).toBe("2–3 месяца");
-  expect(result.attributesJudge.decisions).toEqual({ interest: "approve", funding_source: "approve", purchase_term: "approve" });
+  expect(result.nextContactDate).toMatchObject({ detected: true, precision: "exact", action: "callback", actor: "agent", confidence: 0.98 });
+  expect(result.nextContactDateVariable).toContain('"detected": true');
+  expect(result.attributesJudge.decisions).toEqual({ interest: "approve", funding_source: "approve", purchase_term: "approve", next_contact_date: "approve" });
   expect(result.attributesJudge.attributes).toEqual({
     interest: ["Новостройки"],
     funding_source: "ипотека в процессе",
     purchase_term: "2–3 месяца",
+    next_contact_date: {
+      detected: true,
+      next_contact_at: "2026-08-15T14:00:00+03:00",
+      precision: "exact",
+      action: "callback",
+      actor: "agent",
+      raw_time_expression: "пятнадцатого в 14:00",
+      confidence: 0.98,
+    },
   });
   expect(result.gate.gate_status).toBe("READY");
   expect(result.crm).toEqual({
@@ -90,17 +524,18 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
       interest: ["Новостройки"],
       funding_source: "ипотека в процессе",
       purchase_term: "2–3 месяца",
+      next_contact_date: "2026-08-15T14:00:00+03:00",
     },
-    update_actions: { interest: "SET", funding_source: "SET", purchase_term: "SET" },
+    update_actions: { interest: "SET", funding_source: "SET", purchase_term: "SET", next_contact_date: "SET" },
     pipeline_status: "READY",
     blocked_attributes: [],
     technical_errors: [],
   });
   expect(result.crmProvenance.run_id).toBeTruthy();
   expect(result.metrics).toMatchObject({
-    overall_confidence: 1,
+    overall_confidence: 0.995,
     confidence_status: "COMPLETE",
-    attribute_confidence: { interest: 1, funding_source: 1, purchase_term: 1 },
+    attribute_confidence: { interest: 1, funding_source: 1, purchase_term: 1, next_contact_date: 0.98 },
     quality_score: 100,
     quality_criteria: {
       extractor_correctness: 100,
@@ -113,8 +548,8 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
   });
   expect(result.interestSchema.properties.value).toMatchObject({ type: "array", items: { type: "string" } });
   expect(result.interestSchema.properties.value).not.toHaveProperty("uniqueItems");
-  expect(result.stageKeys).toEqual(["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "attributes_judge", "attributes_quality_gate", "crm_attributes_result"]);
-  expect(result.llmCalls).toBe(4);
+  expect(result.stageKeys).toEqual(["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "next_contact_date_extractor", "attributes_judge", "attributes_quality_gate", "crm_attributes_result"]);
+  expect(result.llmCalls).toBe(5);
   expect(result.legacyOutputs).toEqual([]);
   expect(result.viewport.scrollWidth).toBe(result.viewport.clientWidth);
   expect(result.judgeSchema).toMatchObject({ type: "object", additionalProperties: false, required: ["attributes", "attribute_statuses", "decisions", "evidence", "reason_codes"] });
@@ -181,6 +616,7 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
   await expect(finalResult.locator("[data-result-interest]")) .toHaveText("Новостройки");
   await expect(finalResult.locator("[data-result-funding-source]")) .toHaveText("ипотека в процессе");
   await expect(finalResult.locator("[data-result-purchase-term]")) .toHaveText("2–3 месяца");
+  await expect(finalResult.locator("[data-result-next-contact-date]")) .toHaveText("15.08.2026, 14:00");
   await expect(finalResult.locator("[data-result-overall-confidence]")) .toHaveText("100%");
   await expect(finalResult.locator("[data-result-quality-score]")) .toHaveText("100%");
   await expect(finalResult).not.toContainText("Итоговое саммари");
@@ -188,18 +624,28 @@ test("AI Атрибуты заявки выполняет 6 этапов с ед
   const finalStatus = page.locator('[data-application-attributes-status="true"]');
   await expect(finalStatus).toContainText("Quality Gate: READY");
   await expect(finalStatus).toContainText("CRM status: READY");
-  await expect(finalStatus).toContainText("Этапов выполнено: 6");
-  await expect(finalStatus).toContainText("Успешно пройдено: 6");
+  await expect(finalStatus).toContainText("Этапов выполнено: 7");
+  await expect(finalStatus).toContainText("Успешно пройдено: 7");
   await expect(finalStatus).toContainText("Pipeline status: SUCCESS");
   await expect(finalStatus).not.toContainText("Summary Quality Score");
   await expect(finalResult.locator("[data-attributes-metrics-details]")) .toContainText("Extractor correctness");
   await expect(finalStatus).not.toContainText("Решение:");
   await expect(finalStatus).not.toContainText("Карточка CRM");
 
-  const judgeStage = page.locator("#stages .stage").nth(3);
+  const nextContactDateStage = page.locator("#stages .stage").nth(3);
+  await expect(nextContactDateStage).toContainText("Определение даты следующего контакта");
+  await expect(nextContactDateStage).toContainText("LLM-агент");
+  await nextContactDateStage.locator("[data-toggle]").evaluate((element: HTMLElement) => element.click());
+  await expect(nextContactDateStage).toHaveClass(/open/);
+  await expect(nextContactDateStage.locator("[data-prompt]")).toContainText("{{transcript}}");
+  await expect(nextContactDateStage.locator("[data-model]")).toHaveValue("gpt-5-mini");
+  await expect(nextContactDateStage.locator("[data-outkey]")).toHaveValue("next_contact_date_extractor");
+  await expect(page.locator(".report").nth(3)).toContainText('"detected": true');
+
+  const judgeStage = page.locator("#stages .stage").nth(4);
   await expect(judgeStage).toContainText("Проверка атрибутов");
   await expect(judgeStage).toContainText("GPT-5 mini");
-  for (const index of [4, 5]) {
+  for (const index of [5, 6]) {
     const deterministicReport = page.locator(".report").nth(index);
     await expect(deterministicReport.locator(".rm")).toContainText("Детерминированный этап · Deterministic Contract · code");
     const deterministicStage = page.locator("#stages .stage").nth(index);
@@ -215,8 +661,8 @@ test("renderer показывает финальный contract последне
   await page.evaluate(() => {
     ctx = {
       crm_attributes_result: {
-        attributes: { interest: ["Новостройки"], funding_source: "не определено", purchase_term: "не определено" },
-        update_actions: { interest: "SET", funding_source: "SET_UNDETERMINED", purchase_term: "SET_UNDETERMINED" },
+        attributes: { interest: ["Новостройки"], funding_source: "не определено", purchase_term: "не определено", next_contact_date: "2026-08-14T15:00:00+03:00" },
+        update_actions: { interest: "SET", funding_source: "SET_UNDETERMINED", purchase_term: "SET_UNDETERMINED", next_contact_date: "SET" },
         pipeline_status: "READY",
         blocked_attributes: [],
         technical_errors: [],
@@ -230,6 +676,12 @@ test("renderer показывает финальный contract последне
         quality_score: 100,
         quality_criteria: { extractor_correctness: 100, evidence_quality: 100, judge_consistency: 100, pipeline_integrity: 100, crm_readiness: 100 },
       },
+      next_contact_date_extractor: {
+        detected: true,
+        next_contact_at: "2026-08-14T15:00:00+03:00",
+        precision: "exact",
+      },
+      attributes_judge: { attributes: { next_contact_date: { precision: "exact" } } },
       pipeline_execution: {
         pipeline_status: "SUCCESS",
         steps_total: 6,
@@ -249,6 +701,7 @@ test("renderer показывает финальный contract последне
   await expect(finalResult).toContainText("Интересует: Новостройки");
   await expect(finalResult).toContainText("Источник средств: не определено");
   await expect(finalResult).toContainText("Срок покупки: не определено");
+  await expect(finalResult).toContainText("Дата следующего контакта: 14.08.2026, 15:00");
   await expect(finalResult).toContainText("Уверенность: 98%");
   await expect(finalResult).toContainText("Оценка качества: 100%");
   await expect(finalResult.locator("[data-attributes-metrics-details]")) .toContainText("Уверенность · Интересует 95%");
@@ -262,6 +715,54 @@ test("renderer показывает финальный contract последне
   await expect(page.getByText("Итоговое саммари", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Summary Quality Score/)).toHaveCount(0);
   await expect(page.getByText(/Карточка CRM/)).toHaveCount(0);
+});
+
+test("renderer даты следующего контакта отображает дату без выдуманного времени, null и результат повторного запуска", async ({ page }) => {
+  await page.goto(projectUrl);
+
+  const renderNextContactDate = async (nextContactDate: { detected: boolean; next_contact_at: string | null; precision: string }) => {
+    await page.evaluate((value) => {
+      ctx = {
+        crm_attributes_result: {
+          attributes: { interest: ["Новостройки"], funding_source: "не определено", purchase_term: "не определено", next_contact_date: value.detected ? value.next_contact_at : null },
+          update_actions: { interest: "SET", funding_source: "SET_UNDETERMINED", purchase_term: "SET_UNDETERMINED", next_contact_date: value.detected && value.next_contact_at ? "SET" : "SKIP" },
+          pipeline_status: "READY",
+        },
+        attributes_quality_gate: { gate_status: "READY" },
+        attributes_metrics: { overall_confidence: 0.95, quality_score: 100 },
+        pipeline_execution: { pipeline_status: "SUCCESS", steps_executed: 7, steps_successful: 7 },
+        next_contact_date_extractor: value,
+        attributes_judge: { attributes: { next_contact_date: value } },
+      };
+      document.getElementById("reports")!.innerHTML = "";
+      renderFinal(0, 0, []);
+    }, nextContactDate);
+    return page.locator("[data-result-next-contact-date]").textContent();
+  };
+
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-14", precision: "date" })).resolves.toBe("14.08.2026");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-14T00:00:00+03:00", precision: "date" })).resolves.toBe("14.08.2026");
+  await expect(renderNextContactDate({ detected: false, next_contact_at: "2026-08-14T15:00:00+03:00", precision: "exact" })).resolves.toBe("не определено");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: null, precision: "none" })).resolves.toBe("не определено");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-02-30", precision: "date" })).resolves.toBe("не определено");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-15T16:30:00+03:00", precision: "exact" })).resolves.toBe("15.08.2026, 16:30");
+
+  await page.evaluate(() => {
+    (window as Window & { __downloadedPipelineReport?: string }).__downloadedPipelineReport = undefined;
+    dl = (blob: Blob) => {
+      void blob.text().then((text) => {
+        (window as Window & { __downloadedPipelineReport?: string }).__downloadedPipelineReport = text;
+      });
+    };
+    document.getElementById("dlReport")!.click();
+  });
+  await page.waitForFunction(() => Boolean((window as Window & { __downloadedPipelineReport?: string }).__downloadedPipelineReport));
+  const downloadedReport = await page.evaluate(() => JSON.parse((window as Window & { __downloadedPipelineReport?: string }).__downloadedPipelineReport!));
+  expect(downloadedReport.result.next_contact_date_extractor).toMatchObject({
+    detected: true,
+    next_contact_at: "2026-08-15T16:30:00+03:00",
+    precision: "exact",
+  });
 });
 
 test("fault injection не превращает technical Funding Extractor в не определено", async ({ page }) => {
@@ -293,8 +794,8 @@ test("fault injection не превращает technical Funding Extractor в �
 
   expect(result.execution).toMatchObject({
     pipeline_status: "FAILED",
-    steps_total: 6,
-    steps_executed: 6,
+    steps_total: 7,
+    steps_executed: 7,
     extractor_failures: ["funding_source_extractor"],
   });
   expect(result.fundingExtractor).toMatchObject({ status: "technical_error", error_code: "TRUNCATED_JSON" });
@@ -306,15 +807,15 @@ test("fault injection не превращает technical Funding Extractor в �
     reason_codes: { funding_source: ["technical_input_error"] },
   });
   expect(result.gate).toEqual({
-    decisions: { interest: "AUTO_SAVE", funding_source: "TECHNICAL_ERROR", purchase_term: "SAVE_UNDETERMINED" },
-    values_for_save: { interest: ["Новостройки"], funding_source: null, purchase_term: "не определено" },
+    decisions: { interest: "AUTO_SAVE", funding_source: "TECHNICAL_ERROR", purchase_term: "SAVE_UNDETERMINED", next_contact_date: "DO_NOT_UPDATE" },
+    values_for_save: { interest: ["Новостройки"], funding_source: null, purchase_term: "не определено", next_contact_date: null },
     blocked_attributes: [],
     technical_errors: ["funding_source"],
     gate_status: "PARTIAL_READY",
   });
   expect(result.crm).toEqual({
-    attributes: { interest: ["Новостройки"], funding_source: null, purchase_term: "не определено" },
-    update_actions: { interest: "SET", funding_source: "ERROR", purchase_term: "SET_UNDETERMINED" },
+    attributes: { interest: ["Новостройки"], funding_source: null, purchase_term: "не определено", next_contact_date: null },
+    update_actions: { interest: "SET", funding_source: "ERROR", purchase_term: "SET_UNDETERMINED", next_contact_date: "SKIP" },
     pipeline_status: "PARTIAL_READY",
     blocked_attributes: [],
     technical_errors: ["funding_source"],
@@ -430,15 +931,16 @@ test("Attributes Judge валидирует единый contract, decisions и 
       interest_extractor: { value: ["Ипотека"], evidence: ["Клиент: «Нужна консультация»"] },
       funding_source_extractor: { value: "ипотека одобрена", evidence: "Ипотека одобрена" },
       purchase_term_extractor: { value: "не определено", evidence: "" },
+      next_contact_date_extractor: { detected: false, next_contact_at: null, precision: "none", action: "none", actor: "none", raw_time_expression: null, evidence: null, confidence: 1 },
       __stage_provenance: {},
     };
-    for (const key of ["interest_extractor", "funding_source_extractor", "purchase_term_extractor"]) baseCtx.__stage_provenance[key] = { run_id: "judge-run", transcript_hash: "judge-transcript", pipeline_configuration_hash: "judge-pipeline" };
+    for (const key of ["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "next_contact_date_extractor"]) baseCtx.__stage_provenance[key] = { run_id: "judge-run", transcript_hash: "judge-transcript", pipeline_configuration_hash: "judge-pipeline" };
     const valid: any = {
-      attributes: { interest: ["Ипотека", "Новостройки"], funding_source: "ипотека одобрена", purchase_term: "не определено" },
-      attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready" },
-      decisions: { interest: "correct", funding_source: "approve", purchase_term: "approve" },
-      evidence: { interest: ["Нужна консультация", "Звоню по переуступке"], funding_source: "Ипотека одобрена", purchase_term: "" },
-      reason_codes: { interest: ["direct_confirmation", "newbuild_from_context"], funding_source: ["mortgage_approved_confirmed"], purchase_term: ["no_confirmed_purchase_term"] },
+      attributes: { interest: ["Ипотека", "Новостройки"], funding_source: "ипотека одобрена", purchase_term: "не определено", next_contact_date: null },
+      attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready", next_contact_date: "ready" },
+      decisions: { interest: "correct", funding_source: "approve", purchase_term: "approve", next_contact_date: "approve" },
+      evidence: { interest: ["Нужна консультация", "Звоню по переуступке"], funding_source: "Ипотека одобрена", purchase_term: "", next_contact_date: "" },
+      reason_codes: { interest: ["direct_confirmation", "newbuild_from_context"], funding_source: ["mortgage_approved_confirmed"], purchase_term: ["no_confirmed_purchase_term"], next_contact_date: ["next_contact_not_confirmed"] },
     };
     const validate = (value: unknown, current = baseCtx) => {
       try { validateApplicationAttributesCombinedJudge(value, current); return null; }
@@ -466,10 +968,17 @@ test("Attributes Judge semantic contract покрывает cases A–F без �
       const current: any = {
         __run_id: "semantic-run", __transcript_hash: "semantic-transcript", __pipeline_configuration_hash: "semantic-pipeline",
         interest_extractor: interestExtractor, funding_source_extractor: fundingExtractor, purchase_term_extractor: purchaseExtractor,
+        next_contact_date_extractor: { detected: false, next_contact_at: null, precision: "none", action: "none", actor: "none", raw_time_expression: null, evidence: null, confidence: 1 },
         __stage_provenance: {},
       };
-      for (const key of ["interest_extractor", "funding_source_extractor", "purchase_term_extractor"]) current.__stage_provenance[key] = { run_id: current.__run_id, transcript_hash: current.__transcript_hash, pipeline_configuration_hash: current.__pipeline_configuration_hash };
-      const judge = { attributes, attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready" }, decisions, evidence, reason_codes: reasonCodes };
+      for (const key of ["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "next_contact_date_extractor"]) current.__stage_provenance[key] = { run_id: current.__run_id, transcript_hash: current.__transcript_hash, pipeline_configuration_hash: current.__pipeline_configuration_hash };
+      const judge = {
+        attributes: { ...attributes, next_contact_date: null },
+        attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready", next_contact_date: "ready" },
+        decisions: { ...decisions, next_contact_date: "approve" },
+        evidence: { ...evidence, next_contact_date: "" },
+        reason_codes: { ...reasonCodes, next_contact_date: ["next_contact_not_confirmed"] },
+      };
       validateApplicationAttributesCombinedJudge(judge, current);
       return { judge, gate: buildApplicationAttributesQualityGate(judge) };
     };
@@ -520,34 +1029,34 @@ test("CRM-result независимо обрабатывает undetermined, tec
   await page.goto(projectUrl);
   const results = await page.evaluate(() => [
     buildApplicationAttributesCrmResult({
-      decisions: { interest: "SAVE_UNDETERMINED", funding_source: "SAVE_UNDETERMINED", purchase_term: "SAVE_UNDETERMINED" },
-      values_for_save: { interest: [], funding_source: "не определено", purchase_term: "не определено" },
+      decisions: { interest: "SAVE_UNDETERMINED", funding_source: "SAVE_UNDETERMINED", purchase_term: "SAVE_UNDETERMINED", next_contact_date: "DO_NOT_UPDATE" },
+      values_for_save: { interest: [], funding_source: "не определено", purchase_term: "не определено", next_contact_date: null },
       blocked_attributes: [], technical_errors: [], gate_status: "READY",
     }),
     buildApplicationAttributesCrmResult({
-      decisions: { interest: "AUTO_SAVE", funding_source: "TECHNICAL_ERROR", purchase_term: "AUTO_SAVE" },
-      values_for_save: { interest: ["Новостройки"], funding_source: null, purchase_term: "2–3 месяца" },
+      decisions: { interest: "AUTO_SAVE", funding_source: "TECHNICAL_ERROR", purchase_term: "AUTO_SAVE", next_contact_date: "DO_NOT_UPDATE" },
+      values_for_save: { interest: ["Новостройки"], funding_source: null, purchase_term: "2–3 месяца", next_contact_date: null },
       blocked_attributes: [], technical_errors: ["funding_source"], gate_status: "PARTIAL_READY",
     }),
     buildApplicationAttributesCrmResult({
-      decisions: { interest: "DO_NOT_UPDATE", funding_source: "AUTO_SAVE", purchase_term: "AUTO_SAVE" },
-      values_for_save: { interest: null, funding_source: "наличные / депозит", purchase_term: "до 1 месяца" },
+      decisions: { interest: "DO_NOT_UPDATE", funding_source: "AUTO_SAVE", purchase_term: "AUTO_SAVE", next_contact_date: "DO_NOT_UPDATE" },
+      values_for_save: { interest: null, funding_source: "наличные / депозит", purchase_term: "до 1 месяца", next_contact_date: null },
       blocked_attributes: ["interest"], technical_errors: [], gate_status: "PARTIAL_READY",
     }),
   ]);
 
   expect(results[0]).toMatchObject({
-    update_actions: { interest: "SET_UNDETERMINED", funding_source: "SET_UNDETERMINED", purchase_term: "SET_UNDETERMINED" },
+    update_actions: { interest: "SET_UNDETERMINED", funding_source: "SET_UNDETERMINED", purchase_term: "SET_UNDETERMINED", next_contact_date: "SKIP" },
     pipeline_status: "READY",
   });
   expect(results[1]).toMatchObject({
-    attributes: { interest: ["Новостройки"], funding_source: null, purchase_term: "2–3 месяца" },
-    update_actions: { interest: "SET", funding_source: "ERROR", purchase_term: "SET" },
+    attributes: { interest: ["Новостройки"], funding_source: null, purchase_term: "2–3 месяца", next_contact_date: null },
+    update_actions: { interest: "SET", funding_source: "ERROR", purchase_term: "SET", next_contact_date: "SKIP" },
     pipeline_status: "PARTIAL_READY",
   });
   expect(results[2]).toMatchObject({
-    attributes: { interest: null, funding_source: "наличные / депозит", purchase_term: "до 1 месяца" },
-    update_actions: { interest: "SKIP", funding_source: "SET", purchase_term: "SET" },
+    attributes: { interest: null, funding_source: "наличные / депозит", purchase_term: "до 1 месяца", next_contact_date: null },
+    update_actions: { interest: "SKIP", funding_source: "SET", purchase_term: "SET", next_contact_date: "SKIP" },
     pipeline_status: "PARTIAL_READY",
   });
 });
@@ -555,13 +1064,16 @@ test("CRM-result независимо обрабатывает undetermined, tec
 test("deterministic metrics сохраняют семантику reports 8/9/10 и технических состояний", async ({ page }) => {
   await page.goto(projectUrl);
   const results = await page.evaluate(() => {
-    const keys = ["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "attributes_judge", "attributes_quality_gate", "crm_attributes_result"];
+    const keys = ["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "next_contact_date_extractor", "attributes_judge", "attributes_quality_gate", "crm_attributes_result"];
     const build = (judge: any, pipelineStatus = "SUCCESS") => {
       const current: any = {
         __run_id: "metrics-run",
         __transcript_hash: "metrics-transcript",
         __pipeline_configuration_hash: "metrics-pipeline",
         attributes_judge: judge,
+        next_contact_date_extractor: judge.attribute_statuses.next_contact_date === "technical_error"
+          ? { status: "technical_error", error_code: "TEST_TECHNICAL_ERROR" }
+          : { detected: false, next_contact_at: null, precision: "none", action: "none", actor: "none", raw_time_expression: null, evidence: null, confidence: 1 },
         __stage_provenance: Object.fromEntries(keys.map((key) => [key, {
           run_id: "metrics-run",
           transcript_hash: "metrics-transcript",
@@ -570,15 +1082,16 @@ test("deterministic metrics сохраняют семантику reports 8/9/10
       };
       current.attributes_quality_gate = buildApplicationAttributesQualityGate(current.attributes_judge);
       current.crm_attributes_result = buildApplicationAttributesCrmResult(current.attributes_quality_gate);
-      current.pipeline_execution = { pipeline_status: pipelineStatus, steps_total: 6, steps_executed: 6, steps_successful: pipelineStatus === "SUCCESS" ? 6 : 5 };
+      current.pipeline_execution = { pipeline_status: pipelineStatus, steps_total: 7, steps_executed: 7, steps_successful: pipelineStatus === "SUCCESS" ? 7 : 6 };
       return { judge, gate: current.attributes_quality_gate, crm: current.crm_attributes_result, metrics: buildApplicationAttributesMetrics(current) };
     };
-    const combined = (interest: any, funding: any, purchase: any) => ({
-      attributes: { interest: interest.value, funding_source: funding.value, purchase_term: purchase.value },
-      attribute_statuses: { interest: interest.status ?? "ready", funding_source: funding.status ?? "ready", purchase_term: purchase.status ?? "ready" },
-      decisions: { interest: interest.decision, funding_source: funding.decision, purchase_term: purchase.decision },
-      evidence: { interest: interest.evidence, funding_source: funding.evidence, purchase_term: purchase.evidence },
-      reason_codes: { interest: interest.codes, funding_source: funding.codes, purchase_term: purchase.codes },
+    const nextUndetermined = { value: null, decision: "approve", evidence: "", codes: ["next_contact_not_confirmed"] };
+    const combined = (interest: any, funding: any, purchase: any, next: any = nextUndetermined) => ({
+      attributes: { interest: interest.value, funding_source: funding.value, purchase_term: purchase.value, next_contact_date: next.value },
+      attribute_statuses: { interest: interest.status ?? "ready", funding_source: funding.status ?? "ready", purchase_term: purchase.status ?? "ready", next_contact_date: next.status ?? "ready" },
+      decisions: { interest: interest.decision, funding_source: funding.decision, purchase_term: purchase.decision, next_contact_date: next.decision },
+      evidence: { interest: interest.evidence, funding_source: funding.evidence, purchase_term: purchase.evidence, next_contact_date: next.evidence },
+      reason_codes: { interest: interest.codes, funding_source: funding.codes, purchase_term: purchase.codes, next_contact_date: next.codes },
     });
     const undetermined = (reason: string) => ({ value: "не определено", decision: "approve", evidence: "", codes: [reason] });
     const technical = (interest = false) => ({ value: null, status: "technical_error", decision: "technical_error", evidence: interest ? [] : "", codes: ["technical_input_error"] });
@@ -608,14 +1121,14 @@ test("deterministic metrics сохраняют семантику reports 8/9/10
         undetermined("no_confirmed_funding_source"),
         undetermined("no_confirmed_purchase_term"),
       )),
-      allTechnical: build(combined(technical(true), technical(), technical()), "FAILED"),
+      allTechnical: build(combined(technical(true), technical(), technical(), technical()), "FAILED"),
     };
   });
 
   expect(results.report8.metrics).toMatchObject({ overall_confidence: 1, quality_score: 100, confidence_status: "COMPLETE" });
-  expect(results.report9.metrics).toMatchObject({ overall_confidence: 0.95, attribute_confidence: { interest: 0.85 }, quality_score: 100 });
-  expect(results.report10.metrics).toMatchObject({ overall_confidence: 0.9778, attribute_confidence: { interest: 0.9333 }, quality_score: 100 });
-  expect(results.report10.crm.attributes).toEqual({ interest: ["Новостройки", "Ипотека", "Безопасность сделок"], funding_source: "наличные / депозит", purchase_term: "не определено" });
+  expect(results.report9.metrics).toMatchObject({ overall_confidence: 0.9625, attribute_confidence: { interest: 0.85 }, quality_score: 100 });
+  expect(results.report10.metrics).toMatchObject({ overall_confidence: 0.9833, attribute_confidence: { interest: 0.9333 }, quality_score: 100 });
+  expect(results.report10.crm.attributes).toEqual({ interest: ["Новостройки", "Ипотека", "Безопасность сделок"], funding_source: "наличные / депозит", purchase_term: "не определено", next_contact_date: null });
   expect(results.allUndetermined.metrics).toMatchObject({ overall_confidence: 1, quality_score: 100 });
   expect(results.corrected.metrics).toMatchObject({ attribute_confidence: { interest: 0.9 }, quality_score: 95, quality_criteria: { extractor_correctness: 75 } });
   expect(results.allTechnical.gate.gate_status).toBe("BLOCKED");
@@ -662,9 +1175,9 @@ test("custom orchestration считает только enabled stages и бло�
 
   expect(result.execution).toMatchObject({
     pipeline_status: "SUCCESS",
-    steps_total: 6,
-    steps_executed: 6,
-    steps_successful: 6,
+    steps_total: 7,
+    steps_executed: 7,
+    steps_successful: 7,
     extractor_failures: [],
     judge_failures: [],
   });

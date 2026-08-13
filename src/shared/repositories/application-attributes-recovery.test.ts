@@ -7,7 +7,7 @@ const projectId = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
 
 function readRecoveredConfig() {
   const context = { window: {} as Record<string, unknown> };
-  for (const file of ["ai-application-attributes-pipeline-v14.js", "ai-application-attributes-pipeline-v15.js", "ai-application-attributes-pipeline-v16.js", "ai-application-attributes-pipeline-v17.js", "ai-application-attributes-pipeline-v18.js"]) {
+  for (const file of ["ai-application-attributes-pipeline-v14.js", "ai-application-attributes-pipeline-v15.js", "ai-application-attributes-pipeline-v16.js", "ai-application-attributes-pipeline-v17.js", "ai-application-attributes-pipeline-v18.js", "ai-application-attributes-pipeline-v19.js", "ai-application-attributes-pipeline-v20.js", "ai-application-attributes-pipeline-v21.js", "ai-application-attributes-pipeline-v22.js", "ai-application-attributes-pipeline-v23.js"]) {
     runInNewContext(readFileSync(resolve(process.cwd(), "public", file), "utf8"), context);
   }
   return context.window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__ as {
@@ -19,16 +19,17 @@ function readRecoveredConfig() {
 }
 
 describe("AI Атрибуты в Заявке recovery preset", () => {
-  it("contains the recovered v18 six-stage application-attributes pipeline", () => {
+  it("contains the recovered v23 seven-stage application-attributes pipeline", () => {
     const config = readRecoveredConfig();
 
     expect(config.version).toBe(14);
-    expect(config.revision).toBe(18);
+    expect(config.revision).toBe(23);
     expect(config.deletedStageOutKeys).toEqual(["interest_judge", "funding_source_judge", "purchase_term_judge", "attributes_merger"]);
     expect(config.stages.map((stage) => stage.outKey)).toEqual([
       "interest_extractor",
       "funding_source_extractor",
       "purchase_term_extractor",
+      "next_contact_date_extractor",
       "attributes_judge",
       "attributes_quality_gate",
       "crm_attributes_result",
@@ -38,12 +39,34 @@ describe("AI Атрибуты в Заявке recovery preset", () => {
     expect(config.stages[0].prompt).toContain("Ты — Extractor, а не проверщик");
     expect(config.stages[0].prompt).not.toContain("{{ctx.interest_extractor}}");
     expect(config.stages[0].prompt).toContain("{{transcript}}");
-    expect(config.stages[3].prompt).toContain("{{attributes_judge_input}}");
+    expect(config.stages[3]).toMatchObject({
+      enabled: true,
+      type: "llm",
+      name: "Определение даты следующего контакта",
+      outKey: "next_contact_date_extractor",
+      model: "gpt-5-mini",
+      provider: "ai-tunnel",
+      temperature: 0,
+      maxTokens: 2000,
+      responseContract: "application_next_contact_date_extractor_v1",
+    });
     expect(config.stages[3].prompt).toContain("{{transcript}}");
-    expect(config.stages[4].prompt).toContain("{{ctx.attributes_judge}}");
-    expect(config.stages[4].prompt).not.toContain("attributes_merger");
-    expect(config.stages[5].prompt).toContain("{{attributes_quality_gate}}");
-    expect(config.stages[5]).toMatchObject({
+    expect(config.stages[3].prompt).toContain("{{call_datetime}}");
+    expect(config.stages[3].prompt).toContain("{{call_end_datetime}}");
+    expect(config.stages[3].prompt).toContain("{{timezone}}");
+    expect(config.stages[3].prompt).toContain("сегодня вечером");
+    expect(config.stages[3].prompt).toContain("call_end_datetime + 35 минут");
+    expect(config.stages[3].prompt.startsWith("Ты — AI-экстрактор атрибута заявки «Дата следующего контакта»")).toBe(true);
+    expect(config.stages[4].sourceOutKey).toContain("next_contact_date_extractor");
+    expect(config.stages[4].prompt).toContain("{{attributes_judge_input}}");
+    expect(config.stages[4].prompt).toContain("{{transcript}}");
+    expect(config.stages[5].prompt).toContain("{{ctx.attributes_judge}}");
+    expect(config.stages[5].prompt).not.toContain("attributes_merger");
+    expect(config.stages[5].prompt).toContain("next_contact_date");
+    expect(config.stages[5].prompt).toContain("все четыре");
+    expect(config.stages[6].prompt).toContain("{{attributes_quality_gate}}");
+    expect(config.stages[6].prompt).toContain('"next_contact_date":null');
+    expect(config.stages[6]).toMatchObject({
       runtimeType: "deterministic",
       actualExecutor: "code",
       sourceOutKey: "attributes_quality_gate",
@@ -53,8 +76,8 @@ describe("AI Атрибуты в Заявке recovery preset", () => {
     expect(config.stages[0]).toMatchObject({ maxTokens: 4000, responseContract: "application_interest_extractor_v1" });
     expect(config.stages[1]).toMatchObject({ maxTokens: 2000, responseContract: "application_funding_source_extractor_v1" });
     expect(config.stages[2]).toMatchObject({ maxTokens: 2000, responseContract: "application_purchase_term_extractor_v1" });
-    expect(config.stages[3]).toMatchObject({ type: "check", runtimeType: "llm_judge", outKey: "attributes_judge", responseContract: "application_attributes_judge_v1", maxTokens: 4000 });
-    expect(config.stages[4]).toMatchObject({ runtimeType: "deterministic", actualExecutor: "code", sourceOutKey: "attributes_judge", contractId: "application_attributes_quality_gate", contractVersion: "v1" });
+    expect(config.stages[4]).toMatchObject({ type: "check", runtimeType: "llm_judge", outKey: "attributes_judge", responseContract: "application_attributes_judge_v1", maxTokens: 5000 });
+    expect(config.stages[5]).toMatchObject({ runtimeType: "deterministic", actualExecutor: "code", sourceOutKey: "attributes_judge", contractId: "application_attributes_quality_gate", contractVersion: "v1" });
   });
 
   it("distinguishes current primary-market interest from the seller's object history", () => {
@@ -70,7 +93,7 @@ describe("AI Атрибуты в Заявке recovery preset", () => {
     expect(extractor.prompt).toContain("Рассматриваю также несданные квартиры от застройщика");
     expect(extractor.prompt).toContain("Звоню по переуступке, когда сдаётся корпус?");
 
-    expect(judge.promptVersion).toBe(18);
+    expect(judge.promptVersion).toBe(21);
     expect(judge.prompt).toContain("INTEREST");
     expect(judge.prompt).toContain("newbuild_from_context");
     expect(judge.prompt).toContain("прошлый ДДУ продавца");
@@ -90,6 +113,11 @@ describe("AI Атрибуты в Заявке recovery preset", () => {
     expect(html).toContain('<script src="/ai-application-attributes-pipeline-v16.js"></script>');
     expect(html).toContain('<script src="/ai-application-attributes-pipeline-v17.js"></script>');
     expect(html).toContain('<script src="/ai-application-attributes-pipeline-v18.js"></script>');
+    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v19.js"></script>');
+    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v20.js"></script>');
+    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v21.js"></script>');
+    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v22.js"></script>');
+    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v23.js"></script>');
     expect(html).toContain(`const APPLICATION_ATTRIBUTES_PROJECT_ID = '${projectId}';`);
     expect(html).toContain("restoreApplicationAttributesPipelineConfig()||restoreAiSummaryTenAugustPipelineConfig()||restoreTranscriptionModulePipelineConfig()");
     expect(html).toContain("if(IS_APPLICATION_ATTRIBUTES_PROJECT){");
