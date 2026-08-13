@@ -359,6 +359,7 @@
 <script src="/ai-application-attributes-pipeline-v23.js"></script>
 <script src="/ai-application-attributes-pipeline-v24.js"></script>
 <script src="/ai-application-attributes-pipeline-v25.js"></script>
+<script src="/ai-application-attributes-pipeline-v26.js"></script>
 <script src="/ai-summary-10-08-pipeline-v1.js"></script>
 <script src="/ai-summary-10-08-store-cleaner.js"></script>
 <script src="/ai-summary-10-08-conversation-judge-v5.js"></script>
@@ -1949,7 +1950,7 @@ function restoreApplicationAttributesPipelineConfig(){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT) return null;
   try{
     const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
-    if(!seed||seed.version!==14||Number(seed.revision)<25||!Array.isArray(seed.stages)||seed.stages.length!==7) return null;
+    if(!seed||seed.version!==14||Number(seed.revision)<26||!Array.isArray(seed.stages)||seed.stages.length!==7) return null;
     deletedStageOutKeys=Array.isArray(seed.deletedStageOutKeys)?seed.deletedStageOutKeys.filter(Boolean):[];
     const restored=seed.stages.map(stage=>({id:s(),...stage}));
     localStorage.setItem(CONFIG_STORAGE_KEY,JSON.stringify({
@@ -2071,7 +2072,7 @@ function migrateApplicationAttributesNextContactDateContract(stages){
 function migrateApplicationAttributesCallMetadataRuntime(stages){
   if(!IS_APPLICATION_ATTRIBUTES_PROJECT||!Array.isArray(stages)) return false;
   const seed=window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__;
-  if(!seed||Number(seed.revision)<25||!Array.isArray(seed.stages)) return false;
+  if(!seed||Number(seed.revision)<26||!Array.isArray(seed.stages)) return false;
   const seedByKey=Object.fromEntries(seed.stages.map(stage=>[stage.outKey,stage]));
   let migrated=false;
   const nextContact=stages.find(stage=>stage&&stage.outKey==='next_contact_date_extractor');
@@ -2080,6 +2081,23 @@ function migrateApplicationAttributesCallMetadataRuntime(stages){
     nextContact.prompt=seedNextContact.prompt;
     nextContact.promptVersion=seedNextContact.promptVersion;
     migrated=true;
+  }
+  for(const key of ['interest_extractor','attributes_judge']){
+    const stage=stages.find(item=>item&&item.outKey===key),seedStage=seedByKey[key];
+    if(!stage||!seedStage||Number(stage.promptVersion)>=26) continue;
+    const shippedPrompt=key==='interest_extractor'
+      ? String(stage.prompt||'').startsWith('Ты определяешь только атрибут заявки «Интересует»')&&String(stage.prompt||'').includes('ИСТОРИЯ ОБЪЕКТА НЕ РАВНА ИНТЕРЕСУ К НОВОСТРОЙКАМ')
+      : String(stage.prompt||'').startsWith('Ты — единый независимый Attributes Judge');
+    if(!shippedPrompt) continue;
+    const safetyMarker=key==='interest_extractor'?'БЕЗОПАСНОСТЬ СДЕЛОК — ОТДЕЛЬНАЯ ПОТРЕБНОСТЬ':'HARD-NEGATIVE ДЛЯ «БЕЗОПАСНОСТЬ СДЕЛОК»';
+    if(!String(stage.prompt||'').includes(safetyMarker)){
+      const seedMarkerIndex=String(seedStage.prompt||'').indexOf(safetyMarker);
+      const followingMarker=key==='interest_extractor'?'ПЕРЕД ОТВЕТОМ ПРОВЕРЬ':'CROSS-ATTRIBUTE';
+      const rule=seedMarkerIndex<0?'':String(seedStage.prompt||'').slice(seedMarkerIndex,String(seedStage.prompt||'').indexOf('\n\n'+followingMarker,seedMarkerIndex));
+      stage.prompt=rule&&String(stage.prompt||'').includes(followingMarker)?String(stage.prompt).replace(followingMarker,rule+'\n\n'+followingMarker):seedStage.prompt;
+      migrated=true;
+    }
+    stage.promptVersion=26;
   }
   for(const key of ['attributes_quality_gate','crm_attributes_result']){
     const stage=stages.find(item=>item&&item.outKey===key),seedStage=seedByKey[key];
@@ -3381,7 +3399,7 @@ function applicationAttributesNextContactCandidate(transcript){
   const source=String(transcript||'').replace(/\r/g,'');
   const turns=[...source.matchAll(/(?:^|\n)(Агент|Менеджер):\s*([\s\S]*?)(?=\n(?:Агент|Менеджер|Оператор|Клиент|Неизвестный спикер):|$)/gi)].map(match=>match[2].replace(/\s+/g,' ').trim()).filter(Boolean);
   const agentText=turns.join(' \n ');
-  const action=/(?:позвоню|перезвоню|наберу|напишу|пришлю|отправлю|скину|свяжусь|дам\s+знать)/i.exec(agentText);
+  const action=/(?:по(?:звон|зван)[а-яё]*|перезвон[а-яё]*|набер[а-яё]*|созвон[а-яё]*|свяж[а-яё]*|напиш[а-яё]*|отправ[а-яё]*|пришл[а-яё]*|скин[а-яё]*|дам\s+знать|сообщ[а-яё]*|верн[а-яё]*\s+с\s+информац[а-яё]*|подтверж[а-яё]*)/i.exec(agentText);
   const temporal=/(?:сегодня|завтра|послезавтра|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|утром|дн[ёе]м|вечером|после\s+работы|через\s+(?:\d+|тридцать|т?30ать)|минут\s+через\s+(?:\d+|тридцать|т?30ать)|30\s*[–—-]\s*(?:40|4к))/i.exec(agentText);
   const possible=Boolean(action&&temporal);
   return {possible_next_contact_candidate:possible,action_marker:action&&action[0]||null,temporal_marker:temporal&&temporal[0]||null,agent_turns_checked:turns.length,evidence_excerpt:possible?agentText.slice(Math.max(0,Math.min(action.index,temporal.index)-100),Math.max(action.index+action[0].length,temporal.index+temporal[0].length)+180):null};
@@ -8014,7 +8032,9 @@ function mockApplicationNextContactDate(prompt){
   if(/агент:[^\n]*(?:напишу|позвоню|перезвоню|наберу)[^\n]*(?:через 30[–—-](?:40|4к)|минут через 30[–—-]40)|агент:[^\n]*(?:через 30[–—-](?:40|4к)|минут через 30[–—-]40)[^\n]*(?:напишу|позвоню|перезвоню|наберу)/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'range',action:/напишу/i.test(source)?'message':'callback',actor:'agent',raw_time_expression:(source.match(/(?:(?:минут )?через )30[–—-](?:40|4к)(?: минут)?/i)||[])[0]||'через 30–40 минут',evidence:'Агент подтвердил следующий контакт через 30–40 минут.',confidence:.95};
   if(/агент:[^\n]*(?:напишу|позвоню|перезвоню|наберу)[^\n]*(?:минут через (?:тридцать|т?30ать)|через (?:тридцать|т?30ать))|агент:[^\n]*(?:минут через (?:тридцать|т?30ать)|через (?:тридцать|т?30ать))[^\n]*(?:напишу|позвоню|перезвоню|наберу)/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'exact',action:/напишу/i.test(source)?'message':'callback',actor:'agent',raw_time_expression:(source.match(/(?:минут через|через) (?:тридцать|т?30ать)(?: минут)?/i)||[])[0],evidence:'Агент подтвердил следующий контакт примерно через тридцать минут.',confidence:.94};
   if(/могу вам сегодня вечером точно сказать, перезвонить или написать/i.test(source)&&/сможете позвонить сегодня вечером[\s\S]*буду ждать звонка/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'сегодня вечером',evidence:'Агент: «Могу вам сегодня вечером точно сказать, перезвонить или написать?»; Клиент: «Хорошо, сможете позвонить сегодня вечером?» — «Да, конечно. Всё, буду ждать звонка.»',confidence:.96};
+  if(/агент:[^\n]*(?:сегодня вечером[^\n]*(?:позвон|перезвон|набер|напиш)|(?:позвон|перезвон|набер|напиш)[^\n]*сегодня вечером)/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:/напиш/i.test(source)?'message':'callback',actor:'agent',raw_time_expression:'сегодня вечером',evidence:'Агент подтвердил следующий контакт сегодня вечером.',confidence:.96};
   if(/через 30 минут вам перезвоню/i.test(source)&&end) return {detected:true,next_contact_at:null,precision:'exact',action:'callback',actor:'agent',raw_time_expression:'через 30 минут',evidence:'Агент: «Через 30 минут вам перезвоню.»',confidence:.98};
+  if(/завтра в 15:30 перезвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'exact',action:'callback',actor:'agent',raw_time_expression:'завтра в 15:30',evidence:'Агент: «Завтра в 15:30 перезвоню.»',confidence:.98};
   if(/агент:[^\n]*завтра вечером[^\n]*(?:позвон|перезвон|набер)/i.test(source)||/агент:[^\n]*(?:позвон|перезвон|набер)[^\n]*завтра вечером/i.test(source)) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Агент подтвердил звонок завтра вечером.',confidence:.96};
   if(/завтра ближе к вечеру позвоню/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра ближе к вечеру',evidence:'Агент: «Завтра ближе к вечеру позвоню.»',confidence:.96};
   if(/завтра перезвоните мне, да, вечером[\s\S]*да, конечно/i.test(source)&&call) return {detected:true,next_contact_at:null,precision:'daypart',action:'callback',actor:'agent',raw_time_expression:'завтра вечером',evidence:'Клиент: «Завтра перезвоните мне, да, вечером?» Агент: «Да, конечно.»',confidence:.95};
@@ -8029,21 +8049,33 @@ function mockPipelineResponse(prompt){
   if(IS_APPLICATION_ATTRIBUTES_PROJECT){
     const fundingFault=source.includes('[FAULT_FUNDING_EXTRACTOR]')||source.includes('"decision": "technical_error"')||source.includes('"funding_source": "technical_error"');
     const currentProductionCase=source.includes('по квартире Шелгунова')&&source.includes('До пятницы, до завтра');
-    if(source.startsWith('Ты определяешь только атрибут заявки «Интересует»')) return currentProductionCase?{value:[],evidence:[]}:{value:['Новостройки'],evidence:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»']};
-    if(source.startsWith('Ты определяешь только атрибут заявки «Источник средств»')) return currentProductionCase?{value:'ипотека одобрена',evidence:'Клиент: «Угу. Да-да, уже одобряли.»'}:{value:'ипотека в процессе',evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.'};
-    if(source.startsWith('Ты определяешь только атрибут заявки «Срок покупки»')) return currentProductionCase||fundingFault?{value:'не определено',evidence:''}:{value:'2–3 месяца',evidence:'Хотелось бы в ближайшие два-три месяца определиться.'};
+    const noisyProductionCase=source.includes('Тихорецкий проспект')&&source.includes('через 30—4к');
+    const legalObjectCase=source.includes('Есть ли обременение у квартиры?')&&source.includes('юридически чистая?');
+    const safetyServiceCase=source.includes('отдельная проверка безопасности сделки')&&source.includes('схемы расчётов');
+    if(source.startsWith('Ты определяешь только атрибут заявки «Интересует»')){
+      if(currentProductionCase) return {value:[],evidence:[]};
+      if(noisyProductionCase) return {value:['Ипотека','Безопасность сделок'],evidence:['Клиент подтверждает интерес к консультации по ипотеке.','Клиент спрашивает про чистоту квартиры и обременения.']};
+      if(legalObjectCase) return {value:['Безопасность сделок'],evidence:['Клиент: «Есть ли обременение у квартиры? Она юридически чистая?»']};
+      if(safetyServiceCase) return {value:['Безопасность сделок'],evidence:['Клиент: «Нам нужна отдельная проверка безопасности сделки и схемы расчётов».']};
+      return {value:['Новостройки'],evidence:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»']};
+    }
+    if(source.startsWith('Ты определяешь только атрибут заявки «Источник средств»')) return currentProductionCase?{value:'ипотека одобрена',evidence:'Клиент: «Угу. Да-да, уже одобряли.»'}:noisyProductionCase?{value:'ипотека в процессе',evidence:'Клиент: «Это будет ипотека.»'}:{value:'ипотека в процессе',evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.'};
+    if(source.startsWith('Ты определяешь только атрибут заявки «Срок покупки»')) return currentProductionCase||noisyProductionCase||fundingFault?{value:'не определено',evidence:''}:{value:'2–3 месяца',evidence:'Хотелось бы в ближайшие два-три месяца определиться.'};
     if(source.startsWith('Ты — единый независимый Attributes Judge')){
       const technical=attribute=>source.includes('"'+attribute+'":{"status":"technical_error"');
       const nextTechnical=technical('next_contact_date');
       const preparedMatch=source.match(/ПОДГОТОВЛЕННЫЕ ВХОДЫ EXTRACTOR:\s*\n(\{[^\n]+\})\s*\n\nТРАНСКРИБАЦИЯ:/),prepared=preparedMatch?JSON.parse(preparedMatch[1]):{};
+      const interestResult=!technical('interest')&&prepared.interest&&prepared.interest.result||null;
+      const interestValues=interestResult&&Array.isArray(interestResult.value)?interestResult.value:currentProductionCase?[]:['Новостройки'];
+      const interestEvidence=interestResult&&Array.isArray(interestResult.evidence)?interestResult.evidence:currentProductionCase?[]:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'];
       const nextResult=!nextTechnical&&prepared.next_contact_date&&prepared.next_contact_date.result||null;
       const nextInput=Boolean(nextResult&&nextResult.detected);
       const nextValue=nextInput?Object.fromEntries(Object.entries(nextResult).filter(([key])=>key!=='evidence')):null;
       return {
-        attributes:{interest:technical('interest')?null:(currentProductionCase?[]:['Новостройки']),funding_source:technical('funding_source')?null:(currentProductionCase?'ипотека одобрена':'ипотека в процессе'),purchase_term:technical('purchase_term')?null:(currentProductionCase||fundingFault?'не определено':'2–3 месяца'),next_contact_date:nextValue},
+        attributes:{interest:technical('interest')?null:interestValues,funding_source:technical('funding_source')?null:(currentProductionCase?'ипотека одобрена':'ипотека в процессе'),purchase_term:technical('purchase_term')?null:(currentProductionCase||noisyProductionCase||fundingFault?'не определено':'2–3 месяца'),next_contact_date:nextValue},
         attribute_statuses:{interest:technical('interest')?'technical_error':'ready',funding_source:technical('funding_source')?'technical_error':'ready',purchase_term:technical('purchase_term')?'technical_error':'ready',next_contact_date:nextTechnical?'technical_error':'ready'},
         decisions:{interest:technical('interest')?'technical_error':'approve',funding_source:technical('funding_source')?'technical_error':'approve',purchase_term:technical('purchase_term')?'technical_error':'approve',next_contact_date:nextTechnical?'technical_error':'approve'},
-        evidence:{interest:technical('interest')||currentProductionCase?[]:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:technical('funding_source')?'':currentProductionCase?'Клиент: «Угу. Да-да, уже одобряли.»':'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:technical('purchase_term')||currentProductionCase||fundingFault?'':'Хотелось бы в ближайшие два-три месяца определиться.',next_contact_date:nextInput?String(nextResult.evidence||''):''},
+        evidence:{interest:technical('interest')?[]:interestEvidence,funding_source:technical('funding_source')?'':currentProductionCase?'Клиент: «Угу. Да-да, уже одобряли.»':noisyProductionCase?'Клиент: «Это будет ипотека.»':'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:technical('purchase_term')||currentProductionCase||noisyProductionCase||fundingFault?'':'Хотелось бы в ближайшие два-три месяца определиться.',next_contact_date:nextInput?String(nextResult.evidence||''):''},
         reason_codes:{interest:technical('interest')?['technical_input_error']:['direct_confirmation'],funding_source:technical('funding_source')?['technical_input_error']:['mortgage_in_process_confirmed'],purchase_term:technical('purchase_term')?['technical_input_error']:[fundingFault?'no_confirmed_purchase_term':'purchase_2_3_months'],next_contact_date:nextTechnical?['technical_input_error']:nextInput?['next_contact_confirmed']:['next_contact_not_confirmed']}
       };
     }
@@ -13493,7 +13525,7 @@ const APPLICATION_ATTRIBUTE_JUDGE_SOURCES=Object.freeze({interest_judge:'interes
 const APPLICATION_ATTRIBUTES_JUDGE_KEY='attributes_judge';
 const APPLICATION_ATTRIBUTES_JUDGE_DECISIONS=Object.freeze(['approve','correct','reject','technical_error']);
 const APPLICATION_ATTRIBUTES_JUDGE_STATUSES=Object.freeze(['ready','technical_error','invalid_input']);
-const APPLICATION_INTEREST_REASON_CODES=Object.freeze(['direct_confirmation','soft_confirmation','newbuild_from_context','explicit_rejection','mortgage_only_as_funding','ready_house_not_construction','missing_evidence','conflicting_statements','ambiguous_context','added_missing_value','no_confirmed_interest','technical_input_error']);
+const APPLICATION_INTEREST_REASON_CODES=Object.freeze(['direct_confirmation','soft_confirmation','newbuild_from_context','explicit_rejection','mortgage_only_as_funding','ready_house_not_construction','object_legal_question_not_safety_service','missing_evidence','conflicting_statements','ambiguous_context','added_missing_value','no_confirmed_interest','technical_input_error']);
 const APPLICATION_FUNDING_REASON_CODES=Object.freeze(['cash_or_deposit_confirmed','mortgage_approved_confirmed','mortgage_in_process_confirmed','property_sale_dependency','cash_payment_not_funding_source','mixed_funding_priority','conflicting_statements','missing_evidence','unsupported_value','insufficient_information','no_confirmed_funding_source','technical_input_error']);
 const APPLICATION_PURCHASE_REASON_CODES=Object.freeze(['purchase_within_1_month','purchase_2_3_months','purchase_3_6_months','purchase_over_6_months','derived_from_linked_event','viewing_is_not_purchase','callback_is_not_purchase','handover_is_not_purchase','bank_decision_is_not_purchase','missing_evidence','insufficient_information','no_confirmed_purchase_term','technical_input_error']);
 const APPLICATION_NEXT_CONTACT_REASON_CODES=Object.freeze(['next_contact_confirmed','next_contact_not_confirmed','client_initiates_contact','viewing_is_not_next_contact','insufficient_time_precision','invalid_datetime','missing_evidence','incorrect_relative_date','technical_input_error']);
@@ -13675,10 +13707,48 @@ function applicationAttributesExpectedDecision(attribute,extractorValue,finalVal
   return finalUndetermined&&extractorDefined?'reject':'correct';
 }
 
+function applicationAttributesInterestSemanticRisks(transcript,interestValues){
+  const source=String(transcript||'').toLowerCase().replace(/ё/g,'е'),values=Array.isArray(interestValues)?interestValues:[];
+  const risks=[];
+  const has=value=>values.includes(value);
+  if(has('Безопасность сделок')){
+    const objectLegal=/(?:обременен|собственник|прописан|юридическ[а-яё]*\s+чист|документ[а-яё]*\s+(?:на|по)\s+(?:квартир|дом|объект)|истори[а-яё]*\s+(?:квартир|дом|объект))/i.test(source);
+    const safetyService=/(?:отдельн[а-яё]*\s+(?:проверк|услуг|консультац)[а-яё]*[\s\S]{0,80}безопасност[а-яё]*\s+сделк|безопасн[а-яё]*\s+проведен[а-яё]*\s+сделк|(?:схем|безопасн)[а-яё]*\s+расчет[а-яё]*[\s\S]{0,80}(?:риск|мошеннич)|защит[а-яё]*\s+от\s+мошеннич|исключ[а-яё]*\s+риск[а-яё]*\s+сделк)/i.test(source);
+    if(objectLegal&&!safetyService) risks.push({attribute:'interest',value:'Безопасность сделок',reason_code:'object_legal_question_not_safety_service'});
+  }
+  if(has('Новостройки')){
+    const sellerHistory=/(?:собственник[а-яё]*[\s\S]{0,60}(?:покупал|приобретал)[а-яё]*\s+по\s+дду|(?:покупал|приобретал)[а-яё]*\s+по\s+дду[\s\S]{0,60}собственник|дду\s+в\s+20\d{2}|ключ[а-яё]*\s+получил[а-яё]*\s+(?:год|давно)\s+назад|дом\s+уже\s+сдан|собственност[а-яё]*\s+оформлен)/i.test(source);
+    const currentNewbuild=/(?:звоню\s+по\s+переуступ|покуп[а-яё]*[\s\S]{0,40}у\s+застройщик|рассматрива[а-яё]*[\s\S]{0,40}(?:новострой|несдан|строящ)|приобретаем[а-яё]*\s+(?:объект|квартир)[\s\S]{0,60}(?:не\s+сдан|строящ|срок\s+сдач))/i.test(source);
+    if(sellerHistory&&!currentNewbuild) risks.push({attribute:'interest',value:'Новостройки',reason_code:'seller_ddu_history_not_current_newbuild_interest'});
+  }
+  if(has('Ипотека')){
+    const mortgageStatus=/(?:ипотек[а-яё]*\s+(?:уже\s+)?одобрен|одобрил[а-яё]*\s+ипотек|ипотек[а-яё]*\s+(?:сейчас\s+)?в\s+процесс|банк[а-яё]*[\s\S]{0,40}одобр)/i.test(source);
+    const mortgageService=/(?:интерес[а-яё]*|нужн[а-яё]*|хот[а-яё]*|давай[а-яё]*|соглас[а-яё]*)[\s\S]{0,50}(?:консультац[а-яё]*\s+по\s+ипотек|ипотечн[а-яё]*\s+консультац)|консультац[а-яё]*\s+по\s+ипотек[\s\S]{0,50}(?:да|нужн|интерес)/i.test(source);
+    if(mortgageStatus&&!mortgageService) risks.push({attribute:'interest',value:'Ипотека',reason_code:'mortgage_status_not_consultation_interest'});
+  }
+  if(has('Строительство')){
+    const readyHouse=/(?:купить|покупк|подбира[а-яё]*|ищ[а-яё]*)[\s\S]{0,50}готов[а-яё]*\s+дом|готов[а-яё]*\s+дом[\s\S]{0,50}(?:купить|покупк|подбира[а-яё]*|ищ[а-яё]*)/i.test(source);
+    const constructionService=/(?:строит|построит|строительств|подряд)[\s\S]{0,60}(?:дом|коттедж)|(?:дом|коттедж)[\s\S]{0,60}(?:строит|построит|строительств|подряд)/i.test(source);
+    if(readyHouse&&!constructionService) risks.push({attribute:'interest',value:'Строительство',reason_code:'ready_house_not_construction'});
+  }
+  return risks;
+}
+
 function normalizeApplicationAttributesCombinedDecision(value,ctx){
   const result=enforceApplicationAttributesCombinedTechnicalErrors(value,ctx);
-  const sources={interest:'interest_extractor',funding_source:'funding_source_extractor',purchase_term:'purchase_term_extractor',next_contact_date:'next_contact_date_extractor'};
   const normalized=[];
+  const semanticRisks=applicationAttributesInterestSemanticRisks(transcriptText(ctx),result.attributes?.interest);
+  const safetyRisk=semanticRisks.find(item=>item.reason_code==='object_legal_question_not_safety_service');
+  if(safetyRisk&&Array.isArray(result.attributes.interest)){
+    const index=result.attributes.interest.indexOf('Безопасность сделок');
+    if(index>=0){
+      result.attributes.interest.splice(index,1);
+      if(Array.isArray(result.evidence.interest)) result.evidence.interest.splice(index,1);
+      result.reason_codes.interest=[...new Set([...(Array.isArray(result.reason_codes.interest)?result.reason_codes.interest:[]),safetyRisk.reason_code])];
+      normalized.push({attribute:'interest',field:'semantic_hard_negative',from:'Безопасность сделок',to:null,reason_code:safetyRisk.reason_code});
+    }
+  }
+  const sources={interest:'interest_extractor',funding_source:'funding_source_extractor',purchase_term:'purchase_term_extractor',next_contact_date:'next_contact_date_extractor'};
   for(const attribute of APPLICATION_ATTRIBUTE_KEYS){
     const sourceKey=sources[attribute];
     if(applicationAttributesExtractorSourceFailure(ctx,sourceKey)||result.attribute_statuses[attribute]!=='ready') continue;
@@ -14080,7 +14150,10 @@ function buildApplicationAttributesMetrics(ctx){
   const corrections=APPLICATION_ATTRIBUTE_KEYS.filter(key=>['correct','reject'].includes(decisions[key])).length;
   const nextContactCandidate=ctx.__next_contact_candidate_audit||applicationAttributesNextContactCandidate(transcriptText(ctx));
   const likelyMissedNextContact=judge.attributes?.next_contact_date===null&&nextContactCandidate.possible_next_contact_candidate===true;
-  const extractorCorrectness=technical||invalid||likelyMissedNextContact?0:[100,75,50,25,0][Math.min(corrections,4)];
+  const crm=ctx.crm_attributes_result||{};
+  const semanticRisks=applicationAttributesInterestSemanticRisks(transcriptText(ctx),crm.attributes?.interest);
+  const semanticRisk=semanticRisks.length>0;
+  const extractorCorrectness=technical||invalid||likelyMissedNextContact||semanticRisk?0:[100,75,50,25,0][Math.min(corrections,4)];
   let evidenceQuality=100;
   for(const key of APPLICATION_ATTRIBUTE_KEYS){
     const status=judge.attribute_statuses?.[key],value=judge.attributes?.[key],proof=judge.evidence?.[key];
@@ -14097,7 +14170,6 @@ function buildApplicationAttributesMetrics(ctx){
   const judgeConsistency=technical||invalid?0:APPLICATION_ATTRIBUTE_KEYS.every(key=>['approve','correct','reject'].includes(decisions[key]))?100:0;
   const provenanceValid=applicationAttributesProvenanceValid(ctx);
   const pipelineIntegrity=gate.gate_status==='PARTIAL_READY'?50:gate.gate_status==='READY'&&execution.pipeline_status==='SUCCESS'&&provenanceValid?100:0;
-  const crm=ctx.crm_attributes_result||{};
   const nextContactCrmConsistent=gate.decisions?.next_contact_date==='AUTO_SAVE'
     ? crm.update_actions?.next_contact_date==='SET'&&crm.attributes?.next_contact_date===gate.values_for_save?.next_contact_date
     : gate.decisions?.next_contact_date==='DO_NOT_UPDATE'
@@ -14114,9 +14186,11 @@ function buildApplicationAttributesMetrics(ctx){
   const confidence=applicationAttributesConfidence(ctx);
   return {
     ...confidence,
+    semantic_risk:semanticRisk,
+    semantic_risks:semanticRisks,
     quality_score:Math.round(Object.values(criteria).reduce((sum,value)=>sum+value,0)/5),
     quality_criteria:criteria,
-    calculation:{execution_type:'deterministic',tokens:0,cost:0,provenance_valid:provenanceValid,next_contact_date:{extractor_current:applicationAttributesContextIsCurrent(ctx,'next_contact_date_extractor'),judge_status:judge.attribute_statuses?.next_contact_date||null,judge_decision:judge.decisions?.next_contact_date||null,gate_decision:gate.decisions?.next_contact_date||null,crm_action:crm.update_actions?.next_contact_date||null,possible_next_contact_candidate:nextContactCandidate.possible_next_contact_candidate,likely_missed:likelyMissedNextContact,candidate_audit:nextContactCandidate}}
+    calculation:{execution_type:'deterministic',tokens:0,cost:0,provenance_valid:provenanceValid,semantic_risk:semanticRisk,semantic_risks:semanticRisks,next_contact_date:{extractor_current:applicationAttributesContextIsCurrent(ctx,'next_contact_date_extractor'),judge_status:judge.attribute_statuses?.next_contact_date||null,judge_decision:judge.decisions?.next_contact_date||null,gate_decision:gate.decisions?.next_contact_date||null,crm_action:crm.update_actions?.next_contact_date||null,possible_next_contact_candidate:nextContactCandidate.possible_next_contact_candidate,likely_missed:likelyMissedNextContact,candidate_audit:nextContactCandidate}}
   };
 }
 
@@ -15701,14 +15775,14 @@ function formatApplicationAttributeValue(value){
 function formatApplicationNextContactDate(result){
   if(!result||result.detected!==true||typeof result.next_contact_at!=='string') return 'не определено';
   const value=result.next_contact_at.trim();
-  const match=value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/);
+  const match=value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/);
   if(!match||!Number.isFinite(Date.parse(value))) return 'не определено';
   const [,year,month,day,hour,minute]=match;
   const dateOnly=`${year}-${month}-${day}`;
   const calendarDate=new Date(`${dateOnly}T00:00:00Z`);
-  if(calendarDate.getUTCFullYear()!==Number(year)||calendarDate.getUTCMonth()+1!==Number(month)||calendarDate.getUTCDate()!==Number(day)) return 'не определено';
-  const formattedDate=`${day}.${month}.${year}`;
-  return hour!==undefined&&result.precision==='exact'?`${formattedDate}, ${hour}:${minute}`:formattedDate;
+  const monthNames=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  if(calendarDate.getUTCFullYear()!==Number(year)||calendarDate.getUTCMonth()+1!==Number(month)||calendarDate.getUTCDate()!==Number(day)||Number(hour)>23||Number(minute)>59) return 'не определено';
+  return `${Number(day)} ${monthNames[Number(month)-1]} ${hour}:${minute}`;
 }
 
 function renderApplicationAttributesFinal(totalTokens,totalCost,stageReports){

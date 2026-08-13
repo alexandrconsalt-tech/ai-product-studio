@@ -467,7 +467,7 @@ test("реальный UI path передаёт metadata и проводит о�
   expect(case1.result.attributes_judge.attribute_statuses.next_contact_date).toBe("ready");
   expect(case1.result.attributes_quality_gate.decisions.next_contact_date).toBe("AUTO_SAVE");
   expect(case1.result.crm_attributes_result).toMatchObject({ attributes: { next_contact_date: "2026-08-13T10:40:00+03:00" }, update_actions: { next_contact_date: "SET" } });
-  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13.08.2026");
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13 августа 10:40");
   await testInfo.attach("pipeline-report-case-1.json", { body: Buffer.from(JSON.stringify(case1, null, 2)), contentType: "application/json" });
 
   const case2 = await runFromUi({
@@ -490,7 +490,7 @@ test("реальный UI path передаёт metadata и проводит о�
   expect(case2Stage.raw).not.toBeNull();
   expect(case2.result.attributes_quality_gate.decisions.next_contact_date).toBe("AUTO_SAVE");
   expect(case2.result.crm_attributes_result).toMatchObject({ attributes: { next_contact_date: "2026-08-13T18:00:00+03:00" }, update_actions: { next_contact_date: "SET" } });
-  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13.08.2026");
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("13 августа 18:00");
   await testInfo.attach("pipeline-report-case-2.json", { body: Buffer.from(JSON.stringify(case2, null, 2)), contentType: "application/json" });
   await testInfo.attach("application-attributes-ui.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 });
@@ -619,7 +619,7 @@ test("текущий полный production case нормализуется н�
   await page.locator("#applicationCallTimezone").selectOption("Europe/Moscow");
   await page.locator("#runBtn").click();
   await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
-  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("14.08.2026");
+  await expect(page.locator("[data-result-next-contact-date]")).toHaveText("14 августа 10:00");
 
   const result = await page.evaluate(() => ({
     audit: ctx.__call_metadata_audit,
@@ -692,7 +692,7 @@ test("real reports A/B/C проходят 60/60 production-like UI runs", async 
       await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
       const report = await page.evaluate(() => {
         const stage = ((window as Window & { __lastApplicationStageReports?: Array<{ stage: { outKey: string }; report: unknown }> }).__lastApplicationStageReports || []).find((entry) => entry.stage.outKey === "next_contact_date_extractor")?.report;
-        return { extractor: ctx.next_contact_date_extractor, judge: ctx.attributes_judge, gate: ctx.attributes_quality_gate, crm: ctx.crm_attributes_result, metrics: ctx.attributes_metrics, temporal: ctx.temporal_normalization_audit, stage };
+        return { extractor: ctx.next_contact_date_extractor, judge: ctx.attributes_judge, gate: ctx.attributes_quality_gate, crm: ctx.crm_attributes_result, metrics: ctx.attributes_metrics, temporal: ctx.temporal_normalization_audit, candidate: ctx.__next_contact_candidate_audit, ui: document.querySelector("[data-result-next-contact-date]")?.textContent, stage };
       });
       expect(report.extractor, `${item.id}-${run}`).toMatchObject({ detected: true, next_contact_at: item.expected, precision: item.precision, actor: "agent", action: item.action });
       expect(report.judge.attribute_statuses.next_contact_date, `${item.id}-${run}`).toBe("ready");
@@ -700,6 +700,10 @@ test("real reports A/B/C проходят 60/60 production-like UI runs", async 
       expect(report.gate.decisions.next_contact_date, `${item.id}-${run}`).toBe("AUTO_SAVE");
       expect(report.crm.update_actions.next_contact_date, `${item.id}-${run}`).toBe("SET");
       expect(report.crm.attributes.next_contact_date, `${item.id}-${run}`).toBe(item.expected);
+      expect(report.ui, `${item.id}-${run}`).toMatch(/^\d{1,2} [а-яё]+ \d{2}:\d{2}$/i);
+      expect(report.candidate.possible_next_contact_candidate, `${item.id}-${run}`).toBe(true);
+      if(item.id==="A") expect(report.crm.attributes, `${item.id}-${run}`).toMatchObject({ interest: [], funding_source: "ипотека одобрена", purchase_term: "не определено" });
+      if(item.id==="C") expect(report.crm.attributes, `${item.id}-${run}`).toMatchObject({ interest: ["Ипотека"], funding_source: "ипотека в процессе", purchase_term: "не определено" });
       expect(report.stage.contract_audit, `${item.id}-${run}`).toMatchObject({ parse_status: "SUCCESS", schema_status: "VALID" });
       expect(report.stage.parseErr, `${item.id}-${run}`).toBeNull();
       reports.push({ case: item.id, run, ...report });
@@ -758,6 +762,93 @@ test("independent candidate alarm ставит likely_missed и снижает q
   expect(result.metrics.quality_criteria.evidence_quality).toBeLessThan(100);
   expect(result.metrics.quality_score).toBeLessThan(100);
   await testInfo.attach("likely-missed-report.json", { body: Buffer.from(JSON.stringify(result, null, 2)), contentType: "application/json" });
+});
+
+test("acceptance CASE A–D, F–H: абсолютное время, safety hard-negative и candidate audit", async ({ page }, testInfo) => {
+  await page.goto(projectUrl);
+  const run = async (transcript: string, start = "2026-08-13T10:00", end = "") => {
+    await page.locator("#transcript").fill(transcript);
+    await page.locator("#applicationCallDatetime").fill(start);
+    await page.locator("#applicationCallEndDatetime").fill(end);
+    await page.locator("#applicationCallTimezone").selectOption("Europe/Moscow");
+    await page.locator("#runBtn").click();
+    await expect(page.locator("#runBtn")).toBeEnabled({ timeout: 30_000 });
+    return page.evaluate(() => ({
+      judge: ctx.attributes_judge,
+      crm: ctx.crm_attributes_result,
+      metrics: ctx.attributes_metrics,
+      candidate: ctx.__next_contact_candidate_audit,
+      ui: document.querySelector("[data-result-next-contact-date]")?.textContent,
+    }));
+  };
+
+  const caseA = await run("Агент: В пятницу накануне наберу, позвоню.\nКлиент: Хорошо.");
+  expect(caseA.crm.attributes.next_contact_date).toBe("2026-08-14T10:00:00+03:00");
+  expect(caseA.ui).toBe("14 августа 10:00");
+
+  const caseB = await run("Агент: Сегодня вечером перезвоню.\nКлиент: Хорошо, буду ждать.");
+  expect(caseB.crm.attributes.next_contact_date).toBe("2026-08-13T18:00:00+03:00");
+  expect(caseB.ui).toBe("13 августа 18:00");
+
+  const caseC = await run(realCases.caseC, "2026-08-13T15:26");
+  expect(caseC.crm.attributes).toMatchObject({ interest: ["Ипотека"], funding_source: "ипотека в процессе", purchase_term: "не определено", next_contact_date: "2026-08-13T16:01:00+03:00" });
+  expect(caseC.ui).toBe("13 августа 16:01");
+  expect(caseC.judge.reason_codes.interest).toContain("object_legal_question_not_safety_service");
+
+  const caseD = await run("Агент: Завтра в 15:30 перезвоню.\nКлиент: Хорошо.");
+  expect(caseD.crm.attributes.next_contact_date).toBe("2026-08-14T15:30:00+03:00");
+  expect(caseD.ui).toBe("14 августа 15:30");
+
+  const caseF = await run("Клиент: Есть ли обременение у квартиры? Она юридически чистая?\nАгент: Да, документы готовы.");
+  expect(caseF.crm.attributes.interest).toEqual([]);
+  expect(caseF.judge.reason_codes.interest).toContain("object_legal_question_not_safety_service");
+
+  const caseG = await run("Клиент: Нам нужна отдельная проверка безопасности сделки и схемы расчётов.\nАгент: Хорошо.");
+  expect(caseG.crm.attributes.interest).toEqual(["Безопасность сделок"]);
+
+  const caseH = await run("Агент: Сегодня вечером вам перезвонить или написать?\nКлиент: Да.");
+  expect(caseH.candidate).toMatchObject({ possible_next_contact_candidate: true, temporal_marker: "Сегодня" });
+  expect(["перезвонить", "написать"]).toContain(caseH.candidate.action_marker?.toLowerCase());
+
+  await testInfo.attach("acceptance-cases-a-h.json", { body: Buffer.from(JSON.stringify({ caseA, caseB, caseC, caseD, caseF, caseG, caseH }, null, 2)), contentType: "application/json" });
+});
+
+test("semantic quality guard снижает score для известных сохранённых hard-negative interest", async ({ page }) => {
+  await page.goto(projectUrl);
+  const results = await page.evaluate(() => {
+    const build = (transcript: string, interest: string[]) => {
+      const current: any = {
+        __transcript: transcript,
+        __run_id: "semantic-risk-run",
+        __transcript_hash: "semantic-risk-transcript",
+        __pipeline_configuration_hash: "semantic-risk-pipeline",
+        attributes_judge: {
+          attributes: { interest, funding_source: "не определено", purchase_term: "не определено", next_contact_date: null },
+          attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready", next_contact_date: "ready" },
+          decisions: { interest: "approve", funding_source: "approve", purchase_term: "approve", next_contact_date: "approve" },
+          evidence: { interest: interest.map(() => transcript), funding_source: "", purchase_term: "", next_contact_date: "" },
+          reason_codes: { interest: ["direct_confirmation"], funding_source: ["no_confirmed_funding_source"], purchase_term: ["no_confirmed_purchase_term"], next_contact_date: ["next_contact_not_confirmed"] },
+        },
+        attributes_quality_gate: { decisions: { interest: "AUTO_SAVE", funding_source: "SAVE_UNDETERMINED", purchase_term: "SAVE_UNDETERMINED", next_contact_date: "DO_NOT_UPDATE" }, values_for_save: { interest, funding_source: "не определено", purchase_term: "не определено", next_contact_date: null }, gate_status: "READY" },
+        crm_attributes_result: { attributes: { interest, funding_source: "не определено", purchase_term: "не определено", next_contact_date: null }, update_actions: { interest: "SET", funding_source: "SET_UNDETERMINED", purchase_term: "SET_UNDETERMINED", next_contact_date: "SKIP" } },
+        pipeline_execution: { pipeline_status: "SUCCESS" },
+        __stage_provenance: {},
+      };
+      for (const key of ["interest_extractor", "funding_source_extractor", "purchase_term_extractor", "next_contact_date_extractor", "attributes_judge", "attributes_quality_gate", "crm_attributes_result"]) current.__stage_provenance[key] = { run_id: current.__run_id, transcript_hash: current.__transcript_hash, pipeline_configuration_hash: current.__pipeline_configuration_hash };
+      return buildApplicationAttributesMetrics(current);
+    };
+    return [
+      build("Собственник покупал квартиру по ДДУ в 2021 году, дом уже сдан.", ["Новостройки"]),
+      build("Ипотека уже одобрена банком.", ["Ипотека"]),
+      build("Ищем купить готовый дом.", ["Строительство"]),
+    ];
+  });
+
+  for (const metrics of results) {
+    expect(metrics.semantic_risk).toBe(true);
+    expect(metrics.quality_score).toBeLessThan(100);
+    expect(metrics.calculation.semantic_risk).toBe(true);
+  }
 });
 
 test("AI Атрибуты заявки выполняет 7 этапов с отдельным LLM Agent даты следующего контакта", async ({ page }) => {
@@ -946,7 +1037,7 @@ test("AI Атрибуты заявки выполняет 7 этапов с от
   await expect(finalResult.locator("[data-result-interest]")) .toHaveText("Новостройки");
   await expect(finalResult.locator("[data-result-funding-source]")) .toHaveText("ипотека в процессе");
   await expect(finalResult.locator("[data-result-purchase-term]")) .toHaveText("2–3 месяца");
-  await expect(finalResult.locator("[data-result-next-contact-date]")) .toHaveText("15.08.2026, 14:00");
+  await expect(finalResult.locator("[data-result-next-contact-date]")) .toHaveText("15 августа 14:00");
   await expect(finalResult.locator("[data-result-overall-confidence]")) .toHaveText("100%");
   await expect(finalResult.locator("[data-result-quality-score]")) .toHaveText("100%");
   await expect(finalResult).not.toContainText("Итоговое саммари");
@@ -1031,7 +1122,7 @@ test("renderer показывает финальный contract последне
   await expect(finalResult).toContainText("Интересует: Новостройки");
   await expect(finalResult).toContainText("Источник средств: не определено");
   await expect(finalResult).toContainText("Срок покупки: не определено");
-  await expect(finalResult).toContainText("Дата следующего контакта: 14.08.2026, 15:00");
+  await expect(finalResult).toContainText("Дата следующего контакта: 14 августа 15:00");
   await expect(finalResult).toContainText("Уверенность: 98%");
   await expect(finalResult).toContainText("Оценка качества: 100%");
   await expect(finalResult.locator("[data-attributes-metrics-details]")) .toContainText("Уверенность · Интересует 95%");
@@ -1047,7 +1138,7 @@ test("renderer показывает финальный contract последне
   await expect(page.getByText(/Карточка CRM/)).toHaveCount(0);
 });
 
-test("renderer даты следующего контакта отображает дату без выдуманного времени, null и результат повторного запуска", async ({ page }) => {
+test("renderer даты следующего контакта всегда отображает нормализованные часы и минуты, null и повторный запуск", async ({ page }) => {
   await page.goto(projectUrl);
 
   const renderNextContactDate = async (nextContactDate: { detected: boolean; next_contact_at: string | null; precision: string }) => {
@@ -1070,12 +1161,14 @@ test("renderer даты следующего контакта отображае
     return page.locator("[data-result-next-contact-date]").textContent();
   };
 
-  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-14", precision: "date" })).resolves.toBe("14.08.2026");
-  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-14T00:00:00+03:00", precision: "date" })).resolves.toBe("14.08.2026");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-14", precision: "date" })).resolves.toBe("не определено");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-14T10:00:00+03:00", precision: "date" })).resolves.toBe("14 августа 10:00");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-13T18:00:00+03:00", precision: "daypart" })).resolves.toBe("13 августа 18:00");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-13T16:48:26+03:00", precision: "range" })).resolves.toBe("13 августа 16:48");
   await expect(renderNextContactDate({ detected: false, next_contact_at: "2026-08-14T15:00:00+03:00", precision: "exact" })).resolves.toBe("не определено");
   await expect(renderNextContactDate({ detected: true, next_contact_at: null, precision: "none" })).resolves.toBe("не определено");
-  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-02-30", precision: "date" })).resolves.toBe("не определено");
-  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-15T16:30:00+03:00", precision: "exact" })).resolves.toBe("15.08.2026, 16:30");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-02-30T10:00:00+03:00", precision: "date" })).resolves.toBe("не определено");
+  await expect(renderNextContactDate({ detected: true, next_contact_at: "2026-08-15T16:30:00+03:00", precision: "exact" })).resolves.toBe("15 августа 16:30");
 
   await page.evaluate(() => {
     (window as Window & { __downloadedPipelineReport?: string }).__downloadedPipelineReport = undefined;
@@ -1092,6 +1185,20 @@ test("renderer даты следующего контакта отображае
     detected: true,
     next_contact_at: "2026-08-15T16:30:00+03:00",
     precision: "exact",
+  });
+});
+
+test.describe("CASE E — timezone браузера отличается от pipeline", () => {
+  test.use({ timezoneId: "America/Los_Angeles" });
+
+  test("renderer сохраняет wall-clock исходного ISO offset без browser timezone shift", async ({ page }) => {
+    await page.goto(projectUrl);
+    const result = await page.evaluate(() => ({
+      browserTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      rendered: formatApplicationNextContactDate({ detected: true, next_contact_at: "2026-08-13T18:00:00+03:00", precision: "daypart" }),
+    }));
+    expect(result.browserTimezone).toBe("America/Los_Angeles");
+    expect(result.rendered).toBe("13 августа 18:00");
   });
 });
 
