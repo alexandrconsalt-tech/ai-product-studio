@@ -13798,6 +13798,12 @@ function normalizeApplicationAttributesCombinedDecision(value,ctx){
     const sourceKey=sources[attribute];
     if(applicationAttributesExtractorSourceFailure(ctx,sourceKey)||result.attribute_statuses[attribute]!=='ready') continue;
     const extractorValue=attribute==='next_contact_date'?(ctx[sourceKey].detected?Object.fromEntries(Object.entries(ctx[sourceKey]).filter(([key])=>key!=='evidence')):null):ctx[sourceKey].value;
+    if(attribute==='next_contact_date'&&extractorValue&&extractorValue.detected===true&&extractorValue.actor==='agent'&&applicationAttributesValidIsoDate(extractorValue.next_contact_at)&&result.attributes.next_contact_date===null){
+      normalized.push({attribute,field:'confirmed_agent_contact',from:null,to:extractorValue.next_contact_at});
+      result.attributes.next_contact_date=extractorValue;
+      result.evidence.next_contact_date=String(ctx[sourceKey].evidence||'');
+      result.reason_codes.next_contact_date=['next_contact_confirmed'];
+    }
     const expected=applicationAttributesExpectedDecision(attribute,extractorValue,result.attributes[attribute]);
     if(result.decisions[attribute]!==expected){normalized.push({attribute,field:'decision',from:result.decisions[attribute],to:expected});result.decisions[attribute]=expected;}
     if(expected==='approve'){

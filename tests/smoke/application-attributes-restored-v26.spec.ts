@@ -7,6 +7,7 @@ declare let ctx: any;
 declare function validateApplicationAttributesExtractor(key: string, value: unknown): unknown;
 declare function applicationAttributesTemporalNormalize(rawExpression: string, context: unknown): any;
 declare function applicationAttributesNormalizeNextContact(value: unknown, context: unknown): unknown;
+declare function normalizeApplicationAttributesCombinedDecision(value: unknown, context: unknown): any;
 declare function buildApplicationAttributesQualityGate(judge: unknown): any;
 declare function buildApplicationAttributesCrmResult(gate: unknown): any;
 
@@ -172,6 +173,52 @@ test("Next Contact использует окончание звонка и пе�
     update_actions: { next_contact_date: "SET" },
   });
   expect(result.client).toMatchObject({ detected: false, actor: "none", next_contact_at: null });
+});
+
+test("Judge не может потерять подтверждённый datetime агента после normalization", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    const run = { run_id: "run", transcript_hash: "transcript", pipeline_configuration_hash: "pipeline" };
+    const provenance = Object.fromEntries([
+      "interest_extractor", "funding_source_extractor", "purchase_term_extractor", "next_contact_date_extractor",
+    ].map(key => [key, run]));
+    const context = {
+      __run_id: run.run_id,
+      __transcript_hash: run.transcript_hash,
+      __pipeline_configuration_hash: run.pipeline_configuration_hash,
+      __stage_provenance: provenance,
+      interest_extractor: { value: [], evidence: [] },
+      funding_source_extractor: { value: "не определено", evidence: "" },
+      purchase_term_extractor: { value: "не определено", evidence: "" },
+      next_contact_date_extractor: {
+        detected: true, next_contact_at: "2026-09-28T14:29:00+03:00", precision: "exact",
+        action: "callback", actor: "agent", raw_time_expression: "чуть-чуть попозже",
+        evidence: "Агент подтвердил, что перезвонит чуть-чуть попозже.", confidence: 0.9,
+      },
+    };
+    const normalized = normalizeApplicationAttributesCombinedDecision({
+      attributes: { interest: [], funding_source: "не определено", purchase_term: "не определено", next_contact_date: null },
+      attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready", next_contact_date: "ready" },
+      decisions: { interest: "approve", funding_source: "approve", purchase_term: "approve", next_contact_date: "correct" },
+      evidence: { interest: [], funding_source: "", purchase_term: "", next_contact_date: "Агент подтвердил контакт." },
+      reason_codes: {
+        interest: ["no_confirmed_interest"], funding_source: ["no_confirmed_funding_source"],
+        purchase_term: ["no_confirmed_purchase_term"], next_contact_date: ["insufficient_time_precision"],
+      },
+    }, context);
+    const gate = buildApplicationAttributesQualityGate(normalized.value);
+    return { normalized, gate, crm: buildApplicationAttributesCrmResult(gate) };
+  });
+
+  expect(result.normalized.value.attributes.next_contact_date).toMatchObject({
+    next_contact_at: "2026-09-28T14:29:00+03:00", actor: "agent",
+  });
+  expect(result.normalized.value.decisions.next_contact_date).toBe("approve");
+  expect(result.normalized.value.reason_codes.next_contact_date).toEqual(["next_contact_confirmed"]);
+  expect(result.gate.decisions.next_contact_date).toBe("AUTO_SAVE");
+  expect(result.crm).toMatchObject({
+    attributes: { next_contact_date: "2026-09-28T14:29:00+03:00" },
+    update_actions: { next_contact_date: "SET" },
+  });
 });
 
 test("реальный fixture Гренландия сохраняет среду 16:00 как в локальном v26", async ({ page }) => {
