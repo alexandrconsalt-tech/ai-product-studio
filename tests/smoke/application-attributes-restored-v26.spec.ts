@@ -5,6 +5,7 @@ import unknownTimeCallback from "./fixtures/application-attributes-unknown-time-
 declare let pipeline: any[];
 declare let ctx: any;
 declare function validateApplicationAttributesExtractor(key: string, value: unknown): unknown;
+declare function applicationAttributesTemporalNormalize(rawExpression: string, context: unknown): any;
 declare function applicationAttributesNormalizeNextContact(value: unknown, context: unknown): unknown;
 declare function buildApplicationAttributesQualityGate(judge: unknown): any;
 declare function buildApplicationAttributesCrmResult(gate: unknown): any;
@@ -30,6 +31,8 @@ test("Playground использует точный семиэтапный лок
     model: stage.model,
     responseContract: stage.responseContract,
     actualExecutor: stage.actualExecutor,
+    promptVersion: stage.promptVersion,
+    prompt: stage.prompt,
   })));
 
   expect(runtime.map((stage) => stage.outKey)).toEqual([
@@ -50,6 +53,8 @@ test("Playground использует точный семиэтапный лок
     "application_attributes_judge_v1",
   ]);
   expect(runtime.slice(5).every((stage) => stage.actualExecutor === "code")).toBe(true);
+  expect(runtime[3].promptVersion).toBe(27);
+  expect(runtime[3].prompt).toContain("При нескольких договорённостях выбери последнюю актуальную подтверждённую договорённость");
 });
 
 test("семь этапов проходят сквозным запуском через встроенный provider", async ({ page }) => {
@@ -88,34 +93,85 @@ test("локальный contract принимает подтверждённу�
   });
 });
 
-test("Next Contact не переписывает actor агента в client и не выдумывает дату", async ({ page }) => {
+test("Next Contact нормализует утверждённые разговорные сроки", async ({ page }) => {
   const result = await page.evaluate(() => {
-    ctx = {};
-    const context = {
-      call_datetime: "2026-09-28T12:00:00+03:00",
-      timezone: "Europe/Moscow",
-      __call_metadata_audit: { mode: "manual" },
-    };
-    const normalized = applicationAttributesNormalizeNextContact({
-      detected: true,
-      next_contact_at: null,
-      precision: "exact",
-      action: "callback",
-      actor: "agent",
-      raw_time_expression: "Сейчас перезвоню вам. Да позже",
-      evidence: "Оператор: «Сейчас перезвоню вам». Клиент: «Хорошо».",
-      confidence: 0.9,
-    }, context);
-    return { semantic: (context as any).next_contact_semantic_result, normalized };
+    const context = { call_datetime: "2026-09-28T13:59:00+03:00", timezone: "Europe/Moscow" };
+    const cases = [
+      "сейчас перезвоню", "прямо сейчас", "сразу", "через 15 минут", "через полчаса",
+      "чуть-чуть попозже", "чуть позже", "попозже", "немного позже",
+      "через час", "в течение часа", "через 2 часа", "сегодня", "сегодня утром",
+      "сегодня днём", "сегодня вечером", "завтра", "завтра утром", "завтра днём",
+      "завтра вечером", "в среду", "через 30–40 минут", "с 15 до 16",
+      "как освобожусь", "как узнаю", "как получится", "когда будет информация",
+      "позже, сегодня вечером, в 18:30",
+    ];
+    return Object.fromEntries(cases.map(raw => [raw, applicationAttributesTemporalNormalize(raw, context).normalized_datetime]));
   });
 
-  expect(result.semantic.actor).toBe("agent");
-  expect(result.normalized).toMatchObject({
-    detected: false,
-    next_contact_at: null,
-    actor: "none",
+  expect(result).toEqual({
+    "сейчас перезвоню": "2026-09-28T14:09:00+03:00",
+    "прямо сейчас": "2026-09-28T14:09:00+03:00",
+    "сразу": "2026-09-28T14:09:00+03:00",
+    "через 15 минут": "2026-09-28T14:14:00+03:00",
+    "через полчаса": "2026-09-28T14:29:00+03:00",
+    "чуть-чуть попозже": "2026-09-28T14:29:00+03:00",
+    "чуть позже": "2026-09-28T14:29:00+03:00",
+    "попозже": "2026-09-28T14:29:00+03:00",
+    "немного позже": "2026-09-28T14:29:00+03:00",
+    "через час": "2026-09-28T14:59:00+03:00",
+    "в течение часа": "2026-09-28T14:59:00+03:00",
+    "через 2 часа": "2026-09-28T15:59:00+03:00",
+    "сегодня": "2026-09-28T15:59:00+03:00",
+    "сегодня утром": "2026-09-28T10:00:00+03:00",
+    "сегодня днём": "2026-09-28T14:00:00+03:00",
+    "сегодня вечером": "2026-09-28T19:00:00+03:00",
+    "завтра": "2026-09-29T10:00:00+03:00",
+    "завтра утром": "2026-09-29T10:00:00+03:00",
+    "завтра днём": "2026-09-29T14:00:00+03:00",
+    "завтра вечером": "2026-09-29T19:00:00+03:00",
+    "в среду": "2026-09-30T10:00:00+03:00",
+    "через 30–40 минут": "2026-09-28T14:39:00+03:00",
+    "с 15 до 16": "2026-09-28T16:00:00+03:00",
+    "как освобожусь": "2026-09-28T15:59:00+03:00",
+    "как узнаю": "2026-09-28T15:59:00+03:00",
+    "как получится": "2026-09-28T15:59:00+03:00",
+    "когда будет информация": "2026-09-28T15:59:00+03:00",
+    "позже, сегодня вечером, в 18:30": "2026-09-28T18:30:00+03:00",
   });
-  expect(JSON.stringify(result)).not.toContain('"actor":"client"');
+});
+
+test("Next Contact использует окончание звонка и передаёт SET только для агента", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    const normalize = (detected: boolean, actor: string, raw: string | null) => {
+      const context = {
+        call_datetime: "2026-09-28T13:00:00+03:00",
+        call_end_datetime: "2026-09-28T13:59:00+03:00",
+        timezone: "Europe/Moscow",
+      };
+      return applicationAttributesNormalizeNextContact({
+        detected, next_contact_at: null, precision: detected ? "exact" : "none",
+        action: detected ? "callback" : "none", actor, raw_time_expression: raw,
+        evidence: detected ? "Агент подтвердил, что перезвонит." : "Клиент: «Хорошо, я перезвоню».",
+        confidence: detected ? 0.95 : 0,
+      }, context) as any;
+    };
+    const agent = normalize(true, "agent", "сейчас перезвоню");
+    const client = normalize(false, "none", "через час");
+    const gate = buildApplicationAttributesQualityGate({
+      attributes: { interest: [], funding_source: "не определено", purchase_term: "не определено", next_contact_date: agent },
+      attribute_statuses: { interest: "ready", funding_source: "ready", purchase_term: "ready", next_contact_date: "ready" },
+      evidence: { interest: [], funding_source: "", purchase_term: "", next_contact_date: "Агент подтвердил, что перезвонит." },
+    });
+    return { agent, client, gate, crm: buildApplicationAttributesCrmResult(gate) };
+  });
+
+  expect(result.agent).toMatchObject({ detected: true, actor: "agent", next_contact_at: "2026-09-28T14:09:00+03:00" });
+  expect(result.gate.decisions.next_contact_date).toBe("AUTO_SAVE");
+  expect(result.crm).toMatchObject({
+    attributes: { next_contact_date: "2026-09-28T14:09:00+03:00" },
+    update_actions: { next_contact_date: "SET" },
+  });
+  expect(result.client).toMatchObject({ detected: false, actor: "none", next_contact_at: null });
 });
 
 test("реальный fixture Гренландия сохраняет среду 16:00 как в локальном v26", async ({ page }) => {
@@ -141,7 +197,7 @@ test("реальный fixture Гренландия сохраняет сред�
   });
 });
 
-test("реальный fixture с неточным callback не получает придуманную дату", async ({ page }) => {
+test("реальный fixture с обязательством агента без времени получает безопасный fallback", async ({ page }) => {
   const result = await page.evaluate(({ semantic, createdAt, timezone }) => {
     const context = {
       call_datetime: createdAt,
@@ -159,7 +215,11 @@ test("реальный fixture с неточным callback не получае�
   });
 
   expect(result.audit).toMatchObject({ detected: true, actor: "agent" });
-  expect(result.semantic).toMatchObject({ detected: false, next_contact_at: null, actor: "none" });
+  expect(result.semantic).toMatchObject({
+    detected: true,
+    next_contact_at: "2026-09-28T13:13:58+03:00",
+    actor: "agent",
+  });
 });
 
 test("CRM operations применяются после AI результата и не сохраняют неопределённые scalar", async ({ page }) => {

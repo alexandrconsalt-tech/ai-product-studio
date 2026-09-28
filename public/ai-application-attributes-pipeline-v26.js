@@ -4,6 +4,7 @@
 
   const byKey = Object.fromEntries(config.stages.map((stage) => [stage.outKey, stage]));
   const interest = byKey.interest_extractor;
+  const nextContact = byKey.next_contact_date_extractor;
   const judge = byKey.attributes_judge;
   const insertBefore = (source, marker, addition) => {
     if (!source || source.includes(addition.trim())) return source;
@@ -27,9 +28,24 @@ Positive: «Нужна отдельная проверка безопаснос�
 
 Сохраняй «Безопасность сделок», если клиент отдельно просит услугу/консультацию по безопасному проведению сделки, рискам, безопасным расчётам, защите от мошенничества или отдельной проверке безопасности сделки.`;
 
+  const nextContactRule = `ПОРЯДОК ВЫБОРА ДОГОВОРЁННОСТИ
+
+Если агент подтвердил, что сам свяжется с клиентом, верни detected=true даже для разговорного или условного времени: «сейчас», «позже», «как освобожусь», «как узнаю». Конкретный datetime рассчитает deterministic normalizer.
+
+При нескольких договорённостях выбери последнюю актуальную подтверждённую договорённость. Более точная поздняя формулировка заменяет общую: «позже» → «сегодня вечером» → «в 18:30». Если финальная договорённость передаёт инициативу клиенту, верни detected=false, action=none, actor=none.
+
+Не создавай Next Contact по просмотру или встрече без отдельного обещания агента связаться, по предположению либо по неподтверждённому предложению.`;
+
   if (interest) {
     interest.prompt = insertBefore(interest.prompt, "ПЕРЕД ОТВЕТОМ ПРОВЕРЬ", safetyRule);
     interest.promptVersion = 26;
+  }
+  if (nextContact && nextContact.promptSource === "system_default") {
+    nextContact.prompt = String(nextContact.prompt || "")
+      .replace("Если клиент должен связаться сам, договорённости нет или время не определено, верни detected=false.", "Если клиент должен связаться сам или подтверждённой договорённости нет, верни detected=false.")
+      .replace("Извлекай семантику, не выполняй календарную арифметику.", `${nextContactRule}\n\nИзвлекай семантику, не выполняй календарную арифметику.`);
+    nextContact.promptVersion = 27;
+    nextContact.promptEdited = false;
   }
   if (judge) {
     judge.prompt = insertBefore(judge.prompt, "CROSS-ATTRIBUTE", judgeSafetyRule);
