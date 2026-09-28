@@ -85,18 +85,17 @@
   const AGENT_NAME_RE=/(?:объект\s+(?:курирует|вед[её]т|сопровождает)\s+(?:агент|риелтор)|занимается\s+(?:данным\s+)?объектом|имя\s+агента|агент[а-яё]*\s+(?:по\s+объекту\s+)?[А-ЯЁ][а-яё-]{2,})/;
   const CURRENT_OBJECT_CHARACTERISTIC_RE=/(?:двухкомнатн|тр[её]хкомнатн|однокомнатн|комнатност|\d+\s*[-–]?\s*комнат|студи[яю]|площад[ьи]|\d+(?:[.,]\d+)?\s*кв\.?\s*м|этаж[ае]?|\d+\s*[-–]?\s*этаж)/i;
   const CURRENT_OBJECT_CONTEXT_RE=/(?:текущ[а-яё]*\s+объект|объект[а-яё]*|квартир[а-яё]*|дом[а-яё]*|лот[а-яё]*|объявлен[а-яё]*|выставлен[а-яё]*|характеристик[а-яё]*)/i;
+  const PURE_STUDIO_CHARACTERISTIC_RE=/^студи[яю]\s+\d+(?:[.,]\d+)?\s*(?:м²|кв\.?\s*м)\.?$/i;
   const REQUIREMENT_SIGNAL_RE=/(?:нужен|нужна|нужно|должен|должна|должно|ищет|требован|обязатель|принципиаль|только|исключительно|не\s+более|не\s+менее|не\s+выше|не\s+ниже)/i;
   const MOTIVATION_SIGNAL_RE=/(?:тяжело|сложно|неудобно|поэтому|из[-‑–— ]за|по\s+причине|не\s+может|мотивац)/i;
+  const PRIMARY_NEED_MEANING_RE=/(?:подобр[а-яё]*|подбер[а-яё]*|купить|покуп[а-яё]*|приобрести|приобрет[а-яё]*|найти|ищет|поиск[а-яё]*|получить|узнать|посмотреть|просмотр[а-яё]*|организовать|выбрать|для\s+(?:себя|сын[а-яё]*|дочер[а-яё]*|реб[её]нк[а-яё]*|семь[ьи]|родител[а-яё]*|собственн[а-яё]*\s+проживан[а-яё]*))/i;
   const ACTIONABLE_QUESTION_RE=/(?:налич|актуальн|уточнить|услови|доступн|юридическ|какие|вопрос)/i;
   const SELLER_SIDE_ACTION_RE=/(?:обновил[а]?\s+(?:фото|фотограф)|обновл[её]нн[а-яё]*\s+фотограф|фотографировал[а]?\s+(?:объект|квартир)|фоточки?\s+.*обнов|собственник[а-яё]*\s+.*(?:\d{2}\s+лет|нотариус|альтернативн[а-яё]*\s+жиль|выпис|прода[её]т|переезж|правов|основан|сведени|детал)|основани[ея]\s+прав[ао]|приватизац|отказник|ходил[а]?\s+к\s+нотариус|готов[а-яё]*\s+выписаться\s+к\s+сделке|персональн[а-яё]*\s+данн|предоставля[а-яё]*\s+документ)/i;
   const LOW_VALUE_QUOTE_RE=/(?:четыр(?!еста(?:\s|$|[.,]))[а-яё]{3,8}|четырн[a-яё]*|\d+\s*м\d{3,}|\d{4,}\s*\d{4,})/i;
   const STT_DERIVED_AMOUNT_RE=/(?:ориентир[а-яё]*[^.]{0,40}сумм|~\s*\d|около\s+\d+(?:[.,]\d+)?\s*(?:млн|миллион))/i;
   const ADDRESS_FRAGMENT_RE=/(?:[А-ЯЁа-яё-]+\s+){0,3}(?:проезд|проспект|переулок|шоссе)\s*,?\s*\d+(?:[\/-]\d+)?|(?:улица|ул\.?)\s+(?:[А-ЯЁа-яё-]+\s+){0,3}\d+(?:[\/-]\d+)?/gi;
   const CURRENT_OBJECT_LOCATION_FRAGMENT_RE=/\s+(?:на|в|по)\s+(?:[А-ЯЁа-яё-]+\s+){1,3}(?:проезд[еау]?|проспект[еау]?|переулк[еау]?|шоссе|район[еау]?|пос[её]лк[еау]?)/gi;
-  const FINANCIAL_PRIORITY_RE=/(?:первоначальн[а-яё]*\s+взнос|собственн[а-яё]*\s+средств|бюджет[а-яё]*|максимальн[а-яё]*\s+сумм|одобрен[а-яё]*\s+ипотек|сумм[а-яё]*\s+ипотек|источник[а-яё]*\s+средств|финансов[а-яё]*\s+(?:огранич|услов)|располагает[^.]{0,100}(?:₽|руб|миллион|тысяч|процент|%))/i;
-  const CONSTRAINT_PRIORITY_RE=/(?:не\s+более|не\s+менее|не\s+больше|не\s+меньше|обязательно|только\s+при|без\s+этого|исключительно)/i;
-  const PURCHASE_PURPOSE_RE=/(?:для\s+себя|для\s+жизни|собственн[а-яё]*\s+прожив|назначени[а-яё]*\s+покуп)/i;
-  const IMPORTANT_PRIORITY_RE=/(?:ипотек|рассроч|существенн[а-яё]*\s+вопрос|нужно\s+уточнить|требуется\s+уточнить|интересуется\s+(?:наличием|ценами|условиями))/i;
+  const FINANCIAL_FACT_RE=/(?:первоначальн[а-яё]*\s+взнос|собственн[а-яё]*\s+средств|бюджет[а-яё]*|максимальн[а-яё]*\s+сумм|одобрен[а-яё]*\s+ипотек|сумм[а-яё]*\s+ипотек|источник[а-яё]*\s+средств|финансов[а-яё]*\s+(?:огранич|услов)|располагает[^.]{0,100}(?:₽|руб|миллион|тысяч|процент|%))/i;
   const CRM_CLIENT_TYPE_RE=/(?:клиент[а-яё]*\s+(?:(?:является|работает|обращается|выступает)\s+(?:как\s+)?|[-—:]\s*)?(?:частн[а-яё]*\s+лиц|агент(?:ом)?(?![а-яё])|риелтор(?:ом)?(?![а-яё]))|(?:частн[а-яё]*\s+лиц|агент(?:ом)?(?![а-яё])|риелтор(?:ом)?(?![а-яё]))\s*[-—:]?\s+клиент)/i;
   const CRM_CLIENT_TYPE_RELEVANCE_RE=/(?:влияет|комисси|вознагражд|услови|сценари|сделк|договор|доверенн|от\s+имени|представля|покупател|продавц|юр(?:идическ[а-яё]*\s+)?лиц|налог|сотруднич)/i;
   const CRM_CONTACT_VALIDATION_RE=/(?:подтверд[а-яё]*|актуальн[а-яё]*|верн[а-яё]*|подходит)[^.]{0,60}(?:номер|телефон|контакт)|(?:номер|телефон|контакт)[^.]{0,60}(?:подтверд[а-яё]*|актуальн[а-яё]*|верн[а-яё]*|подходит)|последн[а-яё]*\s+(?:\d+\s+)?цифр[а-яё]*[^.]{0,30}(?:номер|телефон|контакт)/i;
@@ -148,7 +147,7 @@
     const needConcepts=new Set(NEED_CONCEPTS.filter(([,pattern])=>pattern.test(primaryNeed)).map(([concept])=>concept));
     return factConcepts.filter(concept=>needConcepts.has(concept)).length>=2;
   }
-  function objectCharacteristicNoise(value,kind){return CURRENT_OBJECT_CHARACTERISTIC_RE.test(value)&&CURRENT_OBJECT_CONTEXT_RE.test(value)&&!usefulRequirementOrMotivation(value)&&!(kind==='unresolved_question'&&ACTIONABLE_QUESTION_RE.test(value));}
+  function objectCharacteristicNoise(value,kind){return CURRENT_OBJECT_CHARACTERISTIC_RE.test(value)&&(CURRENT_OBJECT_CONTEXT_RE.test(value)||PURE_STUDIO_CHARACTERISTIC_RE.test(value))&&!(kind==='primary_need'&&PRIMARY_NEED_MEANING_RE.test(value))&&!usefulRequirementOrMotivation(value)&&!(kind==='unresolved_question'&&ACTIONABLE_QUESTION_RE.test(value));}
   function objectLocationNoise(value){return (OBJECT_LOCATION_RE.test(text(value))||CURRENT_OBJECT_LOCATION_FACT_RE.test(text(value)))&&!usefulRequirementOrMotivation(value);}
   function stripEmbeddedAddress(value,path,audit,kind){
     if(kind==='fact'||kind==='quote'||kind==='requirement') return value;
@@ -156,11 +155,15 @@
     if(cleaned&&cleaned!==value){audit.normalizations.push(path+': CRM_OBJECT_ADDRESS_REMOVED');return cleaned;}
     return value;
   }
-  function factPriority(value){
-    const normalized=text(value);
-    if(FINANCIAL_PRIORITY_RE.test(normalized)||CONSTRAINT_PRIORITY_RE.test(normalized)||PURCHASE_PURPOSE_RE.test(normalized)) return 1;
-    if(IMPORTANT_PRIORITY_RE.test(normalized)) return 2;
-    return 3;
+  function semanticTokens(value){
+    return compareKey(value).replace(/ё/g,'е').split(/[^a-zа-я0-9]+/i).filter(Boolean);
+  }
+  function fullyCoveredBy(value,candidate){
+    const tokens=semanticTokens(value),candidateTokens=new Set(semanticTokens(candidate));
+    return tokens.length>0&&tokens.every(token=>candidateTokens.has(token));
+  }
+  function semanticDuplicate(value,structuredValues){
+    return structuredValues.some(candidate=>fullyCoveredBy(value,candidate));
   }
   function noiseReason(value,kind,context){
     const factOrQuote=kind==='fact'||kind==='quote';
@@ -215,7 +218,7 @@
     return stripEmbeddedAddress(normalized,path,audit,kind||path);
   }
 
-  function cleanFacts(values,audit,issues,damagedAmountIssue,primaryNeed){
+  function cleanFacts(values,audit,issues,damagedAmountIssue,primaryNeed,structuredValues){
     const source=Array.isArray(values)?values:[];
     const hasIndependentConditionFact=source.some(item=>item&&typeof item==='object'&&!DAILY_RENT_RE.test(text(item.fact+' '+item.evidence))&&PROPERTY_CONDITION_RE.test(text(item.fact+' '+item.evidence)));
     const seen=new Set();const result=[];
@@ -224,26 +227,23 @@
       const fact=normalizedText(item.fact,'fact['+index+'].fact',audit),evidence=normalizedText(item.evidence,'fact['+index+'].evidence',audit);
       if(!fact){audit.removed_items.push('fact['+index+']: EMPTY_VALUE');return;}
       if(roleInconsistent(fact,evidence,issues)){audit.removed_items.push('fact['+index+']: ROLE_INCONSISTENCY');return;}
-      if(damagedAmountIssue&&!FINANCIAL_PRIORITY_RE.test(fact)&&(STT_DERIVED_AMOUNT_RE.test(fact)||LOW_VALUE_QUOTE_RE.test(evidence))){audit.removed_items.push('fact['+index+']: STT_META_NOISE');return;}
+      if(damagedAmountIssue&&!FINANCIAL_FACT_RE.test(fact)&&(STT_DERIVED_AMOUNT_RE.test(fact)||LOW_VALUE_QUOTE_RE.test(evidence))){audit.removed_items.push('fact['+index+']: STT_META_NOISE');return;}
       if(hasIndependentConditionFact&&DAILY_RENT_RE.test(fact+' '+evidence)&&!DAILY_RENT_DECISION_RELEVANCE_RE.test(fact+' '+evidence)){audit.removed_items.push('fact['+index+']: LOW_VALUE_CALL_CONTEXT');return;}
       const reason=noiseReason(fact,'fact',{evidence,primaryNeed});
       if(reason){audit.removed_items.push('fact['+index+']: '+reason);return;}
-      const key=compareKey(fact)+'\u0000'+compareKey(evidence);
+      if(semanticDuplicate(fact,structuredValues||[])){audit.deduplicated_items.push('fact['+index+']: STRUCTURED_SEMANTIC_DUPLICATE');return;}
+      const key=compareKey(fact);
       if(seen.has(key)){audit.deduplicated_items.push('fact['+index+']: EXACT_DUPLICATE');return;}
-      seen.add(key);result.push({fact,evidence,index,priority:factPriority(fact)});
+      seen.add(key);result.push({fact,evidence});
     });
-    if(result.length>7){
-      audit.normalizations.push('facts: priority cap '+result.length+' → 7');
-      return result.slice().sort((left,right)=>left.priority-right.priority||left.index-right.index).slice(0,7).map(({fact,evidence})=>({fact,evidence}));
-    }
-    return result.map(({fact,evidence})=>({fact,evidence}));
+    return result;
   }
 
   function validateOutput(value){
     const exact=(object,keys)=>Boolean(object&&typeof object==='object'&&!Array.isArray(object)&&Object.keys(object).length===keys.length&&keys.every(key=>Object.prototype.hasOwnProperty.call(object,key)));
     const strings=list=>Array.isArray(list)&&list.every(item=>typeof item==='string');
     if(!exact(value,['facts','quotes','needs','outcome','cleaning','source_decisions','status'])) return false;
-    if(!Array.isArray(value.facts)||value.facts.length>7||value.facts.some(item=>!exact(item,['fact','evidence'])||typeof item.fact!=='string'||typeof item.evidence!=='string')) return false;
+    if(!Array.isArray(value.facts)||value.facts.some(item=>!exact(item,['fact','evidence'])||typeof item.fact!=='string'||typeof item.evidence!=='string')) return false;
     if(!strings(value.quotes)||value.quotes.length>2) return false;
     if(!exact(value.needs,['primary_need','requirements','preferences','objections','unresolved_questions'])||typeof value.needs.primary_need!=='string'||!['requirements','preferences','objections','unresolved_questions'].every(key=>strings(value.needs[key]))) return false;
     if(!exact(value.outcome,['call_result','agreement','next_step','responsible_party','deadline','channel'])||!['call_result','agreement','next_step','responsible_party','deadline','channel'].every(key=>typeof value.outcome[key]==='string')||!RESPONSIBLE_PARTIES.includes(value.outcome.responsible_party)) return false;
@@ -288,18 +288,19 @@
     };
     const sourceNeeds=judge.verified_needs&&typeof judge.verified_needs==='object'?judge.verified_needs:{};
     const sourcePrimaryNeed=text(sourceNeeds.primary_need);
+    const needs={
+      primary_need:cleanScalar(sourceNeeds.primary_need,'needs.primary_need',audit,'primary_need',judgeRoleIssues),
+      requirements:cleanStringList(sourceNeeds.requirements,'requirements',audit,'requirement',judgeRoleIssues,judgeDamagedAmountIssue),
+      preferences:cleanStringList(sourceNeeds.preferences,'preferences',audit,'preference',judgeRoleIssues,judgeDamagedAmountIssue),
+      objections:cleanStringList(sourceNeeds.objections,'objections',audit,'objection',judgeRoleIssues,judgeDamagedAmountIssue),
+      unresolved_questions:cleanStringList(sourceNeeds.unresolved_questions,'unresolved_questions',audit,'unresolved_question',judgeRoleIssues,judgeDamagedAmountIssue)
+    };
+    const outcome=cleanOutcome(judge.verified_outcome,audit);
+    const structuredValues=[needs.primary_need,...needs.requirements,...needs.preferences,...needs.objections,...needs.unresolved_questions,text(Object.values(outcome).join(' '))].filter(Boolean);
     let quotes=cleanStringList(judge.verified_quotes,'quote',audit,'quote',judgeRoleIssues,judgeDamagedAmountIssue,{primaryNeed:sourcePrimaryNeed});
     if(quotes.length>2){audit.normalizations.push('quotes: capped '+quotes.length+' → 2');quotes=quotes.slice(0,2);}
     const output={
-      facts:cleanFacts(judge.verified_facts,audit,judgeRoleIssues,judgeDamagedAmountIssue,sourcePrimaryNeed),quotes,
-      needs:{
-        primary_need:cleanScalar(sourceNeeds.primary_need,'needs.primary_need',audit,'primary_need',judgeRoleIssues),
-        requirements:cleanStringList(sourceNeeds.requirements,'requirements',audit,'requirement',judgeRoleIssues,judgeDamagedAmountIssue),
-        preferences:cleanStringList(sourceNeeds.preferences,'preferences',audit,'preference',judgeRoleIssues,judgeDamagedAmountIssue),
-        objections:cleanStringList(sourceNeeds.objections,'objections',audit,'objection',judgeRoleIssues,judgeDamagedAmountIssue),
-        unresolved_questions:cleanStringList(sourceNeeds.unresolved_questions,'unresolved_questions',audit,'unresolved_question',judgeRoleIssues,judgeDamagedAmountIssue)
-      },
-      outcome:cleanOutcome(judge.verified_outcome,audit),
+      facts:cleanFacts(judge.verified_facts,audit,judgeRoleIssues,judgeDamagedAmountIssue,sourcePrimaryNeed,structuredValues),quotes,needs,outcome,
       cleaning:audit,source_decisions:sourceDecisions,
       status:Object.values(sourceDecisions).includes('technical_error')?'PARTIAL_READY':'READY'
     };

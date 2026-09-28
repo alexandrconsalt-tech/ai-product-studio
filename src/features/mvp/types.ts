@@ -6,6 +6,7 @@ export type MvpView =
   | "playground"
   | "summary-review"
   | "summary-report"
+  | "floor-plan"
   | "inspector"
   | "prompts"
   | "analytics"

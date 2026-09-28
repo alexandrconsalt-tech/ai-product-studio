@@ -11,6 +11,7 @@ const screens: ScreenExpectation[] = [
   { view: "playground", heading: "Песочница", marker: "Выберите продукт" },
   { view: "summary-review", heading: "Оценка качества Summary", marker: "Запуски Pipeline" },
   { view: "summary-report", heading: "Отчёт по оценке", marker: "AI Score vs Human Score" },
+  { view: "floor-plan", heading: "AI Floor Plan", marker: "Исследовательский PoC" },
   { view: "dashboard", heading: "Дашборд", marker: "Период истории" },
   { view: "settings", heading: "Настройки", marker: "API-ключи" },
 ];

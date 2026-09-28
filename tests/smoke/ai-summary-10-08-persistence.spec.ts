@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import productionOutcomeRegressions from "../../src/shared/repositories/fixtures/ai-summary-10-08-production-outcome-regressions.json";
 
 const projectId = "project_ai_summary_2026_08_10";
 const configKey = `pipelineLabV3.pipelineConfig.${projectId}`;
@@ -51,6 +52,45 @@ test("recovery pipeline автосохраняет пользовательск�
   await expect(page.locator("#stages .stage")).toHaveCount(9);
   await expect(page.locator("#stages .stage").first().locator("[data-name]")).toHaveValue("Facts Extractor — сохранён");
   await expect(page.locator("#stages .stage").first().locator("[data-prompt]")).toContainText("Пользовательская контрольная строка.");
+});
+
+test("production recovery r4 восстанавливает только шесть LLM stages и сохраняет текущий Store Cleaner v4", async ({ page }) => {
+  await page.goto(projectUrl);
+  const before = await page.evaluate((key) => {
+    const stored = JSON.parse(localStorage.getItem(key)!);
+    const llmKeys = ["facts_extractor", "needs_extractor", "outcome_extractor", "conversation_judge", "summary_generator", "summary_judge"];
+    const canonical = structuredClone(Object.fromEntries(stored.stages.filter((stage: { outKey: string }) => llmKeys.includes(stage.outKey)).map((stage: { outKey: string }) => [stage.outKey, stage])));
+    const cleaner = structuredClone(stored.stages.find((stage: { outKey: string }) => stage.outKey === "clean_conversation_store"));
+    const finalization = structuredClone(stored.stages.filter((stage: { outKey: string }) => ["summary_quality_gate", "crm_summary_result"].includes(stage.outKey)));
+    for (const stage of stored.stages) {
+      if (!llmKeys.includes(stage.outKey)) continue;
+      stage.name = stage.outKey === "conversation_judge" ? "Completeness Judge" : `TODAY ${stage.name}`;
+      stage.prompt = `TODAY MANUAL PROMPT ${stage.outKey}`;
+      stage.promptSource = "user_override";
+      stage.promptVersion = 99;
+      stage.model = "deepseek-v4-flash";
+      stage.maxTokens = 1234;
+    }
+    delete stored.aiSummaryPromptRecoveryRevision;
+    localStorage.setItem(key, JSON.stringify(stored));
+    return { canonical, cleaner, finalization };
+  }, configKey);
+
+  await page.reload();
+  const after = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), configKey);
+  expect(after.aiSummaryPromptRecoveryRevision).toBe(4);
+  expect(after.restoredFrom).toBe("ai-summary-10-08-production-prompts-r4");
+  expect(after.stages).toHaveLength(9);
+  expect(after.stages.map((stage: { outKey: string }) => stage.outKey)).toEqual([
+    "facts_extractor", "needs_extractor", "outcome_extractor", "conversation_judge", "clean_conversation_store", "summary_generator", "summary_judge", "summary_quality_gate", "crm_summary_result",
+  ]);
+  for (const [outKey, canonical] of Object.entries(before.canonical)) {
+    expect(after.stages.find((stage: { outKey: string }) => stage.outKey === outKey)).toEqual(canonical);
+  }
+  expect(after.stages.find((stage: { outKey: string }) => stage.outKey === "conversation_judge").name).toBe("Conversation Judge");
+  expect(after.stages.find((stage: { outKey: string }) => stage.outKey === "clean_conversation_store")).toEqual(before.cleaner);
+  expect(after.stages.filter((stage: { outKey: string }) => ["summary_quality_gate", "crm_summary_result"].includes(stage.outKey))).toEqual(before.finalization);
+  expect(after.stages.some((stage: { name: string }) => /Completeness Judge|Usefulness Judge|Agreements Judge|Format Judge/i.test(stage.name))).toBe(false);
 });
 
 test("add, duplicate, reorder, toggle и delete сохраняются без повторного recovery", async ({ page }) => {
@@ -393,6 +433,41 @@ test("Conversation Judge блокируется до вызова модели �
   });
 });
 
+test("Conversation Judge повторяет truncated custom-contract response с увеличенным budget", async ({ page }) => {
+  let requests = 0;
+  const expectedJudge = {
+    verified_facts: [], verified_quotes: [],
+    verified_needs: { primary_need: "", requirements: [], preferences: [], objections: [], unresolved_questions: [] },
+    verified_outcome: { call_result: "Согласовано дальнейшее действие: агент напишет клиенту", agreement: "Агент напишет клиенту", next_step: "Агент напишет клиенту", responsible_party: "agent", deadline: "", channel: "" },
+    decisions: { facts: "approve", needs: "approve", outcome: "approve" }, issues: [],
+  };
+  await page.route("https://api.aitunnel.ru/v1/chat/completions", async (route) => {
+    requests += 1;
+    const body = route.request().postDataJSON();
+    expect(body.max_completion_tokens).toBe(requests === 1 ? 6000 : 14000);
+    const choice = requests === 1
+      ? { message: { content: "{\"verified_facts\":[" }, finish_reason: "length" }
+      : { message: { content: JSON.stringify(expectedJudge) }, finish_reason: "stop" };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [choice], usage: { total_tokens: 100 } }) });
+  });
+  await page.addInitScript(() => localStorage.setItem("aiTunnelApiKey", "test-only-key"));
+  await page.goto(projectUrl);
+  const report = await page.evaluate(async () => {
+    const current = { run_id: "retry-run", transcript_hash: "retry-transcript", pipeline_configuration_hash: "retry-pipeline" };
+    const ctx = {
+      __transcript: "Агент:\n— Я напишу вам.\nКлиент:\n— Хорошо.", __run_id: current.run_id, __transcript_hash: current.transcript_hash, __pipeline_configuration_hash: current.pipeline_configuration_hash,
+      facts_extractor: { facts: [], quotes: [] }, needs_extractor: { primary_need: "", requirements: [], preferences: [], objections: [], unresolved_questions: [] },
+      outcome_extractor: { call_result: "Согласовано дальнейшее действие: агент напишет клиенту", agreement: "Агент напишет клиенту", next_step: "Агент напишет клиенту", responsible_party: "agent", deadline: "", channel: "" },
+      __stage_provenance: Object.fromEntries(["facts_extractor", "needs_extractor", "outcome_extractor"].map((key) => [key, current])),
+    };
+    const stage = { ...pipeline[0], type: "check", name: "Conversation Judge", outKey: "conversation_judge", prompt: "{{transcript}} {{ctx.facts_extractor}} {{ctx.needs_extractor}} {{ctx.outcome_extractor}}" };
+    return runStage(stage, ctx);
+  });
+  expect(requests).toBe(2);
+  expect(report.output).toEqual(expectedJudge);
+  expect(report).toMatchObject({ status: "ok", retry_count: 1, contract_audit: { repair_attempted: true, repair_result: "SUCCESS", parse_status: "SUCCESS", schema_status: "VALID" } });
+});
+
 test("Summary Generator использует versioned Structured Output только из current-run clean store", async ({ page }) => {
   const expectedSummary = {
     conversation_result: "Клиент уточняет условия покупки и финансирования.",
@@ -490,7 +565,7 @@ test("сохранённый Needs stage переживает reload и не з�
   await restoredNeeds.locator("[data-toggle]").click();
   await expect(restoredNeeds.locator("[data-name]")).toHaveValue("Needs Extractor");
   await expect(restoredNeeds.locator("[data-outkey]")).toHaveValue("needs_extractor");
-  await expect(restoredNeeds.locator("[data-prompt]")).toHaveValue("Сохранённый Needs prompt {{transcript}}");
+  await expect(restoredNeeds.locator("[data-prompt]")).toHaveValue(/Сохранённый Needs prompt \{\{transcript\}\}[\s\S]*AI_SUMMARY_NEEDS_REQUIREMENT_PREFERENCE_V1/);
 });
 
 test("Store Cleaner v4 отображается пятым code-stage, не показывает LLM settings и переживает reload", async ({ page }) => {
@@ -565,7 +640,7 @@ test("Conversation Judge получает role-consistency appendix без из�
       outKey: stage.outKey, provider: stage.provider, model: stage.model, temperature: stage.temperature, maxTokens: stage.maxTokens, contractId: stage.contractId, schemaId: stage.schemaId,
     }));
     const otherPrompts = [0, 1, 2, 5].map((index) => stored.stages[index].prompt);
-    stored.stages[3].prompt = "LEGACY USER JUDGE PROMPT\n{{transcript}}\n{{ctx.facts_extractor}}\n{{ctx.needs_extractor}}\n{{ctx.outcome_extractor}}";
+    stored.stages[3].prompt = "LEGACY USER JUDGE PROMPT\n{{transcript}}\n{{ctx.facts_extractor}}\n{{ctx.needs_extractor}}\n{{ctx.outcome_extractor}}\n\n==================================================\n17. DETERMINISTIC OUTCOME EVIDENCE CONTRACT\n==================================================\n\n[AI_SUMMARY_JUDGE_OUTCOME_EVIDENCE_V4]\nOLD CONTRACT";
     localStorage.setItem(key, JSON.stringify(stored));
     return { immutable, otherPrompts };
   }, configKey);
@@ -574,8 +649,10 @@ test("Conversation Judge получает role-consistency appendix без из�
   expect(after[3].prompt).toContain("LEGACY USER JUDGE PROMPT");
   expect(after[3].prompt).toContain("AI_SUMMARY_JUDGE_ROLE_CONSISTENCY_V2");
   expect(after[3].prompt).toContain("AI_SUMMARY_JUDGE_SELLER_SCOPE_V3");
-  expect(after[3].prompt).toContain("AI_SUMMARY_JUDGE_OUTCOME_EVIDENCE_V4");
+  expect(after[3].prompt).toContain("AI_SUMMARY_JUDGE_OUTCOME_EVIDENCE_V5");
+  expect(after[3].prompt).not.toContain("AI_SUMMARY_JUDGE_OUTCOME_EVIDENCE_V4");
   expect(after[3].prompt).toContain("ROLE_INCONSISTENCY:");
+  expect(after[3]).toMatchObject({ stageVersion: "v5.3.0", promptVersion: 5 });
   expect(after.map((stage: Record<string, unknown>) => ({ outKey: stage.outKey, provider: stage.provider, model: stage.model, temperature: stage.temperature, maxTokens: stage.maxTokens, contractId: stage.contractId, schemaId: stage.schemaId }))).toEqual(before.immutable);
   expect([0, 1, 2, 5].map((index) => after[index].prompt)).toEqual(before.otherPrompts);
 });
@@ -641,6 +718,67 @@ test("Conversation Judge v5 стабилизирует business outcome и Summa
   expect(result.channelSummaryJudge.issues.join(" ")).toContain("UNSUPPORTED_CHANNEL");
 });
 
+test("Conversation Judge v5.3.0 проходит три production-derived regression в runtime Pipeline Lab", async ({ page }) => {
+  await page.goto(projectUrl);
+  const results = await page.evaluate((fixtures) => {
+    const guard = (window as typeof window & { __AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__: any }).__AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__;
+    return fixtures.map((fixture) => {
+      const checked = guard.validateConversationJudge(fixture.conversation_judge_output, {
+        transcript: fixture.transcript,
+        outcomeExtractor: fixture.outcome_extractor,
+      });
+      return { id: fixture.id, outcome: checked.output.verified_outcome, issues: checked.output.issues, audit: checked.audit };
+    });
+  }, productionOutcomeRegressions);
+
+  for (const [index, result] of results.entries()) {
+    expect(result.outcome).toEqual(productionOutcomeRegressions[index].expected_outcome);
+    expect(result.issues.filter((issue: string) => issue.startsWith("OUTCOME_"))).toEqual([]);
+    expect(result.audit).toMatchObject({ implementation_version: "v5.3.0" });
+  }
+});
+
+test("Requirement vs Preference проходит Judge → Clean Store → Summary policy в runtime Pipeline Lab", async ({ page }) => {
+  await page.goto(projectUrl);
+  const result = await page.evaluate(() => {
+    const runtime = (window as typeof window & { __AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__: any }).__AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__;
+    const cleaner = (window as typeof window & { __AI_SUMMARY_10_08_STORE_CLEANER__: any }).__AI_SUMMARY_10_08_STORE_CLEANER__;
+    const transcript = "Клиент:\n— В пределах разумной цены, до 8 млн желательно. И чтоб метро было рядом.";
+    const needs = { primary_need: "Подобрать квартиру", requirements: ["Бюджет не выше 8 млн ₽", "Рядом с метро"], preferences: [], objections: [], unresolved_questions: [] };
+    const emptyOutcome = { call_result: "", agreement: "", next_step: "", responsible_party: "", deadline: "", channel: "" };
+    const judge = runtime.validateConversationJudge(
+      { verified_facts: [], verified_quotes: [], verified_needs: needs, verified_outcome: emptyOutcome, decisions: { facts: "approve", needs: "approve", outcome: "approve" }, issues: [] },
+      { transcript, outcomeExtractor: emptyOutcome, needsExtractor: needs },
+    );
+    const provenance = { run_id: "requirement-preference-smoke", transcript_hash: "transcript", pipeline_configuration_hash: "pipeline" };
+    const clean = cleaner.clean({ conversationJudge: judge.output, provenance, current: provenance }).output;
+    const summary = runtime.sanitizeSummaryGenerator(
+      { conversation_result: "Клиент выбирает квартиру.", key_facts: ["Обязательное требование — рядом с метро"], quotes: [], next_step: "" },
+      { cleanOutcome: clean.outcome, cleanNeeds: clean.needs },
+    );
+    return { judge, clean, summary };
+  });
+
+  expect(result.judge.output.verified_needs).toMatchObject({ requirements: [], preferences: ["Желательный бюджет — до 8 млн ₽", "Предпочтительно рядом с метро"] });
+  expect(result.judge.audit.requirement_preference).toMatchObject({ version: "v1.0.0", changed: true });
+  expect(result.clean.needs).toMatchObject({ requirements: [], preferences: ["Желательный бюджет — до 8 млн ₽", "Предпочтительно рядом с метро"] });
+  expect(result.summary.output.key_facts).toEqual(["Предпочтительно рядом с метро"]);
+  expect(result.summary.audit).toMatchObject({ requirement_preference_version: "v1.0.0", changed: true });
+});
+
+test("Summary Generator не восстанавливает WhatsApp при пустом outcome.channel", async ({ page }) => {
+  await page.goto(projectUrl);
+  const result = await page.evaluate(() => {
+    const runtime = (window as typeof window & { __AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__: any }).__AI_SUMMARY_10_08_CONVERSATION_JUDGE_V5__;
+    return runtime.sanitizeSummaryGenerator(
+      { conversation_result: "Согласована обратная связь.", key_facts: ["Клиент предпочитает WhatsApp"], quotes: [], next_step: "Агент напишет клиенту в WhatsApp примерно через 30–40 минут." },
+      { cleanOutcome: { call_result: "", agreement: "Агент напишет клиенту", next_step: "Агент напишет клиенту", responsible_party: "agent", deadline: "примерно через 30–40 минут", channel: "" } },
+    );
+  });
+  expect(result.output.next_step).toBe("Агент напишет клиенту примерно через 30–40 минут.");
+  expect(result.audit).toMatchObject({ implementation_version: "v5.3.0", removed_channels: ["WhatsApp"], changed: true });
+});
+
 test("Summary Generator contract routing сохраняется после reload и мигрирует legacy stage без замены prompt/settings", async ({ page }) => {
   await page.goto(projectUrl);
   const before = await page.evaluate((key) => {
@@ -679,7 +817,7 @@ test("миграция четырёх пользовательских stages в
   expect(after[8]).toMatchObject({ name: "CRM Result", type: "code", outKey: "crm_summary_result", codeFn: "aiSummaryCrmResult" });
 });
 
-test("Store Cleaner v4 выполняет CRM/role cleanup, priority cap, financial invariant и current-run provenance", async ({ page }) => {
+test("Store Cleaner v4 выполняет lossless facts, CRM/role cleanup, financial invariant и current-run provenance", async ({ page }) => {
   await page.goto(projectUrl);
   const report = await page.evaluate(async () => {
     const current = { run_id: "run-55", transcript_hash: "transcript-55", pipeline_configuration_hash: "pipeline-55" };
@@ -720,12 +858,12 @@ test("Store Cleaner v4 выполняет CRM/role cleanup, priority cap, financ
     contract_audit: { contract_id: "ai_summary_10_08_clean_conversation_store", response_schema_id: "ai_summary_10_08_clean_conversation_store_v1", parser_schema_id: "ai_summary_10_08_clean_conversation_store_v1", schema_status: "VALID", repair_attempted: false },
     output: { status: "READY", source_decisions: { facts: "approve", needs: "correct", outcome: "approve" } },
   });
-  expect(report.output.facts).toHaveLength(7);
+  expect(report.output.facts).toHaveLength(10);
   expect(report.output.quotes).toHaveLength(2);
   expect(report.output.cleaning.removed_items).toContain("fact[0]: CRM_OBJECT_ADDRESS");
   expect(report.output.cleaning.removed_items).toContain("fact[6]: STT_META_NOISE");
   expect(report.output.cleaning.removed_items).toContain("fact[12]: ROLE_INCONSISTENCY");
-  expect(report.output.cleaning.normalizations).toContain("facts: priority cap 10 → 7");
+  expect(report.output.cleaning.normalizations).not.toContain("facts: priority cap 10 → 7");
   expect(report.output.facts.some((item: { fact: string }) => item.fact.includes("первоначальным взносом"))).toBe(true);
   expect(report.output.outcome).toMatchObject({ responsible_party: "agent", deadline: "в течение 5 минут", channel: "Telegram" });
 });

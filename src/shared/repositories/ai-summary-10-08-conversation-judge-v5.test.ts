@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import fixtures from "./fixtures/ai-summary-10-08-outcome-determinism.json";
+import productionRegressions from "./fixtures/ai-summary-10-08-production-outcome-regressions.json";
 
 type Outcome = {
   call_result: string;
@@ -23,8 +24,10 @@ type JudgeOutput = {
 };
 
 type Guard = {
-  validateConversationJudge(output: JudgeOutput, input: { transcript: string; outcomeExtractor: Outcome }): { output: JudgeOutput; audit: Record<string, unknown> };
+  validateConversationJudge(output: JudgeOutput, input: { transcript: string; outcomeExtractor: Outcome; needsExtractor?: JudgeOutput["verified_needs"] }): { output: JudgeOutput; audit: Record<string, any> };
+  validateRequirementPreferences(output: JudgeOutput, input: { transcript: string; needsExtractor?: JudgeOutput["verified_needs"] }): { output: JudgeOutput; audit: Record<string, any> };
   applySummaryJudgeEvidence(output: Record<string, unknown>, input: { transcript: string; outcomeExtractor: Outcome; cleanOutcome: Outcome; summary: Record<string, unknown> }): { output: Record<string, any>; audit: Record<string, any> };
+  sanitizeSummaryGenerator(output: Record<string, unknown>, input: { cleanOutcome: Outcome; cleanNeeds?: JudgeOutput["verified_needs"] }): { output: Record<string, any>; audit: Record<string, any> };
 };
 
 function loadGuard(): Guard {
@@ -44,6 +47,110 @@ const judge = (outcome: Outcome): JudgeOutput => ({
 const run = (transcript: string, source: Outcome, proposed: Outcome = source) => guard.validateConversationJudge(judge(proposed), { transcript, outcomeExtractor: source });
 
 describe("AI Summary 10.08 Conversation Judge v5 deterministic outcome evidence", () => {
+  it.each(productionRegressions)("production regression: $id", (fixture) => {
+    const result = guard.validateConversationJudge(fixture.conversation_judge_output as JudgeOutput, {
+      transcript: fixture.transcript,
+      outcomeExtractor: fixture.outcome_extractor,
+    });
+    expect(result.output.verified_outcome).toEqual(fixture.expected_outcome);
+    expect(result.output.issues.filter((issue) => issue.startsWith(fixture.forbidden_issue_prefix))).toEqual([]);
+    expect(result.audit).toMatchObject({ implementation_version: "v5.3.0" });
+  });
+
+  it("inherits agent, today evening and phone from the confirmed callback agreement", () => {
+    const transcript = "Агент:\n— Могу вам сегодня вечером точно сказать, перезвонить или написать?\nКлиент:\n— Да, можете, да, конечно.\nАгент:\n— Хорошо, сможете позвонить сегодня вечером?\nКлиент:\n— Да, конечно. Всё, буду ждать звонка.";
+    const source = { call_result: "Согласован звонок агента клиенту сегодня вечером", agreement: "Агент перезвонит клиенту сегодня вечером для уточнения по просмотру", next_step: "Агент перезвонит клиенту сегодня вечером", responsible_party: "agent", deadline: "сегодня вечером", channel: "телефон" };
+    const proposed = { ...source, responsible_party: "", deadline: "" };
+    const result = run(transcript, source, proposed);
+    expect(result.output.verified_outcome).toEqual(source);
+    expect(result.output.issues).not.toContain("OUTCOME_RESPONSIBLE_PARTY: NOT_SUPPORTED");
+    expect(result.output.issues).not.toContain("OUTCOME_DEADLINE: NOT_SUPPORTED");
+    expect(result.audit).toMatchObject({ fields: { agreement: "SUPPORTED", next_step: "SUPPORTED", responsible_party: "SUPPORTED", deadline: "SUPPORTED", channel: "SUPPORTED" } });
+  });
+
+  it("inherits agent, tomorrow and Telegram from a confirmed message", () => {
+    const transcript = "Агент:\n— Я вам напишу завтра в Telegram.\nКлиент:\n— Да, договорились.";
+    const proposed = { ...emptyOutcome(), agreement: "Агент напишет клиенту завтра в Telegram", next_step: "Агент напишет клиенту завтра в Telegram" };
+    expect(run(transcript, proposed).output.verified_outcome).toEqual({ ...proposed, responsible_party: "agent", deadline: "завтра", channel: "Telegram" });
+  });
+
+  it("inherits client, friday and phone from a confirmed client call", () => {
+    const transcript = "Клиент:\n— Я сам позвоню вам в пятницу.\nАгент:\n— Хорошо, договорились.";
+    const proposed = { ...emptyOutcome(), agreement: "Клиент сам позвонит агенту в пятницу", next_step: "Клиент позвонит агенту в пятницу" };
+    expect(run(transcript, proposed).output.verified_outcome).toEqual({ ...proposed, responsible_party: "client", deadline: "в пятницу", channel: "телефон" });
+  });
+
+  it("does not accept an unanswered call proposal", () => {
+    const transcript = "Агент:\n— Могу вам завтра позвонить?";
+    const proposed = { ...emptyOutcome(), agreement: "Агент позвонит клиенту завтра", next_step: "Агент позвонит клиенту завтра", responsible_party: "agent", deadline: "завтра", channel: "телефон" };
+    expect(run(transcript, proposed).output.verified_outcome).toEqual(emptyOutcome());
+  });
+
+  it("does not accept an unconfirmed conditional message", () => {
+    const transcript = "Агент:\n— Если получится, завтра напишу.";
+    const proposed = { ...emptyOutcome(), agreement: "Агент напишет клиенту завтра", next_step: "Агент напишет клиенту завтра", responsible_party: "agent", deadline: "завтра" };
+    expect(run(transcript, proposed).output.verified_outcome).toEqual(emptyOutcome());
+  });
+
+  it("keeps only the later confirmed replacement agreement", () => {
+    const transcript = "Клиент:\n— Я сам напишу вам.\nАгент:\n— Хорошо.\nАгент:\n— Нет, лучше я напишу вам через 5 минут.\nКлиент:\n— Да, договорились.";
+    const finalOutcome = { call_result: "Согласовано, что агент напишет клиенту через 5 минут", agreement: "Агент напишет клиенту через 5 минут", next_step: "Агент напишет клиенту через 5 минут", responsible_party: "agent", deadline: "через 5 минут", channel: "" };
+    expect(run(transcript, finalOutcome).output.verified_outcome).toEqual(finalOutcome);
+  });
+
+  it("keeps a composite agreement when its viewing and follow-up call are confirmed by separate events", () => {
+    const fixture = productionRegressions.find((item) => item.id === "viewing_and_friday_confirmation_call")!;
+    const source = {
+      ...fixture.outcome_extractor,
+      agreement: "Агент записал клиента на просмотр в субботу на 10:30 и согласовал, что позвонит в пятницу для подтверждения",
+      deadline: "в пятницу",
+    };
+    const proposed = {
+      ...fixture.conversation_judge_output,
+      verified_outcome: {
+        ...source,
+        agreement: "Агент позвонит в пятницу накануне для подтверждения клиенту",
+      },
+    } as JudgeOutput;
+    const result = guard.validateConversationJudge(proposed, { transcript: fixture.transcript, outcomeExtractor: source });
+    expect(result.output.verified_outcome.agreement).toBe(source.agreement);
+    expect(result.output.verified_outcome.next_step).toBe(source.next_step);
+    expect(result.output.issues.filter((issue) => issue.startsWith("OUTCOME_"))).toEqual([]);
+    expect(result.audit).toMatchObject({
+      agreement_event: { primary_action: "show" },
+      next_step_event: { primary_action: "call", deadline: "в пятницу" },
+    });
+  });
+
+  it("prefers a later confirmed callback over an earlier viewing from Outcome Extractor", () => {
+    const fixture = productionRegressions.find((item) => item.id === "viewing_and_friday_confirmation_call")!;
+    const source = {
+      ...fixture.outcome_extractor,
+      agreement: "Агент записал клиента на просмотр квартиры в субботу в 10:30; Агент позвонит клиенту в пятницу накануне для подтверждения",
+      next_step: "Агент проведёт просмотр квартиры в субботу в 10:30",
+      deadline: "в субботу в 10:30",
+      channel: "личная встреча",
+    };
+    const proposed = {
+      ...fixture.conversation_judge_output,
+      verified_outcome: {
+        ...source,
+        next_step: "Агент позвонит клиенту в пятницу накануне для подтверждения встречи",
+        deadline: "в пятницу накануне",
+        channel: "phone",
+      },
+    } as JudgeOutput;
+    const result = guard.validateConversationJudge(proposed, { transcript: fixture.transcript, outcomeExtractor: source });
+    expect(result.output.verified_outcome).toMatchObject({
+      agreement: source.agreement,
+      next_step: proposed.verified_outcome.next_step,
+      responsible_party: "agent",
+      deadline: "в пятницу накануне",
+      channel: "телефон",
+    });
+    expect(result.output.issues.filter((issue) => issue.startsWith("OUTCOME_"))).toEqual([]);
+  });
+
   it("proposal_without_confirmation_does_not_create_agreement", () => {
     const transcript = "Агент:\n— Я могу завтра вам перезвонить.";
     const proposed = { ...emptyOutcome(), agreement: "Агент перезвонит", next_step: "Агент перезвонит", responsible_party: "agent", deadline: "завтра", channel: "телефон" };
@@ -324,6 +431,122 @@ describe("AI Summary 10.08 Conversation Judge v5 deterministic outcome evidence"
     const result = run(transcript, outcome);
     expect(result.output.verified_outcome).toEqual(outcome);
     expect(result.audit).toMatchObject({ reasons: ["CLIENT_DECLARED_NEXT_ACTION"] });
+  });
+});
+
+describe("AI Summary 10.08 Summary Generator outcome channel isolation", () => {
+  it("does not restore WhatsApp from other Store fields after Judge cleared channel", () => {
+    const output = {
+      conversation_result: "Клиент предпочитает WhatsApp.",
+      key_facts: ["Предпочтительный канал — WhatsApp"],
+      quotes: [],
+      next_step: "Агент напишет клиенту в WhatsApp примерно через 30–40 минут.",
+    };
+    const result = guard.sanitizeSummaryGenerator(output, {
+      cleanOutcome: { ...emptyOutcome(), next_step: "Агент напишет клиенту", responsible_party: "agent", deadline: "примерно через 30–40 минут" },
+    });
+    expect(result.output).toEqual({ ...output, next_step: "Агент напишет клиенту примерно через 30–40 минут." });
+    expect(result.audit).toMatchObject({ implementation_version: "v5.3.0", policy: "OUTCOME_CHANNEL_AND_REQUIREMENT_PREFERENCE_ISOLATION", supported_channel: "", removed_channels: ["WhatsApp"], changed: true });
+  });
+
+  it("keeps a channel that is explicitly supported by clean outcome", () => {
+    const output = { conversation_result: "Согласован звонок.", key_facts: [], quotes: [], next_step: "Агент позвонит клиенту по телефону в пятницу." };
+    const result = guard.sanitizeSummaryGenerator(output, {
+      cleanOutcome: { ...emptyOutcome(), next_step: "Агент позвонит клиенту", responsible_party: "agent", deadline: "в пятницу", channel: "телефон" },
+    });
+    expect(result.output).toEqual(output);
+    expect(result.audit.changed).toBe(false);
+  });
+});
+
+describe("AI Summary 10.08 requirement vs preference evidence", () => {
+  const withNeeds = (requirements: string[], preferences: string[] = []): JudgeOutput => ({
+    ...judge(emptyOutcome()),
+    verified_needs: { primary_need: "Подобрать квартиру", requirements, preferences, objections: [], unresolved_questions: [] },
+  });
+
+  it("production report 2026-08-13T155352 keeps soft budget and metro criteria as preferences", () => {
+    const transcript = "Оператор:\n— Новостройки вас интересуют?\nКлиент:\n— Нет.\nОператор:\n— Консультация по ипотеке вам была бы интересна?\nКлиент:\n— Нет, смотрите, как это она может быть — в пределах разумной цены, естественно, до 8 млн желательно. И чтоб метро было рядом.\nАгент:\n— А консультация по ипотеке была бы интересна?\nКлиент:\n— А мы ипотеку будем брать.";
+    const extractorNeeds = { primary_need: "Подобрать квартиру", requirements: ["Бюджет не выше 8 млн ₽", "Рядом с метро"], preferences: [], objections: [], unresolved_questions: [] };
+    const proposed = withNeeds(["Бюджет не выше 8 млн ₽", "Рядом с метро", "Не рассматривает новостройки"], [
+      "Покупка планируется с использованием ипотеки (нужна ипотечная консультация)",
+      "Предпочтительна консультация/встреча в выходные или онлайн из-за занятости сына",
+    ]);
+    const result = guard.validateConversationJudge(proposed, { transcript, outcomeExtractor: emptyOutcome(), needsExtractor: extractorNeeds });
+    expect(result.output.verified_needs).toMatchObject({
+      requirements: [],
+      preferences: ["Желательный бюджет — до 8 млн ₽", "Предпочтительно рядом с метро"],
+    });
+    expect(result.output.decisions.needs).toBe("correct");
+    expect(result.audit.requirement_preference).toMatchObject({ version: "v1.0.0", changed: true });
+    expect(result.audit.requirement_preference.reclassified.map((item: any) => item.modality)).toEqual(["SOFT", "SOFT"]);
+    expect(result.audit.requirement_preference.removed_requirements).toEqual([{ requirement: "Не рассматривает новостройки", reason: "CLIENT_CRITERION_EVIDENCE_NOT_FOUND" }]);
+    expect(result.audit.requirement_preference.removed_preferences.map((item: any) => item.reason)).toEqual(["CLIENT_CRITERION_EVIDENCE_NOT_FOUND", "CLIENT_CRITERION_EVIDENCE_NOT_FOUND"]);
+  });
+
+  it.each([
+    ["Желательно квартиру с балконом", "Наличие балкона обязательно"],
+    ["Хотелось бы не первый этаж", "Не первый этаж"],
+    ["Предпочтительно окна во двор", "Окна во двор"],
+    ["Было бы хорошо рядом с парком", "Рядом с парком"],
+    ["По возможности с готовым ремонтом", "Готовый ремонт"],
+  ])("moves a soft client criterion to preferences: %s", (clientPhrase, requirement) => {
+    const transcript = `Клиент:\n— ${clientPhrase}.`;
+    const result = guard.validateRequirementPreferences(withNeeds([requirement]), { transcript });
+    expect(result.output.verified_needs.requirements).toEqual([]);
+    expect(result.output.verified_needs.preferences).toHaveLength(1);
+    expect(result.audit.reclassified[0]).toMatchObject({ requirement, modality: "SOFT" });
+  });
+
+  it.each([
+    ["Обязательно рядом с метро", "Рядом с метро"],
+    ["Только квартира с балконом", "Наличие балкона обязательно"],
+    ["Не больше 8 млн", "Бюджет не выше 8 млн ₽"],
+    ["Не меньше двух комнат", "Не менее двух комнат"],
+    ["Выше 8 млн не рассматриваю", "Бюджет не выше 8 млн ₽"],
+    ["Без лифта вообще не рассматриваю", "Наличие лифта обязательно"],
+  ])("keeps a requirement only when hard modality is evidenced: %s", (clientPhrase, requirement) => {
+    const transcript = `Клиент:\n— ${clientPhrase}.`;
+    const result = guard.validateRequirementPreferences(withNeeds([requirement]), { transcript });
+    expect(result.output.verified_needs.requirements).toEqual([requirement]);
+    expect(result.output.verified_needs.preferences).toEqual([]);
+    expect(result.audit).toMatchObject({ changed: false, reclassified: [] });
+  });
+
+  it("removes mandatory wording from Summary when Clean Store classifies the criterion as preference", () => {
+    const output = { conversation_result: "Клиент выбирает квартиру.", key_facts: ["Обязательное требование — рядом с метро"], quotes: [], next_step: "" };
+    const result = guard.sanitizeSummaryGenerator(output, {
+      cleanOutcome: emptyOutcome(),
+      cleanNeeds: { primary_need: "Подобрать квартиру", requirements: [], preferences: ["Предпочтительно рядом с метро"], objections: [], unresolved_questions: [] },
+    });
+    expect(result.output.key_facts).toEqual(["Предпочтительно рядом с метро"]);
+    expect(result.audit).toMatchObject({ requirement_preference_version: "v1.0.0", changed: true });
+  });
+
+  it("normalizes morphological variants of proximity to metro", () => {
+    const result = guard.validateRequirementPreferences(withNeeds([], ["Предпочтительно близость к метро"]), {
+      transcript: "Клиент:\n— Хотелось бы, чтоб метро было близко.",
+    });
+    expect(result.output.verified_needs.preferences).toEqual(["Предпочтительно рядом с метро"]);
+  });
+
+  it("keeps a single-digit soft budget when the amount and unit are evidenced", () => {
+    const result = guard.validateRequirementPreferences(withNeeds([], ["Бюджет — до примерно 8 млн ₽ (выражено как пожелание)"]), {
+      transcript: "Клиент:\n— Хотелось бы уложиться до 8 млн.",
+    });
+    expect(result.output.verified_needs.preferences).toEqual(["Желательный бюджет — до 8 млн ₽"]);
+  });
+
+  it.each([
+    "Покупка планируется с использованием ипотеки",
+    "Предпочтительно: нужна возможность покупки через ипотеку (клиент будет брать ипотеку)",
+    "Оформление через ипотеку",
+  ])("keeps a financing plan out of preferences: %s", (preference) => {
+    const result = guard.validateRequirementPreferences(withNeeds([], [preference]), {
+      transcript: "Клиент:\n— Мы будем брать ипотеку, оформлять покупку через ипотеку.",
+    });
+    expect(result.output.verified_needs.preferences).toEqual([]);
+    expect(result.audit.removed_preferences).toEqual([{ preference, reason: "TRANSACTION_PLAN_IS_NOT_PREFERENCE" }]);
   });
 });
 

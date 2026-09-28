@@ -1,0 +1,3 @@
+export const RECOGNITION_PROMPT_VERSION = "floor-plan-recognition-v1";
+export const RECOGNITION_PROMPT = `Extract the architectural plan into the supplied JSON schema using normalized coordinates from 0 to 1.
+Never infer an architectural element solely because it would be typical or logical. Represent only what is visible or reliably recoverable from the source. Every element must include confidence. Preserve topology above aesthetics. Use null for areas that are not explicitly printed or reliably recoverable. Put every unresolved architectural choice in ambiguities with concise options. Do not include furniture as fixtures; include only visible sanitary and kitchen equipment.`;

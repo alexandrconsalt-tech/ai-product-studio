@@ -39,6 +39,34 @@ function clean(overrides: Record<string, unknown> = {}, inputOverrides: Partial<
 }
 
 describe("AI Summary 10.08 Store Cleaner", () => {
+  it.each([
+    "Подобрать однокомнатную квартиру для сына в Санкт-Петербурге",
+    "Купить квартиру для собственного проживания",
+    "Найти студию рядом с метро",
+    "Получить условия покупки конкретной квартиры",
+    "Подобрать квартиру до 8 млн ₽ рядом с метро",
+  ])("preserves a meaningful primary need: %s", (primaryNeed) => {
+    const result = clean({
+      verified_needs: { primary_need: primaryNeed, requirements: [], preferences: [], objections: [], unresolved_questions: [] },
+    }).output;
+
+    expect(result.needs.primary_need).toBe(primaryNeed);
+    expect(result.cleaning.removed_items).not.toContain("needs.primary_need: CRM_OBJECT_CHARACTERISTIC");
+  });
+
+  it.each([
+    "Однокомнатная квартира, третий этаж",
+    "Квартира 37,8 м² на 28 этаже",
+    "Студия 28 м²",
+  ])("removes a pure CRM object characteristic from primary need: %s", (primaryNeed) => {
+    const result = clean({
+      verified_needs: { primary_need: primaryNeed, requirements: [], preferences: [], objections: [], unresolved_questions: [] },
+    }).output;
+
+    expect(result.needs.primary_need).toBe("");
+    expect(result.cleaning.removed_items).toContain("needs.primary_need: CRM_OBJECT_CHARACTERISTIC");
+  });
+
   it("removes exact duplicates after whitespace/case normalization and trims values", () => {
     const result = clean({
       verified_facts: [{ fact: "  Факт   один ", evidence: " Цитата " }, { fact: "факт один", evidence: "цитата" }],
@@ -90,14 +118,14 @@ describe("AI Summary 10.08 Store Cleaner", () => {
     expect(result.cleaning.removed_items).toContain("fact[0]: LISTING_SOURCE_NOISE");
   });
 
-  it("caps facts at seven and quotes at two after cleaning", () => {
+  it("preserves all unique facts and caps only quote output", () => {
     const result = clean({
       verified_facts: Array.from({ length: 9 }, (_, index) => ({ fact: `Факт ${index}`, evidence: `Цитата ${index}` })),
       verified_quotes: ["Раз", "Два", "Три"],
     }).output;
-    expect(result.facts).toHaveLength(7);
+    expect(result.facts).toHaveLength(9);
     expect(result.quotes).toEqual(["Раз", "Два"]);
-    expect(result.cleaning.normalizations).toEqual(expect.arrayContaining(["facts: priority cap 9 → 7", "quotes: capped 3 → 2"]));
+    expect(result.cleaning.normalizations).toContain("quotes: capped 3 → 2");
   });
 
   it("caps quotes at two independently", () => {
@@ -153,6 +181,69 @@ describe("AI Summary 10.08 Store Cleaner", () => {
     expect(result.facts).toEqual([]);
   });
 
+  it("keeps an urgent client viewing preference separate from the next-step deadline", () => {
+    const urgentFact = { fact: "Клиент хочет посмотреть объект сегодня", evidence: "Хотелось бы посмотреть сегодня" };
+    const outcome = { call_result: "Нужно уточнить возможность просмотра", agreement: "", next_step: "Агент уточнит возможность просмотра", responsible_party: "agent", deadline: "", channel: "" };
+    const result = clean({ verified_facts: [urgentFact], verified_outcome: outcome }).output;
+
+    expect(result.facts).toEqual([urgentFact]);
+    expect(result.outcome).toEqual(outcome);
+    expect(result.outcome.deadline).toBe("");
+  });
+
+  it("keeps a preferred contact time that is not represented by outcome", () => {
+    const contactConstraint = { fact: "Клиенту удобнее разговаривать после 18:00", evidence: "После шести мне удобнее" };
+    const outcome = { call_result: "Продолжить общение", agreement: "", next_step: "Агент перезвонит клиенту", responsible_party: "agent", deadline: "", channel: "" };
+
+    expect(clean({ verified_facts: [contactConstraint], verified_outcome: outcome }).output.facts).toEqual([contactConstraint]);
+  });
+
+  it("removes a fact fully covered by structured next step and deadline", () => {
+    const duplicate = { fact: "Агент перезвонит клиенту завтра", evidence: "Я перезвоню вам завтра" };
+    const outcome = { call_result: "Продолжить общение", agreement: "", next_step: "Агент перезвонит клиенту", responsible_party: "agent", deadline: "завтра", channel: "" };
+    const result = clean({ verified_facts: [duplicate], verified_outcome: outcome }).output;
+
+    expect(result.facts).toEqual([]);
+    expect(result.cleaning.deduplicated_items).toContain("fact[0]: STRUCTURED_SEMANTIC_DUPLICATE");
+    expect(result.outcome).toEqual(outcome);
+  });
+
+  it("does not infer a channel from a fact that merely mentions WhatsApp", () => {
+    const mention = { fact: "Клиент упоминал WhatsApp", evidence: "У меня есть WhatsApp" };
+    const outcome = { call_result: "Продолжить общение", agreement: "", next_step: "Агент свяжется с клиентом", responsible_party: "agent", deadline: "", channel: "" };
+    const result = clean({ verified_facts: [mention], verified_outcome: outcome }).output;
+
+    expect(result.facts).toEqual([mention]);
+    expect(result.outcome).toEqual(outcome);
+    expect(result.outcome.channel).toBe("");
+  });
+
+  it("keeps unique competition context", () => {
+    const competition = { fact: "Клиент параллельно рассматривает другие варианты", evidence: "Я ещё другие варианты смотрю" };
+    expect(clean({ verified_facts: [competition] }).output.facts).toEqual([competition]);
+  });
+
+  it("removes CRM object attributes while preserving the client's financial condition", () => {
+    const financial = { fact: "Бюджет клиента — до 10 млн ₽ из собственных средств", evidence: "До десяти миллионов, свои средства" };
+    const result = clean({
+      verified_facts: [
+        { fact: "Адрес объекта: улица Ленина, 10", evidence: "Ленина, десять" },
+        { fact: "Текущий объект — квартира площадью 54 кв. м", evidence: "Пятьдесят четыре метра" },
+        { fact: "Текущий объект находится на пятом этаже", evidence: "Пятый этаж" },
+        { fact: "Цена текущего объекта — 9 500 000 ₽", evidence: "Девять с половиной миллионов" },
+        financial,
+      ],
+    }).output;
+
+    expect(result.facts).toEqual([financial]);
+    expect(result.cleaning.removed_items).toEqual(expect.arrayContaining([
+      "fact[0]: CRM_OBJECT_ADDRESS",
+      "fact[1]: CRM_OBJECT_CHARACTERISTIC",
+      "fact[2]: CRM_OBJECT_CHARACTERISTIC",
+      "fact[3]: CRM_OBJECT_PRICE",
+    ]));
+  });
+
   it("preserves a useful search-location constraint", () => {
     const source = { fact: "Клиент рассматривает покупку только в Мистолово и Лавриках", evidence: "Только в Мистолово и Лавриках" };
     expect(clean({ verified_facts: [source] }).output.facts).toEqual([source]);
@@ -176,16 +267,16 @@ describe("AI Summary 10.08 Store Cleaner", () => {
     expect(clean({ verified_facts: [financial] }).output.facts).toContainEqual(financial);
   });
 
-  it("preserves a financial fact over low-priority facts when priority cap applies", () => {
+  it("does not discard unique facts because of their position", () => {
     const financial = { fact: "Клиент располагает первоначальным взносом примерно 1 400 000 ₽ (около 20%)", evidence: "Миллион четыреста" };
     const low = Array.from({ length: 8 }, (_, index) => ({ fact: `Контекст текущего объекта ${index}`, evidence: `Контекст ${index}` }));
     const result = clean({ verified_facts: [...low, financial] }).output;
     expect(result.facts).toContainEqual(financial);
-    expect(result.facts).not.toContainEqual(low[7]);
-    expect(result.cleaning.normalizations).toContain("facts: priority cap 9 → 7");
+    expect(result.facts).toContainEqual(low[7]);
+    expect(result.facts).toHaveLength(9);
   });
 
-  it("keeps original Judge order inside the same priority tier", () => {
+  it("keeps original Judge order for preserved facts", () => {
     const important = [
       { fact: "Клиенту нужна ипотека", evidence: "Да" },
       { fact: "Клиент рассматривает рассрочку", evidence: "Рассматриваю" },
@@ -207,7 +298,7 @@ describe("AI Summary 10.08 Store Cleaner", () => {
     const result = api().clean({ conversationJudge: case55Judge, current, provenance: current }).output;
     expect(result.cleaning.removed_items).toEqual(expect.arrayContaining(["fact[0]: CRM_OBJECT_ADDRESS", "fact[6]: STT_META_NOISE"]));
     expect(result.facts.some((item: { fact: string }) => /первоначальн[а-яё]* взнос/i.test(item.fact))).toBe(true);
-    expect(result.facts.length).toBeLessThanOrEqual(7);
+    expect(result.facts.length).toBeGreaterThan(0);
     expect(result.quotes.length).toBeLessThanOrEqual(2);
     expect(result.outcome).toEqual(case55Judge.verified_outcome);
     expect(result.facts.every((item: { fact: string }) => case55Judge.verified_facts.some((source: { fact: string }) => source.fact === item.fact))).toBe(true);
@@ -234,7 +325,7 @@ describe("AI Summary 10.08 Store Cleaner", () => {
     ]));
   });
 
-  it("removes CRM-object noise from needs sections but preserves an actionable unresolved question", () => {
+  it("preserves an actionable primary need while removing CRM-object noise from other needs sections", () => {
     const result = clean({
       verified_needs: {
         primary_need: "Посмотреть выставленную двухкомнатную квартиру площадью 44 кв. м",
@@ -245,14 +336,13 @@ describe("AI Summary 10.08 Store Cleaner", () => {
       },
     }).output;
     expect(result.needs).toEqual({
-      primary_need: "",
+      primary_need: "Посмотреть выставленную двухкомнатную квартиру площадью 44 кв. м",
       requirements: ["Клиенту принципиально нужен второй этаж", "Квартира должна быть на втором этаже"],
       preferences: [],
       objections: [],
       unresolved_questions: [],
     });
     expect(result.cleaning.removed_items).toEqual(expect.arrayContaining([
-      "needs.primary_need: CRM_OBJECT_CHARACTERISTIC",
       "requirements[0]: CRM_OBJECT_ADDRESS",
       "preferences[0]: CRM_OBJECT_LOCATION",
       "unresolved_questions[0]: CRM_OBJECT_PRICE",
