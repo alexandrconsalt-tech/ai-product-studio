@@ -5,6 +5,13 @@ import { KeyRound } from "lucide-react";
 import { Alert, Badge, Button, Card, Input, Page, Section, Select } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
 import {
+  clearFloorPlanApiKey,
+  DEFAULT_FLOOR_PLAN_BROWSER_SETTINGS,
+  loadFloorPlanBrowserSettings,
+  saveFloorPlanBrowserSettings,
+  type FloorPlanBrowserSettings,
+} from "@/features/floor-plan/config/browser-settings";
+import {
   clearAnthropicApiKey,
   clearAiTunnelApiKey,
   clearNexaraApiKey,
@@ -228,6 +235,59 @@ function ApiKeysSection() {
   );
 }
 
+function FloorPlanApiKeysSection() {
+  const [settings, setSettings] = React.useState<FloorPlanBrowserSettings>(DEFAULT_FLOOR_PLAN_BROWSER_SETTINGS);
+  const [draftKey, setDraftKey] = React.useState("");
+  const [sharedApiKey, setSharedApiKey] = React.useState("");
+  const [saved, setSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    setSettings(loadFloorPlanBrowserSettings());
+    setSharedApiKey(loadAiTunnelApiKey());
+  }, []);
+  const save = () => {
+    const apiKey = draftKey.trim() || settings.apiKey;
+    setSettings(saveFloorPlanBrowserSettings({ ...settings, apiKey }));
+    setDraftKey("");
+    setSaved(true);
+  };
+  const clear = () => {
+    setSettings(clearFloorPlanApiKey());
+    setDraftKey("");
+    setSaved(false);
+  };
+  const effectiveApiKey = draftKey.trim() || settings.apiKey || sharedApiKey;
+
+  return (
+    <Card className="grid max-w-2xl gap-4">
+      <div className="flex items-center gap-2">
+        <KeyRound className="size-4 text-primary" aria-hidden="true" />
+        <h2 className="text-lg font-semibold">API-ключи AI Floor Plan</h2>
+      </div>
+      <p className="text-sm text-text-muted">
+        Здесь задаётся подключение AI Tunnel для экрана AI Floor Plan. Модели и промпты каждого этапа выбираются непосредственно во вкладке «Пайплайн».
+      </p>
+      <div className="grid gap-3 rounded-md border border-border p-3">
+        <div className="flex items-center justify-between gap-2"><h3 className="font-medium">AI Tunnel</h3><Badge tone={effectiveApiKey ? "success" : "neutral"}>{settings.apiKey ? `Сохранён: ${maskApiKey(settings.apiKey)}` : sharedApiKey ? `Используется общий: ${maskApiKey(sharedApiKey)}` : "Ключ не задан"}</Badge></div>
+        <label className="grid gap-1 text-sm">
+          API key
+          <Input aria-label="AI Tunnel API key для AI Floor Plan" type="password" placeholder={sharedApiKey ? "Оставьте пустым, чтобы использовать общий ключ" : "sk-aitunnel-..."} value={draftKey} onChange={(event) => { setDraftKey(event.target.value); setSaved(false); }} autoComplete="off" />
+        </label>
+        <label className="grid gap-1 text-sm">
+          Base URL
+          <Input aria-label="AI Tunnel Base URL для AI Floor Plan" value={settings.baseUrl} onChange={(event) => { setSettings((current) => ({ ...current, baseUrl: event.target.value })); setSaved(false); }} autoComplete="off" />
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={save}>Сохранить подключение</Button>
+        <Button variant="ghost" onClick={clear} disabled={!settings.apiKey}>Удалить отдельный ключ Floor Plan</Button>
+      </div>
+      {saved ? <Alert tone="success">Подключение AI Floor Plan сохранено.</Alert> : !effectiveApiKey ? <Alert tone="info">Для запуска пайплайна задайте общий или отдельный AI Tunnel key.</Alert> : null}
+      <Alert tone="warning">Ключ хранится в localStorage только этого браузера и отправляется исключительно на same-origin `/api/floor-plan`. Серверный route обращается только к официальному API AI Tunnel.</Alert>
+    </Card>
+  );
+}
+
 export function SettingsScreen() {
   const { reset } = useRepositoryStore();
   return (
@@ -239,6 +299,10 @@ export function SettingsScreen() {
 
       <Section>
         <ApiKeysSection />
+      </Section>
+
+      <Section>
+        <FloorPlanApiKeysSection />
       </Section>
 
       <Section>

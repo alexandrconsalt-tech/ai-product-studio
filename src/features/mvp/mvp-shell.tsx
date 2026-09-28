@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BarChart3, Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, ClipboardCheck, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
+import { BarChart3, Bot, Boxes, BrainCircuit, ChevronLeft, ChevronRight, ClipboardCheck, DraftingCompass, FlaskConical, FolderKanban, LayoutDashboard, Microscope, Moon, PanelLeft, Play, ScrollText, Settings, Sun, LineChart } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppShell, Header, NavigationItem, Sidebar, Workspace, IconButton, Badge, Breadcrumb } from "@/shared/ui";
 import { useRepositoryStore } from "@/shared/stores/repository-store";
@@ -21,6 +21,7 @@ import { DashboardScreen } from "./screens/dashboard-screen";
 import { SettingsScreen } from "./screens/settings-screen";
 import { SummaryReviewScreen } from "./screens/summary-review-screen";
 import { SummaryReportScreen } from "./screens/summary-report-screen";
+import { FloorPlanScreen } from "@/features/floor-plan";
 
 // Every view stays reachable by URL (`?view=...`) -- CLAUDE.md's "hide
 // navigation, never delete code" rule (AI Product Studio v2 addendum).
@@ -35,6 +36,7 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
   { id: "playground", label: "Песочница", icon: <Play className="size-4" aria-hidden="true" /> },
   { id: "summary-review", label: "Оценка Summary", icon: <ClipboardCheck className="size-4" aria-hidden="true" /> },
   { id: "summary-report", label: "Отчёт Summary", icon: <BarChart3 className="size-4" aria-hidden="true" /> },
+  { id: "floor-plan", label: "AI Floor Plan", icon: <DraftingCompass className="size-4" aria-hidden="true" /> },
   { id: "inspector", label: "Инспектор", icon: <Microscope className="size-4" aria-hidden="true" /> },
   { id: "prompts", label: "Промпты", icon: <ScrollText className="size-4" aria-hidden="true" /> },
   { id: "analytics", label: "Аналитика", icon: <LineChart className="size-4" aria-hidden="true" /> },
@@ -48,7 +50,7 @@ const navItems: ReadonlyArray<{ id: MvpView; label: string; icon: React.ReactNod
 // API keys). Everything else above stays reachable by URL only
 // (Projects, Architecture, Pipeline, Inspector, Prompts, Analytics,
 // Pipeline Lab v3 standalone).
-const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "summary-review", "summary-report", "dashboard", "settings"]);
+const VISIBLE_VIEW_IDS: ReadonlySet<MvpView> = new Set<MvpView>(["product", "playground", "summary-review", "summary-report", "floor-plan", "dashboard", "settings"]);
 const visibleNavItems = navItems.filter((item) => VISIBLE_VIEW_IDS.has(item.id));
 
 const viewTitles: Record<MvpView, string> = {
@@ -59,6 +61,7 @@ const viewTitles: Record<MvpView, string> = {
   playground: "Песочница",
   "summary-review": "Оценка качества Summary",
   "summary-report": "Отчёт по оценке",
+  "floor-plan": "AI Floor Plan",
   inspector: "Инспектор выполнения",
   prompts: "Инспектор промптов",
   analytics: "Аналитика",
@@ -76,6 +79,7 @@ function isMvpView(value: string | null): value is MvpView {
     value === "playground" ||
     value === "summary-review" ||
     value === "summary-report" ||
+    value === "floor-plan" ||
     value === "inspector" ||
     value === "prompts" ||
     value === "analytics" ||
@@ -89,16 +93,22 @@ export function MvpShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedView = searchParams.get("view");
+  const requestedProjectId = searchParams.get("projectId") ?? searchParams.get("productId");
   // AI Product Studio v2's default landing view is Product (list of
   // products), not Projects -- Product -> Playground -> Dashboard is the
   // whole visible app now.
   const view: MvpView = isMvpView(requestedView) ? requestedView : "product";
-  const { snapshot, selectedProjectId, load } = useRepositoryStore();
+  const { snapshot, selectedProjectId, load, selectProject } = useRepositoryStore();
   const { theme, setTheme, sidebarCollapsed, toggleSidebar } = useUiStore();
 
   React.useEffect(() => {
     load();
   }, [load]);
+
+  React.useEffect(() => {
+    if (!requestedProjectId || !snapshot?.projects.some((project) => project.id === requestedProjectId)) return;
+    if (selectedProjectId !== requestedProjectId) selectProject(requestedProjectId);
+  }, [requestedProjectId, selectProject, selectedProjectId, snapshot]);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -115,7 +125,7 @@ export function MvpShell() {
 
   return (
     <AppShell>
-      <Sidebar collapsed={sidebarCollapsed} className="flex flex-col gap-3 p-2">
+      <Sidebar collapsed={sidebarCollapsed} className={`${view === "floor-plan" ? "hidden md:flex" : "flex"} flex-col gap-3 p-2`}>
         <div className="flex h-10 items-center justify-between px-1">
           {!sidebarCollapsed ? <span className="text-sm font-semibold">AI Product Studio</span> : null}
           <IconButton aria-label="Свернуть боковую панель" variant="ghost" onClick={toggleSidebar}>
@@ -133,8 +143,8 @@ export function MvpShell() {
       <div className="flex min-w-0 flex-col">
         <Header>
           <Breadcrumb className="min-w-0 flex-1">
-            <span>{bundle.project?.name ?? "Нет продукта"}</span>
-            <span>/</span>
+            <span className={view === "floor-plan" ? "hidden sm:inline" : undefined}>{bundle.project?.name ?? "Нет продукта"}</span>
+            <span className={view === "floor-plan" ? "hidden sm:inline" : undefined}>/</span>
             <span className="text-foreground">{viewTitles[view]}</span>
           </Breadcrumb>
           {bundle.project ? <Badge tone="info">{bundle.project.status}</Badge> : null}
@@ -157,6 +167,7 @@ export function MvpShell() {
             {view === "playground" ? <PlaygroundScreen /> : null}
             {view === "summary-review" ? <SummaryReviewScreen /> : null}
             {view === "summary-report" ? <SummaryReportScreen /> : null}
+            {view === "floor-plan" ? <FloorPlanScreen /> : null}
             {view === "inspector" ? <ExecutionInspectorScreen /> : null}
             {view === "prompts" ? <PromptInspectorScreen /> : null}
             {view === "analytics" ? <AnalyticsScreen /> : null}

@@ -1,0 +1,42 @@
+{
+  "transcript": "Клиент:\n— Ну тогда на выходных, наверное, я вам позвоню, чтобы... Или как?\nАгент:\n— Звоните в любое время, когда удобно. Я всегда на связи.",
+  "communication_created_at": "2026-09-28T11:13:58+03:00",
+  "timezone": "Europe/Moscow",
+  "first_extractor_response": {
+    "status": "determined",
+    "detected": true,
+    "next_contact_at": null,
+    "precision": "range",
+    "action": "callback",
+    "actor": "none",
+    "raw_time_expression": "на выходных",
+    "evidence": "Ну тогда на выходных, наверное, я вам позвоню, чтобы... Или как?",
+    "confidence": 0.86,
+    "event_anchor": null
+  },
+  "second_extractor_response": {
+    "status": "determined",
+    "detected": true,
+    "next_contact_at": null,
+    "precision": "daypart",
+    "action": "callback",
+    "actor": "none",
+    "raw_time_expression": "на выходных",
+    "evidence": "Ну тогда на выходных, наверное, я вам позвоню, чтобы... Или как?",
+    "confidence": 0.86,
+    "event_anchor": null
+  },
+  "interest_extractor": {
+    "status": "not_determined",
+    "value": null,
+    "evidence": [],
+    "declined_values": [],
+    "decline_evidence": []
+  },
+  "purchase_term_extractor": {
+    "status": "not_determined",
+    "value": null,
+    "evidence": "",
+    "context": null
+  }
+}

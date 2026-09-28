@@ -3,135 +3,393 @@ import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
-const projectId = "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f";
-
-function readRecoveredConfig() {
-  const context = { window: {} as Record<string, unknown> };
-  for (const file of ["ai-application-attributes-pipeline-v14.js", "ai-application-attributes-pipeline-v15.js", "ai-application-attributes-pipeline-v16.js", "ai-application-attributes-pipeline-v17.js", "ai-application-attributes-pipeline-v18.js", "ai-application-attributes-pipeline-v19.js", "ai-application-attributes-pipeline-v20.js", "ai-application-attributes-pipeline-v21.js", "ai-application-attributes-pipeline-v22.js", "ai-application-attributes-pipeline-v23.js", "ai-application-attributes-pipeline-v24.js", "ai-application-attributes-pipeline-v25.js", "ai-application-attributes-pipeline-v26.js"]) {
-    runInNewContext(readFileSync(resolve(process.cwd(), "public", file), "utf8"), context);
-  }
-  return context.window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__ as {
-    version: number;
-    revision: number;
-    deletedStageOutKeys: string[];
-    stages: Array<{ enabled: boolean; name: string; outKey: string; provider?: string; prompt: string; promptVersion?: number; maxTokens?: number; responseContract?: string; runtimeType?: string; actualExecutor?: string; sourceOutKey?: string; contractId?: string; contractVersion?: string }>;
-  };
+function runtime() {
+  const context = { window: {} as Record<string, any>, Intl, Date };
+  for (let version = 14; version <= 26; version++)
+    runInNewContext(readFileSync(resolve("public", `ai-application-attributes-pipeline-v${version}.js`), "utf8"), context);
+  for (const file of ["ai-application-attributes-contract-v2.js", "ai-application-attributes-pipeline-v27.js", "ai-application-attributes-pipeline-v28.js", "ai-application-attributes-runtime-v29.js", "ai-application-attributes-pipeline-v30.js", "ai-application-attributes-pipeline-v31.js", "ai-application-attributes-pipeline-v32.js", "ai-application-attributes-pipeline-v33.js"])
+    runInNewContext(readFileSync(resolve("public", file), "utf8"), context);
+  return { api: context.window.ApplicationAttributesV2, config: context.window.__AI_APPLICATION_ATTRIBUTES_PIPELINE_CONFIG__ };
+}
+const absent = (): Record<string, any> => ({
+  interest: { status: "not_determined", value: null, evidence: [], declined_values: [], decline_evidence: [] },
+  funding_source: { status: "not_determined", value: null, evidence: "" },
+  purchase_term: { status: "not_determined", value: null, evidence: "" },
+  next_contact_date: { status: "not_determined", detected: false, next_contact_at: null, precision: "none", action: "none", actor: "none", raw_time_expression: null, evidence: null, confidence: 0 },
+});
+const determined = (): Record<string, any> => ({
+  interest: { status: "determined", value: ["Новостройки", "Ипотека"], evidence: ["Ищу новостройку", "Нужна ипотечная консультация"], declined_values: [], decline_evidence: [] },
+  funding_source: { status: "determined", value: "ипотека одобрена", evidence: "Банк одобрил ипотеку" },
+  purchase_term: { status: "determined", value: "2–3 месяца", evidence: "Купим через два месяца" },
+  next_contact_date: { status: "determined", detected: true, next_contact_at: "2026-09-28T15:00:00+03:00", precision: "exact", action: "callback", actor: "agent", raw_time_expression: "завтра в 15:00", evidence: "Завтра в 15:00 перезвоню", confidence: .96 },
+});
+function pipeline(api: any, candidates: Record<string, any>, change?: (inputs: any, verdicts: any) => void, existingAttributes?: Record<string, any>) {
+  const inputs = Object.fromEntries(api.keys.map((key: string) => [key, { status: "ready", result: candidates[key] }]));
+  const verdicts = Object.fromEntries(api.keys.map((key: string) => [key, { status: candidates[key].status, verdict: candidates[key].status === "not_determined" ? "not_determined" : "accepted", reason: "Подтверждено", ...(key === "next_contact_date" ? { corrected_value: null } : {}) }]));
+  change?.(inputs, verdicts);
+  const judge = api.judgeResult(verdicts, inputs), gate = api.gate(judge);
+  return { judge, gate, crm: api.crm(gate, existingAttributes) };
 }
 
-describe("AI Атрибуты в Заявке recovery preset", () => {
-  it("contains the recovered v26 seven-stage application-attributes pipeline", () => {
-    const config = readRecoveredConfig();
-
-    expect(config.version).toBe(14);
-    expect(config.revision).toBe(26);
-    expect(config.deletedStageOutKeys).toEqual(["interest_judge", "funding_source_judge", "purchase_term_judge", "attributes_merger"]);
-    expect(config.stages.map((stage) => stage.outKey)).toEqual([
-      "interest_extractor",
-      "funding_source_extractor",
-      "purchase_term_extractor",
-      "next_contact_date_extractor",
-      "attributes_judge",
-      "attributes_quality_gate",
-      "crm_attributes_result",
-    ]);
-    expect(config.stages.every((stage) => stage.enabled)).toBe(true);
-    expect(config.stages.every((stage) => stage.provider === "ai-tunnel")).toBe(true);
-    expect(config.stages[0].prompt).toContain("Ты — Extractor, а не проверщик");
-    expect(config.stages[0].prompt).toContain("БЕЗОПАСНОСТЬ СДЕЛОК — ОТДЕЛЬНАЯ ПОТРЕБНОСТЬ");
-    expect(config.stages[0].prompt).toContain("Есть обременение?");
-    expect(config.stages[0].promptVersion).toBe(26);
-    expect(config.stages[0].prompt).not.toContain("{{ctx.interest_extractor}}");
-    expect(config.stages[0].prompt).toContain("{{transcript}}");
-    expect(config.stages[3]).toMatchObject({
-      enabled: true,
-      type: "llm",
-      name: "Определение даты следующего контакта",
-      outKey: "next_contact_date_extractor",
-      model: "gpt-5-mini",
-      provider: "ai-tunnel",
-      temperature: 0,
-      maxTokens: 2000,
-      responseContract: "application_next_contact_date_extractor_v1",
+describe("Политика обновления существующих CRM-атрибутов", () => {
+  it("заменяет подтверждённый Funding Source и сохраняет существующий при not_determined", () => {
+    const { api } = runtime(), values = determined();
+    values.funding_source.value = "ипотека одобрена";
+    expect(pipeline(api, values, undefined, { funding_source: "ипотека в процессе" }).crm).toMatchObject({
+      attributes: { funding_source: "ипотека одобрена" }, update_actions: { funding_source: "SET" },
     });
-    expect(config.stages[3].prompt).toContain("{{transcript}}");
-    expect(config.stages[3].prompt).toContain("{{call_datetime}}");
-    expect(config.stages[3].prompt).toContain("{{call_end_datetime}}");
-    expect(config.stages[3].prompt).toContain("{{timezone}}");
-    expect(config.stages[3].prompt).toContain("Извлекай семантику, не выполняй календарную арифметику");
-    expect(config.stages[3].prompt).toContain("next_contact_at верни null");
-    expect(config.stages[3].prompt).toContain("минут через т30ать");
-    expect(config.stages[3].promptVersion).toBe(25);
-    expect(config.stages[3].prompt.startsWith("Ты — AI-экстрактор смысла атрибута заявки «Дата следующего контакта»")).toBe(true);
-    expect(config.stages[4].sourceOutKey).toContain("next_contact_date_extractor");
-    expect(config.stages[4].prompt).toContain("{{attributes_judge_input}}");
-    expect(config.stages[4].prompt).toContain("{{transcript}}");
-    expect(config.stages[4].prompt).toContain("object_legal_question_not_safety_service");
-    expect(config.stages[4].promptVersion).toBe(26);
-    expect(config.stages[5].prompt).toContain("{{ctx.attributes_judge}}");
-    expect(config.stages[5].prompt).not.toContain("attributes_merger");
-    expect(config.stages[5].prompt).toContain("next_contact_date");
-    expect(config.stages[5].prompt).toContain("все четыре");
-    expect(config.stages[6].prompt).toContain("{{attributes_quality_gate}}");
-    expect(config.stages[6].prompt).toContain('"next_contact_date":null');
-    expect(config.stages[6]).toMatchObject({
-      runtimeType: "deterministic",
-      actualExecutor: "code",
-      sourceOutKey: "attributes_quality_gate",
-      contractId: "crm_attributes_result",
-      contractVersion: "v1",
+    const missing = absent();
+    expect(pipeline(api, missing, undefined, { funding_source: "ипотека одобрена" }).crm).toMatchObject({
+      attributes: { funding_source: "ипотека одобрена" }, update_actions: { funding_source: "SKIP" },
     });
-    expect(config.stages[0]).toMatchObject({ maxTokens: 4000, responseContract: "application_interest_extractor_v1" });
-    expect(config.stages[1]).toMatchObject({ maxTokens: 2000, responseContract: "application_funding_source_extractor_v1" });
-    expect(config.stages[2]).toMatchObject({ maxTokens: 2000, responseContract: "application_purchase_term_extractor_v1" });
-    expect(config.stages[4]).toMatchObject({ type: "check", runtimeType: "llm_judge", outKey: "attributes_judge", responseContract: "application_attributes_judge_v1", maxTokens: 5000 });
-    expect(config.stages[5]).toMatchObject({ runtimeType: "deterministic", actualExecutor: "code", sourceOutKey: "attributes_judge", contractId: "application_attributes_quality_gate", contractVersion: "v1" });
+    expect(pipeline(api, values, (_, verdicts) => { verdicts.funding_source.verdict = "rejected"; }, { funding_source: "ипотека в процессе" }).crm).toMatchObject({
+      attributes: { funding_source: "ипотека в процессе" }, update_actions: { funding_source: "SKIP" },
+    });
   });
 
-  it("distinguishes current primary-market interest from the seller's object history", () => {
-    const config = readRecoveredConfig();
-    const extractor = config.stages.find((stage) => stage.outKey === "interest_extractor")!;
-    const judge = config.stages.find((stage) => stage.outKey === "attributes_judge")!;
-
-    expect(extractor.promptVersion).toBe(26);
-    expect(extractor.prompt).toContain("ИСТОРИЯ ОБЪЕКТА НЕ РАВНА ИНТЕРЕСУ К НОВОСТРОЙКАМ");
-    expect(extractor.prompt).toContain("Квартира куплена собственником по ДДУ в 2021 году, сейчас собственность оформлена");
-    expect(extractor.prompt).toContain("Ремонт от застройщика, ключи получили год назад");
-    expect(extractor.prompt).toContain("Нет, только вторичку");
-    expect(extractor.prompt).toContain("Рассматриваю также несданные квартиры от застройщика");
-    expect(extractor.prompt).toContain("Звоню по переуступке, когда сдаётся корпус?");
-
-    expect(judge.promptVersion).toBe(26);
-    expect(judge.prompt).toContain("INTEREST");
-    expect(judge.prompt).toContain("newbuild_from_context");
-    expect(judge.prompt).toContain("прошлый ДДУ продавца");
-    expect(judge.prompt).toContain("direct_confirmation");
-    expect(judge.prompt).toContain("soft_confirmation");
-    expect(extractor.prompt).toContain("value.length === evidence.length");
-    expect(extractor.prompt).toContain("Новые Ватутинки, кварталы Реки");
-    expect(judge.prompt).toContain("ровно одно evidence");
-    expect(judge.prompt).toContain("immutable technical_error");
+  it("заменяет подтверждённый Purchase Term", () => {
+    const { api } = runtime(), values = determined();
+    values.purchase_term.value = "до 1 месяца";
+    expect(pipeline(api, values, undefined, { purchase_term: "3–6 месяцев" }).crm).toMatchObject({
+      attributes: { purchase_term: "до 1 месяца" }, update_actions: { purchase_term: "SET" },
+    });
   });
 
-  it("loads the preset only for the recovered product and bypasses Summary migrations", () => {
-    const html = readFileSync(resolve(process.cwd(), "public", "pipeline-lab-v3.html"), "utf8");
+  it.each([
+    { name: "ADD", existing: ["Ипотека"], confirmed: ["Новостройки"], declined: [], expected: ["Ипотека", "Новостройки"] },
+    { name: "REMOVE", existing: ["Ипотека", "Новостройки"], confirmed: [], declined: ["Новостройки"], expected: ["Ипотека"] },
+    { name: "KEEP", existing: ["Ипотека", "Новостройки"], confirmed: [], declined: [], expected: ["Ипотека", "Новостройки"] },
+    { name: "ADD + REMOVE", existing: ["Новостройки", "Ипотека"], confirmed: ["Строительство"], declined: ["Новостройки"], expected: ["Ипотека", "Строительство"] },
+  ])("Interest $name применяет только подтверждённые операции", ({ existing, confirmed, declined, expected }) => {
+    const { api } = runtime(), values = absent();
+    if(confirmed.length) values.interest = { status: "determined", value: confirmed, evidence: confirmed.map(value => `Подтверждено: ${value}`), declined_values: declined, decline_evidence: declined.map(value => `Отказ: ${value}`) };
+    else if(declined.length) values.interest = { status: "explicitly_declined", value: null, evidence: declined.map(value => `Отказ: ${value}`), declined_values: declined, decline_evidence: declined.map(value => `Отказ: ${value}`) };
+    const { gate, crm } = pipeline(api, values, undefined, { interest: existing });
+    expect(crm.attributes.interest).toEqual(expected);
+    expect(gate.interest_operations).toEqual({ add: confirmed, remove: declined, keep: !confirmed.length && !declined.length });
+    expect(crm.update_actions.interest).toBe(confirmed.length || declined.length ? "SET" : "SKIP");
+  });
 
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v14.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v15.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v16.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v17.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v18.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v19.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v20.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v21.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v22.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v23.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v24.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v25.js"></script>');
-    expect(html).toContain('<script src="/ai-application-attributes-pipeline-v26.js"></script>');
-    expect(html).toContain(`const APPLICATION_ATTRIBUTES_PROJECT_ID = '${projectId}';`);
-    expect(html).toContain("restoreApplicationAttributesPipelineConfig()||restoreAiSummaryTenAugustPipelineConfig()||restoreTranscriptionModulePipelineConfig()");
-    expect(html).toContain("if(IS_APPLICATION_ATTRIBUTES_PROJECT){");
-    expect(html).toContain("buildCustomPipelineExecutionSummary");
-    expect(html).toContain("runApplicationAttributesCrmStage");
+  it("новый Next Contact заменяет существующий, а отсутствие контакта сохраняет его и не включает fallback", () => {
+    const { api } = runtime(), existing = { next_contact_date: "2026-09-29T10:00:00+03:00" };
+    const updated = pipeline(api, determined(), undefined, existing);
+    expect(updated.crm).toMatchObject({ attributes: { next_contact_date: "2026-09-28T15:00:00+03:00" }, update_actions: { next_contact_date: "SET" } });
+    const missing = pipeline(api, absent(), undefined, existing);
+    api.applySystemFallback(missing.gate, "2026-09-30T10:00:00+03:00", existing);
+    const crm = api.crm(missing.gate, existing);
+    expect(crm).toMatchObject({ attributes: existing, update_actions: { next_contact_date: "SKIP" } });
+  });
+
+  it("техническая ошибка сохраняет старое значение только проблемного атрибута", () => {
+    const { api } = runtime(), existing = { funding_source: "ипотека в процессе" };
+    const { crm } = pipeline(api, determined(), (inputs) => { inputs.funding_source.status = "technical_error"; }, existing);
+    expect(crm).toMatchObject({ attributes: { funding_source: "ипотека в процессе", purchase_term: "2–3 месяца" }, update_actions: { funding_source: "ERROR", purchase_term: "SET" } });
+  });
+});
+describe("Строгое заполнение четырёх атрибутов v33", () => {
+  it.each([
+    ["funding_source", "наличные / депозит"], ["funding_source", "ипотека одобрена"],
+    ["funding_source", "ипотека в процессе"], ["funding_source", "продажа своей квартиры"],
+    ["purchase_term", "до 1 месяца"], ["purchase_term", "2–3 месяца"],
+    ["purchase_term", "3–6 месяцев"], ["purchase_term", "более 6 месяцев"],
+  ])("сохраняет точное значение %s: %s без свободного текста", (key, value) => {
+    const { api } = runtime(), candidates = determined();
+    candidates[key].value = value;
+    const { crm } = pipeline(api, candidates);
+    expect(Object.keys(crm.attributes)).toEqual(api.keys);
+    expect(crm.attributes[key]).toBe(value);
+    expect(crm.update_actions[key]).toBe("SET");
+  });
+  it.each(["не определено", "семейная ипотека", "ипотека планируется", "кредит", "наличные"])("отклоняет недопустимый источник %s независимо от остальных полей", value => {
+    const { api } = runtime(), candidates = determined();
+    candidates.funding_source.value = value;
+    const { crm } = pipeline(api, candidates);
+    expect(crm.attributes.funding_source).toBeNull();
+    expect(crm.update_actions.funding_source).toBe("ERROR");
+    expect(crm.update_actions.purchase_term).toBe("SET");
+  });
+  it.each(["не определено", "срочно", "1–2 месяца", "до сентября", "2-3 месяца"])("отклоняет значение срока вне справочника: %s", value => {
+    const { api } = runtime(), candidates = determined();
+    candidates.purchase_term.value = value;
+    const { crm } = pipeline(api, candidates);
+    expect(crm.attributes.purchase_term).toBeNull();
+    expect(crm.update_actions.purchase_term).toBe("ERROR");
+    expect(crm.update_actions.funding_source).toBe("SET");
+  });
+  it.each(["date", "daypart", "range"])("Gate не сохраняет произвольный час при точности %s, даже после accepted", precision => {
+    const { api } = runtime(), candidates = determined();
+    candidates.next_contact_date.precision = precision;
+    const { gate, crm } = pipeline(api, candidates);
+    expect(crm.attributes.next_contact_date).toBeNull();
+    expect(crm.update_actions.next_contact_date).toBe("SKIP");
+    expect(crm.next_contact_resolution.reason).toBe("EXACT_CONTACT_TIME_REQUIRED");
+    expect(crm.pending_attributes).toEqual(["next_contact_date"]);
+    expect(crm.update_actions.funding_source).toBe("SET");
+    const fallback = api.crm(api.applySystemFallback(gate, "2026-09-28T10:00:00+03:00"));
+    expect(fallback.update_actions.next_contact_date).toBe("KEEP_FALLBACK");
+    expect(fallback.sources.next_contact_date).toBe("fallback");
+  });
+  it("актуальные промпты не назначают стандартный час и возвращают context=null", () => {
+    const { config } = runtime();
+    for (const stage of config.stages.slice(0, 5)) {
+      expect(stage.prompt).toContain("ОБЯЗАТЕЛЬНЫЙ АЛГОРИТМ ЧЕТЫРЁХ АТРИБУТОВ v33");
+      expect(stage.prompt.match(/\{\{transcript\}\}/g)).toHaveLength(1);
+    }
+    expect(config.stages.find((stage: any) => stage.outKey === "funding_source_extractor").prompt).toContain("Поле context возвращай null");
+    expect(config.stages.find((stage: any) => stage.outKey === "purchase_term_extractor").prompt).toContain("Не округляй срок");
+  });
+});
+describe("AI Атрибуты: согласованный контракт v2", () => {
+  it("updates seven stages, schemas and prompts together", () => {
+    const { api, config } = runtime();
+    expect(config.revision).toBe(33);
+    expect(config.stages.map((s: any) => s.outKey)).toEqual([...api.keys.map((key: string) => key + "_extractor"), "attributes_judge", "attributes_quality_gate", "crm_attributes_result"]);
+    for (const stage of config.stages.slice(0, 5)) {
+      expect(stage.responseContract).toBe(`application_${stage.outKey}_${["next_contact_date_extractor", "attributes_judge"].includes(stage.outKey) ? "v4" : "v3"}`);
+      expect(stage.prompt.match(/\{\{transcript\}\}/g)).toHaveLength(1);
+      expect(stage.prompt).not.toMatch(/call_datetime|call_end_datetime/);
+    }
+    expect(api.schemas.interest_extractor.properties.value.items.enum).toEqual(["Новостройки", "Ипотека", "Инвестиции в регионах", "Безопасность сделок", "Юридическое сопровождение", "Строительство"]);
+    expect(config.stages.slice(5).every((stage: any) => stage.actualExecutor === "code")).toBe(true);
+  });
+  it("passes all four confirmed values unchanged into CRM", () => {
+    const { api } = runtime(), result = pipeline(api, determined());
+    expect(result.gate.gate_status).toBe("READY");
+    expect(Object.values(result.crm.update_actions)).toEqual(["SET", "SET", "SET", "SET"]);
+    expect(result.crm.attributes.next_contact_date).toBe("2026-09-28T15:00:00+03:00");
+    expect(result.crm.sources.next_contact_date).toBe("ai");
+  });
+  it("does not clear existing values when information is absent", () => {
+    const { api } = runtime(), { crm } = pipeline(api, absent());
+    expect(Object.values(crm.update_actions)).toEqual(["SKIP", "SKIP", "SKIP", "SKIP"]);
+    expect(Object.values(crm.attribute_states)).toEqual(Array(4).fill("not_determined"));
+    expect(crm.next_contact_policy).toBe("PRESERVE_SYSTEM_FALLBACK_24H");
+  });
+  it.each(["interest", "funding_source", "purchase_term", "next_contact_date"])("keeps refusal distinct for %s", key => {
+    const { api } = runtime(), candidates = absent();
+    candidates[key] = { ...candidates[key], status: "explicitly_declined", evidence: key === "interest" ? ["Не хочу отвечать"] : "Не хочу отвечать" };
+    const { crm } = pipeline(api, candidates);
+    expect(crm.attribute_states[key]).toBe("explicitly_declined");
+    expect(crm.attributes[key]).toBeNull();
+    expect(crm.update_actions[key]).toBe(key === "interest" ? "SKIP" : "SET_DECLINED");
+    if (key === "next_contact_date") expect(crm.next_contact_policy).toBe("NO_CONTACT");
+  });
+  it("retains declined interest alongside another confirmed interest", () => {
+    const { api } = runtime(), candidates = determined();
+    candidates.interest = { status: "determined", value: ["Строительство"], evidence: ["Хотим построить дом"], declined_values: ["Ипотека"], decline_evidence: ["Ипотека не нужна"] };
+    const { crm } = pipeline(api, candidates);
+    expect(crm.attributes.interest).toEqual(["Строительство"]);
+    expect(crm.declined_interest_values).toEqual(["Ипотека"]);
+  });
+  it("does not save a refusal rejected by Judge", () => {
+    const { api } = runtime(), candidates = absent();
+    candidates.funding_source = { status: "explicitly_declined", value: null, evidence: "Не знаю" };
+    const { crm } = pipeline(api, candidates, (_, verdicts) => verdicts.funding_source.verdict = "rejected");
+    expect(crm.update_actions.funding_source).toBe("SKIP");
+    expect(crm.attribute_states.funding_source).toBe("not_determined");
+  });
+  it.each(["bad_judge", "changed_status", "invented_value", "bad_extractor", "upstream_error"])("isolates %s to its attribute", fault => {
+    const { api } = runtime();
+    const { crm } = pipeline(api, determined(), (inputs, verdicts) => {
+      if (fault === "bad_judge") delete verdicts.funding_source;
+      if (fault === "changed_status") verdicts.funding_source.status = "explicitly_declined";
+      if (fault === "invented_value") verdicts.funding_source.value = "наличные / депозит";
+      if (fault === "bad_extractor") inputs.funding_source.result.value = "кредит";
+      if (fault === "upstream_error") inputs.funding_source.status = "technical_error";
+    });
+    expect(crm.update_actions.funding_source).toBe("ERROR");
+    for (const key of ["interest", "purchase_term", "next_contact_date"]) expect(crm.update_actions[key]).toBe("SET");
+    expect(crm.pipeline_status).toBe("PARTIAL_READY");
+  });
+  it("does not save a rejected candidate", () => {
+    const { api } = runtime(), { crm } = pipeline(api, determined(), (_, verdicts) => verdicts.interest.verdict = "rejected");
+    expect(crm.update_actions.interest).toBe("SKIP");
+    expect(crm.attributes.interest).toBeNull();
+    expect(crm.update_actions.funding_source).toBe("SET");
+  });
+  it("preserves the server fallback without calling it an AI agreement", () => {
+    const { api } = runtime(), { gate } = pipeline(api, absent());
+    const crm = api.crm(api.applySystemFallback(gate, "2026-09-28T10:00:00+03:00"));
+    expect(crm.attributes.next_contact_date).toBe("2026-09-28T10:00:00+03:00");
+    expect(crm.attribute_states.next_contact_date).toBe("not_determined");
+    expect(crm.sources.next_contact_date).toBe("fallback");
+    expect(crm.update_actions.next_contact_date).toBe("KEEP_FALLBACK");
+  });
+  it("does not replace a confirmed contact or refusal with fallback", () => {
+    const { api } = runtime(), candidates = determined();
+    for (const state of ["determined", "explicitly_declined"]) {
+      if (state === "explicitly_declined") candidates.next_contact_date = { ...absent().next_contact_date, status: state, evidence: "Больше не звоните" };
+      const { gate } = pipeline(api, candidates), before = JSON.stringify(gate);
+      api.applySystemFallback(gate, "2026-09-30T10:00:00+03:00");
+      expect(JSON.stringify(gate)).toBe(before);
+    }
+  });
+  it.each(["2026-02-30T10:00:00+03:00", "2026-09-30", "2026-09-30T25:00:00Z", "bad"])("rejects invalid timestamp %s", date => {
+    expect(runtime().api.validDate(date)).toBe(false);
+  });
+  it("inserts transcript once even in a duplicated custom template", () => {
+    const { api } = runtime();
+    expect(api.renderPrompt("{{transcript}} {{ctx.__transcript}} {{transcript}}", {}, "UNIQUE_TRANSCRIPT_123").split("UNIQUE_TRANSCRIPT_123")).toHaveLength(2);
+  });
+  it("rejects unsupported interest, legacy statuses and incompatible nulls", () => {
+    const { api } = runtime();
+    for (const invalid of [
+      { ...determined().interest, value: ["Вторичная недвижимость"] },
+      { ...determined().interest, status: "unknown" },
+      { ...absent().interest, status: "explicitly_declined" },
+      { ...absent().interest, value: [] },
+    ]) expect(() => api.validateExtractor("interest_extractor", invalid)).toThrow();
+  });
+});
+
+describe("Контакт относительно события и незавершённый расчёт", () => {
+  it.each(["missing_reference", "unresolved"])("preserves approved agreement with %s without an AI date", normalization_status => {
+    const { api } = runtime(), inputs = determined();
+    inputs.next_contact_date = { ...inputs.next_contact_date, next_contact_at: null, normalization_status,
+      event_anchor: { raw_time_expression: "завтра в 15:00", evidence: "Завтра в 15:00. За час позвоню.", offset_minutes: -60 } };
+    const { judge, gate, crm } = pipeline(api, inputs);
+    expect(judge.judge_verdicts.next_contact_date).toBe("accepted");
+    expect(gate.decisions.next_contact_date).toBe("DO_NOT_UPDATE");
+    expect(crm).toMatchObject({ pending_attributes: ["next_contact_date"], technical_errors: [], pipeline_status: "PARTIAL_READY",
+      attributes: { next_contact_date: null }, update_actions: { next_contact_date: "SKIP", interest: "SET" },
+      next_contact_resolution: { status: normalization_status, evidence: inputs.next_contact_date.evidence } });
+    api.applySystemFallback(gate, "2026-09-28T10:00:00+03:00");
+    expect(api.crm(gate)).toMatchObject({ pending_attributes: ["next_contact_date"],
+      sources: { next_contact_date: "fallback" }, update_actions: { next_contact_date: "KEEP_FALLBACK" },
+      next_contact_resolution: { status: normalization_status } });
+  });
+  it("requires event fields in live v3 JSON and rejects invented normalization metadata", () => {
+    const { api } = runtime(), value = { ...determined().next_contact_date, next_contact_at: null, event_anchor: null };
+    expect(() => api.validateExtractor("next_contact_date_extractor", value, true)).not.toThrow();
+    for (const event_anchor of [{ raw_time_expression: "завтра", offset_minutes: -60 }, { raw_time_expression: "завтра", evidence: "", offset_minutes: -60 }, { raw_time_expression: "завтра", evidence: "Завтра", offset_minutes: -.5 }])
+      expect(() => api.validateExtractor("next_contact_date_extractor", { ...value, event_anchor }, true)).toThrow();
+    expect(() => api.validateExtractor("next_contact_date_extractor", { ...value, normalization_status: "missing_reference" }, true)).toThrow();
+  });
+  it("a rejected event relation is never saved or presented as an approved pending agreement", () => {
+    const { api } = runtime(), inputs = determined();
+    inputs.next_contact_date = { ...inputs.next_contact_date, next_contact_at: null, normalization_status: "unresolved" };
+    const { crm } = pipeline(api, inputs, (_, verdicts) => verdicts.next_contact_date.verdict = "rejected");
+    expect(crm.pending_attributes).toEqual([]);
+    expect(crm.blocked_attributes).toContain("next_contact_date");
+    expect(crm.update_actions.next_contact_date).toBe("SKIP");
+  });
+});
+
+function relativeRuntime() {
+  const context = { window: {} as Record<string, any>, AbortController, setTimeout, clearTimeout };
+  runInNewContext(readFileSync(resolve("public/ai-application-attributes-runtime-v29.js"), "utf8"), context);
+  return context.window.ApplicationAttributesRuntime;
+}
+describe("Относительные договорённости без выдуманного года", () => {
+  it.each([
+    ["завтра в 15:00", -60, "завтра в 14:00", 1],
+    ["завтра в 00:30", -60, "сегодня в 23:30", 0],
+    ["сегодня в 23:30", 60, "завтра в 00:30", 1],
+    ["послезавтра в 15:00", -90, "послезавтра в 13:30", 2],
+    ["завтра в 3 дня", -60, "завтра в 14:00", 1],
+  ])("normalizes %s offset %s without inventing a calendar date", (raw, minutes, label, day) => {
+    expect(relativeRuntime().relativeTime(raw, minutes)).toMatchObject({ label, day_offset: day, calendar_date_known: false, reference: "conversation_day" });
+  });
+  it.each(["завтра", "завтра вечером", "завтра в 15:00 или 17:00", "завтра в 15:00–16:00", "завтра примерно в 15:00", "27 сентября в 15:00", "если получится завтра в 15:00"])("does not invent a precise relative time for %s", raw => {
+    expect(relativeRuntime().relativeTime(raw, -60)).toBeNull();
+  });
+  it("keeps meeting and callback separate without a reference timestamp", () => {
+    expect(relativeRuntime().relativeSchedule({ status: "missing_reference", event_anchor: { raw_time_expression: "завтра в 15:00", offset_minutes: -60 } })).toMatchObject({ event: { label: "завтра в 15:00" }, contact: { label: "завтра в 14:00" } });
+  });
+  it("requires the server version to match before a run", async () => {
+    const runtime = relativeRuntime();
+    expect(await runtime.checkVersion(async () => ({ ok: true, json: async () => ({ revision: 33 }) }))).toMatchObject({ current: true });
+    expect(await runtime.checkVersion(async () => ({ ok: true, json: async () => ({ revision: 34 }) }))).toMatchObject({ current: false, loaded_revision: 33, available_revision: 34 });
+    await expect(runtime.checkVersion(async () => ({ ok: false }))).rejects.toThrow("VERSION_CHECK_UNAVAILABLE");
+  });
+});
+
+describe("Контекст для уточнения сохраняется отдельно от подтверждённых значений", () => {
+  const transcript = "Клиент: Реально ли семейную ипотеку нам оформить? Нет, ещё не одобряли.\nАгент: Одобрение нужно до 30 сентября.\nКлиент: Поняла.";
+  const context = { summary: "Рассматривает семейную ипотеку", evidence: ["Реально ли семейную ипотеку нам оформить?"], limitation: "Подача заявки не подтверждена" };
+  function review(fault?: string) {
+    const { api } = runtime(), values = absent();
+    values.funding_source.context = structuredClone(context);
+    values.purchase_term.context = { summary: "Ипотечное одобрение — до 30 сентября", evidence: ["Одобрение нужно до 30 сентября."], limitation: "Срок покупки клиент не подтвердил" };
+    const inputs = Object.fromEntries(api.keys.map((key: string) => [key, { status: "ready", result: values[key] }]));
+    const verdicts: any = Object.fromEntries(api.keys.map((key: string) => [key, { status: "not_determined", verdict: "not_determined", reason: "Нет подтверждённого значения", ...(key === "next_contact_date" ? { corrected_value: null } : {}), ...(["funding_source", "purchase_term"].includes(key) ? { context_verdict: "accepted", context_reason: "Цитаты проверены" } : {}) }]));
+    if (fault === "rejected") verdicts.funding_source.context_verdict = "rejected";
+    if (fault === "invented_quote") {
+      values.funding_source.context.evidence = ["Подали заявку вчера, банк рассматривает"];
+      verdicts.funding_source.context_verdict = "rejected";
+    }
+    if (fault === "added_value") verdicts.funding_source.value = "ипотека в процессе";
+    const judge = api.judgeResult(verdicts, inputs, transcript);
+    return { api, judge, crm: api.crm(api.gate(judge)) };
+  }
+  it("passes reviewed context through Judge → Gate → CRM without setting unsupported enum values", () => {
+    const { crm } = review();
+    expect(crm.attribute_context.funding_source).toEqual(context);
+    expect(crm.attribute_context.purchase_term.summary).toContain("30 сентября");
+    expect(crm.attributes.funding_source).toBeNull();
+    expect(crm.attributes.purchase_term).toBeNull();
+    expect(crm.update_actions.funding_source).toBe("SKIP");
+    expect(crm.update_actions.purchase_term).toBe("SKIP");
+  });
+  it.each(["rejected", "invented_quote", "added_value"])("isolates %s; another attribute's context survives", fault => {
+    const { crm, judge } = review(fault);
+    expect(crm.attribute_context.funding_source).toBeNull();
+    expect(crm.attribute_context.purchase_term.summary).toContain("30 сентября");
+    if (fault === "invented_quote") expect(judge.context_validation_errors.funding_source).toBeUndefined();
+  });
+  it("проверяет структуру context без повторной проверки смысла цитат", () => {
+    const { api } = runtime();
+    for (const value of [absent().funding_source, { ...determined().funding_source, context }, { status: "explicitly_declined", value: null, evidence: "Не хочу говорить", context }])
+      expect(() => api.validateExtractor("funding_source_extractor", value, true)).toThrow();
+    expect(() => api.validateExtractor("funding_source_extractor", { ...absent().funding_source, context: { ...context, evidence: [] } }, true)).not.toThrow();
+    expect(() => api.validateExtractor("funding_source_extractor", { ...absent().funding_source, context: null }, true)).not.toThrow();
+  });
+  it("exports relative event and contact in CRM even without a calendar date", () => {
+    const { api } = runtime(), values = determined();
+    values.next_contact_date = { ...values.next_contact_date, next_contact_at: null, normalization_status: "missing_reference", event_anchor: { raw_time_expression: "завтра в 15:00", evidence: "Завтра в 15:00, за час позвоню", offset_minutes: -60 } };
+    const { crm } = pipeline(api, values);
+    expect(crm.attributes.next_contact_date).toBeNull();
+    expect(crm.next_contact_schedule).toMatchObject({ event: { time: "15:00", calendar_date_known: false }, contact: { time: "14:00", reference: "conversation_day" } });
+  });
+});
+
+describe("Актуальный справочник интереса: шесть направлений", () => {
+  it("preserves all six confirmed directions through Extractor → Judge → Gate → CRM", () => {
+    const { api } = runtime(), candidates = determined();
+    candidates.interest = { ...candidates.interest, value: [...api.interest], evidence: api.interest.map((value: string) => `Клиент: Меня интересует ${value}`) };
+    const { crm } = pipeline(api, candidates);
+    expect(crm.attributes.interest).toEqual(["Новостройки", "Ипотека", "Инвестиции в регионах", "Безопасность сделок", "Юридическое сопровождение", "Строительство"]);
+    expect(crm.update_actions.interest).toBe("SET");
+  });
+  it("keeps a legal-services refusal separate from confirmed investment and safety interests", () => {
+    const { api } = runtime(), candidates = determined();
+    candidates.interest = { status: "determined", value: ["Инвестиции в регионах", "Безопасность сделок"], evidence: ["Ищу инвестиции в регионах", "Нужна безопасность расчётов"], declined_values: ["Юридическое сопровождение"], decline_evidence: ["Юридическое сопровождение не нужно"] };
+    const { crm } = pipeline(api, candidates);
+    expect(crm.attributes.interest).toEqual(candidates.interest.value);
+    expect(crm.declined_interest_values).toEqual(["Юридическое сопровождение"]);
+  });
+});
+
+
+describe("Встреча и контекст часа v33", () => {
+  it("передаёт подтверждённую встречу через Judge/Gate/CRM и не заменяет её fallback", () => {
+    const { api } = runtime(), values = absent();
+    values.interest = determined().interest;
+    values.next_contact_date = { ...determined().next_contact_date, action: "meeting", event_anchor: null,
+      next_contact_at: "2026-09-30T16:00:00+03:00", raw_time_expression: "в среду в 16:00" };
+    expect(() => api.validateExtractor("next_contact_date_extractor", { ...values.next_contact_date, next_contact_at: null }, true)).not.toThrow();
+    const { judge, gate } = pipeline(api, values);
+    const crm = api.crm(api.applySystemFallback(gate, "2026-09-28T11:13:58+03:00"));
+    for (const result of [judge, gate, crm]) expect(result.next_contact_resolution.action).toBe("meeting");
+    expect(crm.attributes).toEqual({ interest: ["Новостройки", "Ипотека"], funding_source: null, purchase_term: null, next_contact_date: "2026-09-30T16:00:00+03:00" });
+    expect(crm.update_actions).toEqual({ interest: "SET", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SET" });
+  });
+  it.each([
+    ["завтра в 4:00", null], ["завтра в 4", null], ["завтра в 4:00 через 2 дня", null],
+    ["завтра в 04:00", "завтра в 04:00"], ["завтра в 4 утра", "завтра в 04:00"],
+    ["завтра в 4 дня", "завтра в 16:00"], ["завтра в 4:00 вечера", "завтра в 16:00"],
+    ["завтра в 16:00", "завтра в 16:00"], ["завтра в 12 ночи", "завтра в 00:00"],
+  ])("не угадывает период суток для %s", (raw, expected) => {
+    expect(relativeRuntime().relativeTime(raw)?.label ?? null).toBe(expected);
   });
 });

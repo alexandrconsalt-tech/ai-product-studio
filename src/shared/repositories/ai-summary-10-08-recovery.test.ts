@@ -77,7 +77,7 @@ describe("AI Summary 10.08 recovery", () => {
 
     expect(html).toContain('<script src="/ai-summary-10-08-pipeline-v1.js"></script>');
     expect(html).toContain('<script src="/ai-summary-10-08-store-cleaner.js"></script>');
-    expect(html).toContain('<script src="/ai-summary-10-08-conversation-judge-v5.js"></script>');
+    expect(html).toContain('<script src="/ai-summary-10-08-conversation-judge-v5.js?v=5.3.0-rp6"></script>');
     expect(html).toContain('<script src="/ai-summary-10-08-summary-judge-recovery-v1.js"></script>');
     expect(html).toContain('<script src="/ai-summary-10-08-finalization-v1.js"></script>');
     expect(html).toContain(`const AI_SUMMARY_TEN_AUGUST_PROJECT_ID = '${projectId}';`);
@@ -93,8 +93,13 @@ describe("AI Summary 10.08 recovery", () => {
     expect(html).toContain("AI_SUMMARY_CONVERSATION_JUDGE_UPSTREAM_KEYS");
     expect(html).toContain("AI_SUMMARY_JUDGE_ROLE_CONSISTENCY_V2");
     expect(html).toContain("AI_SUMMARY_JUDGE_SELLER_SCOPE_V3");
-    expect(guard).toContain("AI_SUMMARY_JUDGE_OUTCOME_EVIDENCE_V4");
+    expect(guard).toContain("AI_SUMMARY_JUDGE_OUTCOME_EVIDENCE_V5");
     expect(guard).toContain("AI_SUMMARY_SUMMARY_JUDGE_EVIDENCE_V2");
+    expect(guard).toContain("AI_SUMMARY_NEEDS_REQUIREMENT_PREFERENCE_V1");
+    expect(guard).toContain("AI_SUMMARY_JUDGE_REQUIREMENT_PREFERENCE_V1");
+    expect(guard).toContain("AI_SUMMARY_SUMMARY_REQUIREMENT_PREFERENCE_V1");
+    expect(html).toContain("needsExtractor:ctx&&ctx.needs_extractor");
+    expect(html).toContain("cleanNeeds:ctx&&ctx.clean_conversation_store&&ctx.clean_conversation_store.needs");
     expect(html).toContain("outcome_evidence_audit");
     expect(html).toContain("ROLE_INCONSISTENCY: <краткий смысл сомнительного или удалённого факта>");
     expect(html).toContain("aiSummarySummaryGeneratorProvenance(ctx)");
