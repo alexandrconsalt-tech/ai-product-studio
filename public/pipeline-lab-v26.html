@@ -2101,7 +2101,7 @@ function migrateApplicationAttributesCallMetadataRuntime(stages){
   let migrated=false;
   const nextContact=stages.find(stage=>stage&&stage.outKey==='next_contact_date_extractor');
   const seedNextContact=seedByKey.next_contact_date_extractor;
-  if(nextContact&&seedNextContact&&nextContact.promptSource==='system_default'&&!nextContact.promptEdited&&Number(nextContact.promptVersion)<25){
+  if(nextContact&&seedNextContact&&nextContact.promptSource==='system_default'&&!nextContact.promptEdited&&Number(nextContact.promptVersion)<27){
     nextContact.prompt=seedNextContact.prompt;
     nextContact.promptVersion=seedNextContact.promptVersion;
     migrated=true;
@@ -3314,7 +3314,7 @@ const APPLICATION_ATTRIBUTES_DAYPARTS=Object.freeze([
   {pattern:/первая половина дня/i,hour:10,strategy:'daypart_first_half'},
   {pattern:/утр(?:ом|а)/i,hour:10,strategy:'daypart_morning'},
   {pattern:/дн[её]м/i,hour:14,strategy:'daypart_afternoon'},
-  {pattern:/вечер(?:ом|а)/i,hour:18,strategy:'daypart_evening'}
+  {pattern:/вечер(?:ом|а)/i,hour:19,strategy:'daypart_evening'}
 ]);
 
 function applicationAttributesLocalParts(value,timezone){
@@ -3337,31 +3337,30 @@ function applicationAttributesInstantIso(value,timezone){
 }
 
 function applicationAttributesTemporalNormalize(rawExpression,ctx){
-  const raw=String(rawExpression||'').trim(),source=raw.toLowerCase().replace(/ё/g,'е'),timezone=String(ctx.timezone||''),reference=String(ctx.call_datetime||'');
+  const raw=String(rawExpression||'').trim(),source=raw.toLowerCase().replace(/ё/g,'е'),timezone=String(ctx.timezone||''),reference=String(ctx.call_datetime||ctx.call_end_datetime||'');
   const metadataAudit=ctx.__call_metadata_audit||{};
-  const relativeReference=ctx.call_end_datetime||(metadataAudit.mode==='manual'?reference:null);
-  const relativeReferenceSource=ctx.call_end_datetime?(metadataAudit.call_end_datetime_source||'call_end_datetime'):metadataAudit.mode==='manual'&&reference?'pipeline_lab_manual_reference':null;
+  const relativeReference=ctx.call_end_datetime||reference;
+  const relativeReferenceSource=ctx.call_end_datetime?(metadataAudit.call_end_datetime_source||'call_end_datetime'):reference?(metadataAudit.call_datetime_source||'call_datetime'):null;
   const audit={raw_time_expression:raw||null,reference_datetime:reference||null,call_end_datetime:ctx.call_end_datetime||null,relative_time_reference:relativeReference||null,relative_time_reference_source:relativeReferenceSource,timezone:timezone||null,strategy:'unresolved',normalized_datetime:null,precision:'none'};
-  if(!raw||!reference||!timezone) return audit;
-  const callParts=applicationAttributesLocalParts(reference,timezone);
+  if(!reference||!timezone) return audit;
+  const callParts=applicationAttributesLocalParts(relativeReference,timezone);
   if(!callParts) return audit;
   const finish=(strategy,datetime,precision)=>({...audit,strategy,normalized_datetime:datetime,precision});
+  const addMinutes=(strategy,minutes,precision='exact')=>finish(strategy,applicationAttributesInstantIso(new Date(Date.parse(relativeReference)+minutes*60000),timezone),precision);
+  if(!raw) return addMinutes('agent_commitment_safe_fallback',120);
   const relativeRange=source.match(/через\s+(\d+)\s*[–—-]\s*(\d+)\s*(минут|минуты|час|часа|часов)/i);
   const noisyMinuteRange=!relativeRange&&/(?:через\s+30\s*[–—-]\s*(?:40|4к)|(?:минут\s+через\s+t?30ать|через\s+t?30ать)[\s\S]{0,160}через\s+30\s*[–—-]\s*4к)/i.test(source);
   if(relativeRange){
-    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
-    const midpoint=(Number(relativeRange[1])+Number(relativeRange[2]))/2,multiplier=relativeRange[3].startsWith('час')?60:1;
-    return finish('relative_range_midpoint',applicationAttributesInstantIso(new Date(Date.parse(base)+midpoint*multiplier*60000),timezone),'range');
+    const upperBound=Math.max(Number(relativeRange[1]),Number(relativeRange[2])),multiplier=relativeRange[3].startsWith('час')?60:1;
+    return addMinutes('relative_range_upper_bound',upperBound*multiplier,'range');
   }
   if(noisyMinuteRange){
-    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
-    return finish('relative_noisy_range_midpoint',applicationAttributesInstantIso(new Date(Date.parse(base)+35*60000),timezone),'range');
+    return addMinutes('relative_noisy_range_upper_bound',40,'range');
   }
   const spokenThirty=source.match(/(?:минут\s+через|через)\s+(?:тридцать|т?30ать)(?:\s+минут)?/i);
-  if(spokenThirty){
-    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
-    return finish('relative_noisy_minutes',applicationAttributesInstantIso(new Date(Date.parse(base)+30*60000),timezone),'exact');
-  }
+  if(spokenThirty) return addMinutes('relative_noisy_minutes',30);
+  if(/через\s+полчаса/i.test(source)) return addMinutes('relative_half_hour',30);
+  if(/(?:через\s+час|в\s+течение\s+часа)/i.test(source)) return addMinutes('relative_one_hour',60);
   const relative=source.match(/через\s+(\d+)\s*(минут|минуты|час|часа|часов|день|дня|дней)/i);
   if(relative){
     const amount=Number(relative[1]),unit=relative[2];
@@ -3369,9 +3368,8 @@ function applicationAttributesTemporalNormalize(rawExpression,ctx){
       const date=applicationAttributesCalendarDate(callParts,amount);
       return finish('relative_days',applicationAttributesCalendarIso(date,10,0,timezone),'date');
     }
-    const base=relativeReference;if(!base) return {...audit,strategy:'relative_reference_required'};
     const minutes=amount*(unit.startsWith('час')?60:1);
-    return finish('relative_duration',applicationAttributesInstantIso(new Date(Date.parse(base)+minutes*60000),timezone),'exact');
+    return addMinutes('relative_duration',minutes);
   }
   let dayOffset=/послезавтра/i.test(source)?2:/завтра/i.test(source)?1:/сегодня/i.test(source)?0:null;
   let strategy=dayOffset===2?'relative_day_after_tomorrow':dayOffset===1?'relative_tomorrow':dayOffset===0?'relative_today':null;
@@ -3388,7 +3386,7 @@ function applicationAttributesTemporalNormalize(rawExpression,ctx){
     let year=Number(dateMatch[3]||callParts.year),month=APPLICATION_ATTRIBUTES_MONTHS[dateMatch[2]],day=Number(dateMatch[1]);
     explicitDate={year,month,day};
     let candidate=applicationAttributesCalendarIso(explicitDate,10,0,timezone);
-    if(!dateMatch[3]&&Date.parse(candidate)<=Date.parse(reference)){explicitDate.year++;candidate=applicationAttributesCalendarIso(explicitDate,10,0,timezone);}
+    if(!dateMatch[3]&&Date.parse(candidate)<=Date.parse(relativeReference)){explicitDate.year++;candidate=applicationAttributesCalendarIso(explicitDate,10,0,timezone);}
     strategy='explicit_calendar_date';
   }
   if(!explicitDate){
@@ -3396,26 +3394,45 @@ function applicationAttributesTemporalNormalize(rawExpression,ctx){
     const ordinal=Object.entries(ordinalDays).find(([word])=>source.includes(word));
     if(ordinal){
       explicitDate={year:Number(callParts.year),month:Number(callParts.month),day:ordinal[1]};
-      if(Date.parse(applicationAttributesCalendarIso(explicitDate,10,0,timezone))<=Date.parse(reference)){explicitDate.month++;if(explicitDate.month>12){explicitDate.month=1;explicitDate.year++;}}
+      if(Date.parse(applicationAttributesCalendarIso(explicitDate,10,0,timezone))<=Date.parse(relativeReference)){explicitDate.month++;if(explicitDate.month>12){explicitDate.month=1;explicitDate.year++;}}
       strategy='explicit_ordinal_date';
     }
   }
-  if(dayOffset===null&&!explicitDate) return audit;
-  const date=explicitDate||applicationAttributesCalendarDate(callParts,dayOffset);
   const daypart=APPLICATION_ATTRIBUTES_DAYPARTS.find(item=>item.pattern.test(source));
+  const timeRange=source.match(/(?:^|\s)с\s+([01]?\d|2[0-3])(?::([0-5]\d))?\s+до\s+([01]?\d|2[0-3])(?::([0-5]\d))?(?:\s|$)/i);
   const timeMatch=source.match(/(?:^|\s|в\s)([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s|$)/);
-  const hour=timeMatch?Number(timeMatch[1]):daypart?daypart.hour:10,minute=timeMatch?Number(timeMatch[2]):0;
-  const precision=timeMatch?'exact':daypart?'daypart':'date';
-  const finalStrategy=daypart?`${strategy}+${daypart.strategy}`:timeMatch?`${strategy}+explicit_time`:strategy;
-  return finish(finalStrategy,applicationAttributesCalendarIso(date,hour,minute,timezone),precision);
+  if(dayOffset===null&&!explicitDate&&(daypart||timeRange)){
+    dayOffset=0;
+    strategy='implicit_today';
+  }
+  if(dayOffset!==null||explicitDate){
+    if(dayOffset===0&&!explicitDate&&!daypart&&!timeRange&&!timeMatch&&/сегодня/i.test(source)) return addMinutes('relative_today_default_two_hours',120,'date');
+    const date=explicitDate||applicationAttributesCalendarDate(callParts,dayOffset);
+    const hour=timeRange?Number(timeRange[3]):timeMatch?Number(timeMatch[1]):daypart?daypart.hour:10;
+    const minute=timeRange?Number(timeRange[4]||0):timeMatch?Number(timeMatch[2]):0;
+    const precision=timeRange?'range':timeMatch?'exact':daypart?'daypart':'date';
+    const finalStrategy=timeRange?`${strategy}+time_range_upper_bound`:daypart?`${strategy}+${daypart.strategy}`:timeMatch?`${strategy}+explicit_time`:strategy;
+    return finish(finalStrategy,applicationAttributesCalendarIso(date,hour,minute,timezone),precision);
+  }
+  const colloquialRules=[
+    {pattern:/прямо\s+сейчас|сейчас|сразу/gi,minutes:10,strategy:'immediate_default_ten_minutes'},
+    {pattern:/чуть-чуть\s+попозже|чуть\s+позже|попозже|немного\s+позже|\bпозже\b/gi,minutes:30,strategy:'vague_later_default_thirty_minutes'},
+    {pattern:/как\s+освобожусь|как\s+узнаю|как\s+получится|когда\s+будет\s+информация/gi,minutes:120,strategy:'agent_commitment_safe_fallback'}
+  ];
+  let colloquial=null;
+  for(const rule of colloquialRules){
+    for(const match of source.matchAll(rule.pattern)) if(!colloquial||match.index>=colloquial.index) colloquial={...rule,index:match.index};
+  }
+  if(colloquial) return addMinutes(colloquial.strategy,colloquial.minutes);
+  return audit;
 }
 
 function applicationAttributesNormalizeNextContact(value,ctx){
   ctx.next_contact_semantic_result=value&&typeof value==='object'?{...value}:value||null;
-  if(!value||value.detected!==true){
-    const audit={raw_time_expression:value&&value.raw_time_expression||null,reference_datetime:ctx.call_datetime||null,call_end_datetime:ctx.call_end_datetime||null,timezone:ctx.timezone||null,strategy:'not_detected',normalized_datetime:null,precision:'none'};
+  if(!value||value.detected!==true||value.actor!=='agent'){
+    const audit={raw_time_expression:value&&value.raw_time_expression||null,reference_datetime:ctx.call_datetime||ctx.call_end_datetime||null,call_end_datetime:ctx.call_end_datetime||null,timezone:ctx.timezone||null,strategy:value&&value.detected===true?'actor_not_agent':'not_detected',normalized_datetime:null,precision:'none'};
     ctx.temporal_normalization_audit=audit;
-    return {...value,next_contact_at:null,precision:'none'};
+    return {...value,detected:false,next_contact_at:null,precision:'none',action:'none',actor:'none'};
   }
   const audit=applicationAttributesTemporalNormalize(value.raw_time_expression,ctx);
   ctx.temporal_normalization_audit=audit;
