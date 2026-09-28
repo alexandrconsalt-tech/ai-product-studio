@@ -425,6 +425,7 @@ export function PlaygroundScreen() {
               productId={selectedProject.id}
               productName={selectedProject.name}
               preset={selectedProject.id === TRANSCRIPTION_SUMMARY_PROJECT_ID || selectedProject.id === APPLICATION_ATTRIBUTES_PROJECT_ID ? undefined : "blank"}
+              documentPath={selectedProject.id === APPLICATION_ATTRIBUTES_PROJECT_ID ? "/pipeline-lab-v26.html" : undefined}
               onRunComplete={handleRunComplete}
             />
           </Card>
