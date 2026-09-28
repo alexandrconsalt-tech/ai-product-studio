@@ -60,6 +60,16 @@ describe("контракт AI Attributes", () => {
     expect(gate.decisions.funding_source).toBe("DO_NOT_UPDATE");
   });
 
+  it.each(["funding_source", "purchase_term"])("явный отказ по scalar %s остаётся SKIP", key => {
+    const api = contract(), values = absent();
+    values[key] = { ...values[key], status: "explicitly_declined", evidence: "Не хочу обсуждать" };
+    const judge = api.judgeResult(verdicts(values), inputs(values));
+    const gate = api.gate(judge), crm = api.crm(gate, { [key]: "существующее значение" });
+    expect(gate.decisions[key]).toBe("DO_NOT_UPDATE");
+    expect(crm.update_actions[key]).toBe("SKIP");
+    expect(crm.attributes[key]).toBeNull();
+  });
+
   it("принимает один Interest с одной цитатой", () => {
     const api=contract(), values=absent();
     values.interest={status:"determined",value:["Новостройки"],evidence:["Хочу посмотреть строящийся объект"],declined_values:[],decline_evidence:[]};

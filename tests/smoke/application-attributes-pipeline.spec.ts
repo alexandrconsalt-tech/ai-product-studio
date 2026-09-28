@@ -330,7 +330,8 @@ test("все четыре атрибута проходят UI → Judge → det
   await page.goto(projectUrl);
   await installProvider(page, { ...candidates(), next_contact_date_extractor: contact("завтра в 15:00") });
   const { result, reports, calls } = await run(page);
-  expect(result.crm_attributes_result.attributes).toEqual({ interest: ["Новостройки", "Ипотека"], funding_source: "ипотека одобрена", purchase_term: "2–3 месяца", next_contact_date: "2026-08-14T15:00:00+03:00" });
+  expect(result.crm_attributes_result.attributes).toEqual({ interest: null, funding_source: "ипотека одобрена", purchase_term: "2–3 месяца", next_contact_date: "2026-08-14T15:00:00+03:00" });
+  expect(result.crm_attributes_result.interest_operations).toEqual({ add: ["Новостройки", "Ипотека"], remove: [], keep: false });
   expect(reports).toHaveLength(7);
   expect(calls).toHaveLength(5);
   for (const { report } of reports.slice(5)) expect(report).toMatchObject({ tokens: 0, cost: 0, actual_model: "code", resolved_prompt: null, contract_audit: { execution_type: "deterministic", contract_version: "v5" } });
@@ -352,7 +353,7 @@ test("все четыре атрибута проходят UI → Judge → det
   await expect(page.locator('[data-nextjs-dialog], .vite-error-overlay')).toHaveCount(0);
 });
 
-test("CRM применяет SET и Interest ADD/REMOVE к существующим атрибутам, а not_determined сохраняет результат", async ({ page }) => {
+test("CRM result передаёт атомарные SET и Interest ADD/REMOVE без старого снимка заявки", async ({ page }) => {
   await page.goto(projectUrl);
   const existing = { interest: ["Новостройки", "Ипотека"], funding_source: "ипотека в процессе", purchase_term: "3–6 месяцев", next_contact_date: "2026-08-14T10:00:00+03:00" };
   await page.evaluate(existing => (window as any).__applicationAttributesCommunicationMetadata = {
@@ -368,20 +369,20 @@ test("CRM применяет SET и Interest ADD/REMOVE к существующ�
   const first = await run(page, "Клиент: Новостройки больше не рассматриваем, хотим проконсультироваться по строительству. Ипотеку уже одобрили. Хотим купить в течение месяца.\nАгент: Сегодня в 18:30 вам позвоню.\nКлиент: Хорошо.");
   expect(first.result.attributes_quality_gate.interest_operations).toEqual({ add: ["Строительство"], remove: ["Новостройки"], keep: false });
   expect(first.result.crm_attributes_result).toMatchObject({
-    attributes: { interest: ["Ипотека", "Строительство"], funding_source: "ипотека одобрена", purchase_term: "до 1 месяца", next_contact_date: "2026-08-13T18:30:00+03:00" },
-    update_actions: { interest: "SET", funding_source: "SET", purchase_term: "SET", next_contact_date: "SET" },
+    attributes: { interest: null, funding_source: "ипотека одобрена", purchase_term: "до 1 месяца", next_contact_date: "2026-08-13T18:30:00+03:00" },
+    update_actions: { interest: "ADD_REMOVE", funding_source: "SET", purchase_term: "SET", next_contact_date: "SET" },
+    interest_operations: { add: ["Строительство"], remove: ["Новостройки"], keep: false },
   });
 
-  const updated = first.result.crm_attributes_result.attributes;
-  await page.evaluate(updated => (window as any).__applicationAttributesCommunicationMetadata = {
-    communication_created_at: "2026-08-13T11:00:00+03:00", timezone: "Europe/Moscow", current_attributes: updated,
+  await page.evaluate(existing => (window as any).__applicationAttributesCommunicationMetadata = {
+    communication_created_at: "2026-08-13T11:00:00+03:00", timezone: "Europe/Moscow", current_attributes: existing,
     next_contact_fallback_at: "2026-08-14T11:00:00+03:00",
-  }, updated);
+  }, existing);
   await installProvider(page, absent());
   const second = await run(page, "Клиент: Спасибо, пока новых данных нет.");
   expect(second.result.attributes_quality_gate.decisions).toEqual({ interest: "DO_NOT_UPDATE", funding_source: "DO_NOT_UPDATE", purchase_term: "DO_NOT_UPDATE", next_contact_date: "DO_NOT_UPDATE" });
-  expect(second.result.crm_attributes_result.attributes).toEqual(updated);
-  expect(second.result.crm_attributes_result.update_actions).toEqual({ interest: "SKIP", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SKIP" });
+  expect(second.result.crm_attributes_result.attributes).toEqual({ interest: null, funding_source: null, purchase_term: null, next_contact_date: null });
+  expect(second.result.crm_attributes_result.update_actions).toEqual({ interest: "KEEP", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SKIP" });
 });
 
 for (const attribute of ["interest", "funding_source", "purchase_term", "next_contact_date"]) {
@@ -392,10 +393,10 @@ for (const attribute of ["interest", "funding_source", "purchase_term", "next_co
     await installProvider(page, values);
     const { result, calls } = await run(page, "Клиент: Не хочу отвечать. Больше не звоните.");
     expect(result.crm_attributes_result.attribute_states[attribute]).toBe("explicitly_declined");
-    expect(result.crm_attributes_result.update_actions[attribute]).toBe(attribute === "interest" ? "SKIP" : "SET_DECLINED");
+    expect(result.crm_attributes_result.update_actions[attribute]).toBe(attribute === "interest" ? "KEEP" : attribute === "next_contact_date" ? "SET_DECLINED" : "SKIP");
     expect(calls).toHaveLength(5);
     await expect(page.locator('[data-application-attributes-result="true"]')).toContainText("Клиент явно отказался");
-    for (const other of ["interest", "funding_source", "purchase_term", "next_contact_date"].filter(key => key !== attribute)) expect(result.crm_attributes_result.update_actions[other]).toBe("SKIP");
+    for (const other of ["interest", "funding_source", "purchase_term", "next_contact_date"].filter(key => key !== attribute)) expect(result.crm_attributes_result.update_actions[other]).toBe(other === "interest" ? "KEEP" : "SKIP");
   });
 }
 
@@ -405,7 +406,9 @@ test("интерес с частичным отказом не теряет по
   values.interest_extractor = { status: "determined", value: ["Строительство"], evidence: ["Хотим построить дом"], declined_values: ["Ипотека"], decline_evidence: ["Ипотека не нужна"] };
   await installProvider(page, values);
   const { result } = await run(page, "Клиент: Хотим построить дом. Ипотека не нужна.");
-  expect(result.crm_attributes_result.attributes.interest).toEqual(["Строительство"]);
+  expect(result.crm_attributes_result.attributes.interest).toBeNull();
+  expect(result.crm_attributes_result.interest_operations).toEqual({ add: ["Строительство"], remove: ["Ипотека"], keep: false });
+  expect(result.crm_attributes_result.update_actions.interest).toBe("ADD_REMOVE");
   expect(result.crm_attributes_result.declined_interest_values).toEqual(["Ипотека"]);
   await expect(page.locator('[data-application-attributes-result="true"]')).toContainText("Отклонённые клиентом направления: Ипотека");
 });
@@ -416,7 +419,7 @@ for (const fault of ["judge_missing", "judge_change_status", "judge_add_value", 
     await installProvider(page, candidates(), { funding_source: fault });
     const { result } = await run(page);
     expect(result.crm_attributes_result.update_actions.funding_source).toBe(fault === "judge_reject" ? "SKIP" : "ERROR");
-    expect(result.crm_attributes_result.update_actions.interest).toBe("SET");
+    expect(result.crm_attributes_result.update_actions.interest).toBe("ADD");
     expect(result.crm_attributes_result.update_actions.purchase_term).toBe("SET");
     expect(result.crm_attributes_result.pipeline_status).toBe("PARTIAL_READY");
   });
@@ -427,7 +430,7 @@ for (const attribute of ["interest", "funding_source", "purchase_term", "next_co
     await installProvider(page, { ...candidates(), next_contact_date_extractor: contact("завтра в 15:00") }, { [attribute + "_extractor"]: "network" });
     const { result } = await run(page);
     expect(result.crm_attributes_result.update_actions[attribute]).toBe("ERROR");
-    for (const other of ["interest", "funding_source", "purchase_term", "next_contact_date"].filter(key => key !== attribute)) expect(result.crm_attributes_result.update_actions[other]).toBe("SET");
+    for (const other of ["interest", "funding_source", "purchase_term", "next_contact_date"].filter(key => key !== attribute)) expect(result.crm_attributes_result.update_actions[other]).toBe(other === "interest" ? "ADD" : "SET");
   });
 }
 
@@ -464,7 +467,7 @@ test("без communication_created_at остальные атрибуты про
   expect(result.next_contact_date_extractor.detected).toBe(true);
   expect(result.pipeline_execution).toMatchObject({ pipeline_status: "PARTIAL_SUCCESS", business_pipeline_status: "PARTIAL_READY" });
   await expect(page.locator("[data-contact-resolution]")).toContainText("не хватает даты создания коммуникации");
-  expect(result.crm_attributes_result.update_actions.interest).toBe("SET");
+  expect(result.crm_attributes_result.update_actions.interest).toBe("ADD");
   expect(result.crm_attributes_result.update_actions.funding_source).toBe("SET");
   await expect(page.locator("#applicationCommunicationCreatedAt")).toHaveValue("");
 });
@@ -525,7 +528,7 @@ test("повторный запуск не использует значения
   const second = await run(page, "Клиент: Другой разговор без информации.");
   expect(second.result.__run_id).not.toBe(first.result.__run_id);
   expect(second.result.crm_attributes_result.attributes.interest).toBeNull();
-  expect(second.result.crm_attributes_result.update_actions.interest).toBe("SKIP");
+  expect(second.result.crm_attributes_result.update_actions.interest).toBe("KEEP");
 });
 
 test("встроенный mock провайдер совместим с v2 и семью этапами", async ({ page }) => {
@@ -534,7 +537,7 @@ test("встроенный mock провайдер совместим с v2 и �
   await page.locator("#runBtn").click();
   await expect(page.locator('[data-application-attributes-result="true"]')).toBeVisible();
   const result = await page.evaluate(() => ctx.crm_attributes_result);
-  expect(result.update_actions.interest).toBe("SET");
+  expect(result.update_actions.interest).toBe("ADD");
   expect(result.update_actions.funding_source).toBe("SET");
   expect(result.update_actions.purchase_term).toBe("SET");
   expect(result.technical_errors).toEqual([]);
@@ -904,7 +907,7 @@ test("Judge отклоняет неподтверждённый контекст
   const { result } = await run(page, eventCase.transcript);
   expect(result.crm_attributes_result.attribute_context.funding_source).toBeNull();
   expect(result.crm_attributes_result.attribute_context.purchase_term).toEqual(purchaseContext);
-  expect(result.crm_attributes_result.update_actions.interest).toBe("SET");
+  expect(result.crm_attributes_result.update_actions.interest).toBe("ADD");
   await expect(page.locator('[data-attribute-context="funding_source"]')).toHaveCount(0);
 });
 
@@ -932,8 +935,9 @@ test("все шесть направлений интереса проходят
   await installProvider(page, { ...absent(), interest_extractor: { status: "determined", value: interests, evidence: interests.map(value => `Меня интересует ${value}.`), declined_values: [], decline_evidence: [] } });
   const { result, calls } = await run(page, transcript);
   expect(calls[0].schema).toBe("application_interest_extractor_v3");
-  expect(result.crm_attributes_result.attributes.interest).toEqual(interests);
-  expect(result.crm_attributes_result.update_actions.interest).toBe("SET");
+  expect(result.crm_attributes_result.attributes.interest).toBeNull();
+  expect(result.crm_attributes_result.interest_operations.add).toEqual(interests);
+  expect(result.crm_attributes_result.update_actions.interest).toBe("ADD");
   for (const interest of interests) await expect(page.locator("[data-result-interest]")).toContainText(interest);
 });
 
@@ -976,7 +980,7 @@ test("неточная дата не сохраняется как AI даже �
   for (const [raw, precision] of [["завтра", "date"], ["в пятницу", "date"], ["завтра вечером", "daypart"], ["через 30–40 минут", "range"], ["после 20 августа", "date"]]) {
     await installProvider(page, { ...candidates(), next_contact_date_extractor: contact(raw, precision) });
     const { result } = await run(page);
-    expect(result.crm_attributes_result.update_actions).toEqual({ interest: "SET", funding_source: "SET", purchase_term: "SET", next_contact_date: "KEEP_FALLBACK" });
+    expect(result.crm_attributes_result.update_actions).toEqual({ interest: "ADD", funding_source: "SET", purchase_term: "SET", next_contact_date: "KEEP_FALLBACK" });
     expect(result.next_contact_date_extractor.next_contact_at).toBeNull();
     expect(result.crm_attributes_result.sources.next_contact_date).toBe("fallback");
   }
@@ -1013,7 +1017,7 @@ test("сохранённый пользовательский шаблон не 
   expect(call.prompt).toBe("Моё правило: добавь семейную ипотеку. Клиент: Интересует новостройка. Нужна ипотечная консультация. Ипотека одобрена. Покупка через два месяца.\nАгент: Перезвоню завтра в 15:00. ");
   expect(result.crm_attributes_result.attributes.funding_source).toBeNull();
   expect(result.crm_attributes_result.update_actions.funding_source).toBe("ERROR");
-  expect(result.crm_attributes_result.update_actions.interest).toBe("SET");
+  expect(result.crm_attributes_result.update_actions.interest).toBe("ADD");
   expect(result.crm_attributes_result.update_actions.purchase_term).toBe("SET");
 });
 
@@ -1065,9 +1069,10 @@ test("Гренландия: встреча в среду в 16:00 проходи
   await page.locator("#applicationCommunicationCreatedAt").fill("2026-09-27T11:13:58");
   await installProvider(page, { ...absent(), interest_extractor: candidates().interest_extractor, next_contact_date_extractor: grenlandia.semantic_result });
   const { result, calls, reports } = await run(page, grenlandia.transcript);
-  expect(result.crm_attributes_result.attributes).toEqual(grenlandia.expected);
+  expect(result.crm_attributes_result.attributes).toEqual({ ...grenlandia.expected, interest: null });
+  expect(result.crm_attributes_result.interest_operations.add).toEqual(grenlandia.expected.interest);
   expect(result.crm_attributes_result.next_contact_resolution).toMatchObject({ status: "resolved", action: "meeting", event_anchor: null });
-  expect(result.crm_attributes_result.update_actions).toEqual({ interest: "SET", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SET" });
+  expect(result.crm_attributes_result.update_actions).toEqual({ interest: "ADD", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SET" });
   expect(result.crm_attributes_result.technical_errors).toEqual([]);
   expect(reports[3].report.contract_audit.response_schema_id).toBe("application_next_contact_date_extractor_v4");
   for (const call of calls) expect(call.prompt.split(grenlandia.transcript)).toHaveLength(2);
@@ -1078,7 +1083,7 @@ test("Гренландия: встреча в среду в 16:00 проходи
   const exported = testInfo.outputPath("grenlandia-report.json");
   await (await downloadEvent).saveAs(exported);
   const { readFileSync } = await import("node:fs");
-  expect(JSON.parse(readFileSync(exported, "utf8")).result.crm_attributes_result.attributes).toEqual(grenlandia.expected);
+  expect(JSON.parse(readFileSync(exported, "utf8")).result.crm_attributes_result.attributes).toEqual({ ...grenlandia.expected, interest: null });
   await page.locator('[data-application-attributes-result="true"]').screenshot({ path: testInfo.outputPath("grenlandia-result.png") });
   expect(errors).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
@@ -1124,7 +1129,7 @@ test("Judge отклоняет сообщение с датой встречи, 
   await page.goto(projectUrl);
   await installProvider(page, { ...candidates(), next_contact_date_extractor: { ...grenlandia.semantic_result, action: "message" } }, { next_contact_date: "judge_reject" });
   const { result } = await run(page, grenlandia.transcript);
-  expect(result.crm_attributes_result.update_actions).toEqual({ interest: "SET", funding_source: "SET", purchase_term: "SET", next_contact_date: "SKIP" });
+  expect(result.crm_attributes_result.update_actions).toEqual({ interest: "ADD", funding_source: "SET", purchase_term: "SET", next_contact_date: "SKIP" });
   expect(result.crm_attributes_result.attributes.next_contact_date).toBeNull();
   expect(result.crm_attributes_result.next_contact_policy).toBe("PRESERVE_SYSTEM_FALLBACK_24H");
   expect(result.attributes_metrics.semantic_risk).toBe(true);
@@ -1148,7 +1153,7 @@ for (const key of ["interest_extractor", "funding_source_extractor", "purchase_t
     expect(attempts[1].maxTokens).toBeGreaterThanOrEqual(6000);
     expect(attempts[1].maxTokens).toBeLessThanOrEqual(12000);
     expect(reports.find((item: any) => item.stage.outKey === key).report.application_output_token_budgets).toEqual(attempts.map((call: any) => call.maxTokens));
-    expect(Object.values(result.crm_attributes_result.update_actions)).toEqual(["SET", "SET", "SET", "SET"]);
+    expect(Object.values(result.crm_attributes_result.update_actions)).toEqual(["ADD", "SET", "SET", "SET"]);
   });
 }
 

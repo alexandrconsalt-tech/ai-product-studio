@@ -40,10 +40,10 @@ describe("Политика обновления существующих CRM-а�
     });
     const missing = absent();
     expect(pipeline(api, missing, undefined, { funding_source: "ипотека одобрена" }).crm).toMatchObject({
-      attributes: { funding_source: "ипотека одобрена" }, update_actions: { funding_source: "SKIP" },
+      attributes: { funding_source: null }, update_actions: { funding_source: "SKIP" },
     });
     expect(pipeline(api, values, (_, verdicts) => { verdicts.funding_source.verdict = "rejected"; }, { funding_source: "ипотека в процессе" }).crm).toMatchObject({
-      attributes: { funding_source: "ипотека в процессе" }, update_actions: { funding_source: "SKIP" },
+      attributes: { funding_source: null }, update_actions: { funding_source: "SKIP" },
     });
   });
 
@@ -56,18 +56,31 @@ describe("Политика обновления существующих CRM-а�
   });
 
   it.each([
-    { name: "ADD", existing: ["Ипотека"], confirmed: ["Новостройки"], declined: [], expected: ["Ипотека", "Новостройки"] },
-    { name: "REMOVE", existing: ["Ипотека", "Новостройки"], confirmed: [], declined: ["Новостройки"], expected: ["Ипотека"] },
-    { name: "KEEP", existing: ["Ипотека", "Новостройки"], confirmed: [], declined: [], expected: ["Ипотека", "Новостройки"] },
-    { name: "ADD + REMOVE", existing: ["Новостройки", "Ипотека"], confirmed: ["Строительство"], declined: ["Новостройки"], expected: ["Ипотека", "Строительство"] },
-  ])("Interest $name применяет только подтверждённые операции", ({ existing, confirmed, declined, expected }) => {
+    ["funding_source", "ипотека одобрена"],
+    ["purchase_term", "3–6 месяцев"],
+  ])("explicit_declined для scalar %s формирует SKIP и не возвращает старое значение", (key, existingValue) => {
+    const { api } = runtime(), values = absent();
+    values[key] = { ...values[key], status: "explicitly_declined", evidence: "Не хочу это обсуждать" };
+    const { gate, crm } = pipeline(api, values, undefined, { [key]: existingValue });
+    expect(gate.decisions[key]).toBe("DO_NOT_UPDATE");
+    expect(crm.update_actions[key]).toBe("SKIP");
+    expect(crm.attributes[key]).toBeNull();
+  });
+
+  it.each([
+    { name: "ADD", existing: ["Ипотека"], confirmed: ["Новостройки"], declined: [], action: "ADD" },
+    { name: "REMOVE", existing: ["Ипотека", "Новостройки"], confirmed: [], declined: ["Новостройки"], action: "REMOVE" },
+    { name: "KEEP", existing: ["Ипотека", "Новостройки"], confirmed: [], declined: [], action: "KEEP" },
+    { name: "ADD + REMOVE", existing: ["Новостройки", "Ипотека"], confirmed: ["Строительство"], declined: ["Новостройки"], action: "ADD_REMOVE" },
+  ])("Interest $name передаёт только атомарные операции", ({ existing, confirmed, declined, action }) => {
     const { api } = runtime(), values = absent();
     if(confirmed.length) values.interest = { status: "determined", value: confirmed, evidence: confirmed.map(value => `Подтверждено: ${value}`), declined_values: declined, decline_evidence: declined.map(value => `Отказ: ${value}`) };
     else if(declined.length) values.interest = { status: "explicitly_declined", value: null, evidence: declined.map(value => `Отказ: ${value}`), declined_values: declined, decline_evidence: declined.map(value => `Отказ: ${value}`) };
     const { gate, crm } = pipeline(api, values, undefined, { interest: existing });
-    expect(crm.attributes.interest).toEqual(expected);
+    expect(crm.attributes.interest).toBeNull();
     expect(gate.interest_operations).toEqual({ add: confirmed, remove: declined, keep: !confirmed.length && !declined.length });
-    expect(crm.update_actions.interest).toBe(confirmed.length || declined.length ? "SET" : "SKIP");
+    expect(crm.interest_operations).toEqual(gate.interest_operations);
+    expect(crm.update_actions.interest).toBe(action);
   });
 
   it("новый Next Contact заменяет существующий, а отсутствие контакта сохраняет его и не включает fallback", () => {
@@ -77,13 +90,22 @@ describe("Политика обновления существующих CRM-а�
     const missing = pipeline(api, absent(), undefined, existing);
     api.applySystemFallback(missing.gate, "2026-09-30T10:00:00+03:00", existing);
     const crm = api.crm(missing.gate, existing);
-    expect(crm).toMatchObject({ attributes: existing, update_actions: { next_contact_date: "SKIP" } });
+    expect(crm).toMatchObject({ attributes: { next_contact_date: null }, update_actions: { next_contact_date: "SKIP" } });
   });
 
-  it("техническая ошибка сохраняет старое значение только проблемного атрибута", () => {
+  it("техническая ошибка не возвращает старое значение как payload", () => {
     const { api } = runtime(), existing = { funding_source: "ипотека в процессе" };
     const { crm } = pipeline(api, determined(), (inputs) => { inputs.funding_source.status = "technical_error"; }, existing);
-    expect(crm).toMatchObject({ attributes: { funding_source: "ипотека в процессе", purchase_term: "2–3 месяца" }, update_actions: { funding_source: "ERROR", purchase_term: "SET" } });
+    expect(crm).toMatchObject({ attributes: { funding_source: null, purchase_term: "2–3 месяца" }, update_actions: { funding_source: "ERROR", purchase_term: "SET" } });
+  });
+
+  it("CRM result не зависит от устаревшего снимка current_attributes", () => {
+    const { api } = runtime(), { gate } = pipeline(api, determined());
+    const oldSnapshot = api.crm(gate, { interest: ["Ипотека"], funding_source: "ипотека в процессе", purchase_term: "более 6 месяцев" });
+    const latestSnapshot = api.crm(gate, { interest: ["Безопасность сделок"], funding_source: "наличные / депозит", purchase_term: "до 1 месяца" });
+    expect(oldSnapshot).toEqual(latestSnapshot);
+    expect(oldSnapshot.attributes.interest).toBeNull();
+    expect(oldSnapshot.interest_operations.add).toEqual(["Новостройки", "Ипотека"]);
   });
 });
 describe("Строгое заполнение четырёх атрибутов v33", () => {
@@ -143,6 +165,7 @@ describe("AI Атрибуты: согласованный контракт v2", 
   it("updates seven stages, schemas and prompts together", () => {
     const { api, config } = runtime();
     expect(config.revision).toBe(33);
+    expect(config.canonicalVersion).toBe(33);
     expect(config.stages.map((s: any) => s.outKey)).toEqual([...api.keys.map((key: string) => key + "_extractor"), "attributes_judge", "attributes_quality_gate", "crm_attributes_result"]);
     for (const stage of config.stages.slice(0, 5)) {
       expect(stage.responseContract).toBe(`application_${stage.outKey}_${["next_contact_date_extractor", "attributes_judge"].includes(stage.outKey) ? "v4" : "v3"}`);
@@ -155,13 +178,13 @@ describe("AI Атрибуты: согласованный контракт v2", 
   it("passes all four confirmed values unchanged into CRM", () => {
     const { api } = runtime(), result = pipeline(api, determined());
     expect(result.gate.gate_status).toBe("READY");
-    expect(Object.values(result.crm.update_actions)).toEqual(["SET", "SET", "SET", "SET"]);
+    expect(Object.values(result.crm.update_actions)).toEqual(["ADD", "SET", "SET", "SET"]);
     expect(result.crm.attributes.next_contact_date).toBe("2026-09-28T15:00:00+03:00");
     expect(result.crm.sources.next_contact_date).toBe("ai");
   });
   it("does not clear existing values when information is absent", () => {
     const { api } = runtime(), { crm } = pipeline(api, absent());
-    expect(Object.values(crm.update_actions)).toEqual(["SKIP", "SKIP", "SKIP", "SKIP"]);
+    expect(Object.values(crm.update_actions)).toEqual(["KEEP", "SKIP", "SKIP", "SKIP"]);
     expect(Object.values(crm.attribute_states)).toEqual(Array(4).fill("not_determined"));
     expect(crm.next_contact_policy).toBe("PRESERVE_SYSTEM_FALLBACK_24H");
   });
@@ -171,14 +194,16 @@ describe("AI Атрибуты: согласованный контракт v2", 
     const { crm } = pipeline(api, candidates);
     expect(crm.attribute_states[key]).toBe("explicitly_declined");
     expect(crm.attributes[key]).toBeNull();
-    expect(crm.update_actions[key]).toBe(key === "interest" ? "SKIP" : "SET_DECLINED");
+    expect(crm.update_actions[key]).toBe(key === "interest" ? "KEEP" : key === "next_contact_date" ? "SET_DECLINED" : "SKIP");
     if (key === "next_contact_date") expect(crm.next_contact_policy).toBe("NO_CONTACT");
   });
   it("retains declined interest alongside another confirmed interest", () => {
     const { api } = runtime(), candidates = determined();
     candidates.interest = { status: "determined", value: ["Строительство"], evidence: ["Хотим построить дом"], declined_values: ["Ипотека"], decline_evidence: ["Ипотека не нужна"] };
     const { crm } = pipeline(api, candidates);
-    expect(crm.attributes.interest).toEqual(["Строительство"]);
+    expect(crm.attributes.interest).toBeNull();
+    expect(crm.update_actions.interest).toBe("ADD_REMOVE");
+    expect(crm.interest_operations).toEqual({ add: ["Строительство"], remove: ["Ипотека"], keep: false });
     expect(crm.declined_interest_values).toEqual(["Ипотека"]);
   });
   it("does not save a refusal rejected by Judge", () => {
@@ -198,12 +223,12 @@ describe("AI Атрибуты: согласованный контракт v2", 
       if (fault === "upstream_error") inputs.funding_source.status = "technical_error";
     });
     expect(crm.update_actions.funding_source).toBe("ERROR");
-    for (const key of ["interest", "purchase_term", "next_contact_date"]) expect(crm.update_actions[key]).toBe("SET");
+    expect(crm.update_actions).toMatchObject({ interest: "ADD", purchase_term: "SET", next_contact_date: "SET" });
     expect(crm.pipeline_status).toBe("PARTIAL_READY");
   });
   it("does not save a rejected candidate", () => {
     const { api } = runtime(), { crm } = pipeline(api, determined(), (_, verdicts) => verdicts.interest.verdict = "rejected");
-    expect(crm.update_actions.interest).toBe("SKIP");
+    expect(crm.update_actions.interest).toBe("KEEP");
     expect(crm.attributes.interest).toBeNull();
     expect(crm.update_actions.funding_source).toBe("SET");
   });
@@ -251,7 +276,7 @@ describe("Контакт относительно события и незаве
     expect(judge.judge_verdicts.next_contact_date).toBe("accepted");
     expect(gate.decisions.next_contact_date).toBe("DO_NOT_UPDATE");
     expect(crm).toMatchObject({ pending_attributes: ["next_contact_date"], technical_errors: [], pipeline_status: "PARTIAL_READY",
-      attributes: { next_contact_date: null }, update_actions: { next_contact_date: "SKIP", interest: "SET" },
+      attributes: { next_contact_date: null }, update_actions: { next_contact_date: "SKIP", interest: "ADD" },
       next_contact_resolution: { status: normalization_status, evidence: inputs.next_contact_date.evidence } });
     api.applySystemFallback(gate, "2026-09-28T10:00:00+03:00");
     expect(api.crm(gate)).toMatchObject({ pending_attributes: ["next_contact_date"],
@@ -358,14 +383,16 @@ describe("Актуальный справочник интереса: шесть
     const { api } = runtime(), candidates = determined();
     candidates.interest = { ...candidates.interest, value: [...api.interest], evidence: api.interest.map((value: string) => `Клиент: Меня интересует ${value}`) };
     const { crm } = pipeline(api, candidates);
-    expect(crm.attributes.interest).toEqual(["Новостройки", "Ипотека", "Инвестиции в регионах", "Безопасность сделок", "Юридическое сопровождение", "Строительство"]);
-    expect(crm.update_actions.interest).toBe("SET");
+    expect(crm.attributes.interest).toBeNull();
+    expect(crm.interest_operations.add).toEqual(["Новостройки", "Ипотека", "Инвестиции в регионах", "Безопасность сделок", "Юридическое сопровождение", "Строительство"]);
+    expect(crm.update_actions.interest).toBe("ADD");
   });
   it("keeps a legal-services refusal separate from confirmed investment and safety interests", () => {
     const { api } = runtime(), candidates = determined();
     candidates.interest = { status: "determined", value: ["Инвестиции в регионах", "Безопасность сделок"], evidence: ["Ищу инвестиции в регионах", "Нужна безопасность расчётов"], declined_values: ["Юридическое сопровождение"], decline_evidence: ["Юридическое сопровождение не нужно"] };
     const { crm } = pipeline(api, candidates);
-    expect(crm.attributes.interest).toEqual(candidates.interest.value);
+    expect(crm.attributes.interest).toBeNull();
+    expect(crm.interest_operations).toEqual({ add: candidates.interest.value, remove: ["Юридическое сопровождение"], keep: false });
     expect(crm.declined_interest_values).toEqual(["Юридическое сопровождение"]);
   });
 });
@@ -381,8 +408,8 @@ describe("Встреча и контекст часа v33", () => {
     const { judge, gate } = pipeline(api, values);
     const crm = api.crm(api.applySystemFallback(gate, "2026-09-28T11:13:58+03:00"));
     for (const result of [judge, gate, crm]) expect(result.next_contact_resolution.action).toBe("meeting");
-    expect(crm.attributes).toEqual({ interest: ["Новостройки", "Ипотека"], funding_source: null, purchase_term: null, next_contact_date: "2026-09-30T16:00:00+03:00" });
-    expect(crm.update_actions).toEqual({ interest: "SET", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SET" });
+    expect(crm.attributes).toEqual({ interest: null, funding_source: null, purchase_term: null, next_contact_date: "2026-09-30T16:00:00+03:00" });
+    expect(crm.update_actions).toEqual({ interest: "ADD", funding_source: "SKIP", purchase_term: "SKIP", next_contact_date: "SET" });
   });
   it.each([
     ["завтра в 4:00", null], ["завтра в 4", null], ["завтра в 4:00 через 2 дня", null],
