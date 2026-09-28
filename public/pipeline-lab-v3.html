@@ -2263,7 +2263,7 @@ function migratePipelineConfig(stages, deletedOutKeys){
   // Summary-module migrations must never inject or rewrite its user stages.
   if(IS_AI_SUMMARY_TEN_AUGUST_PROJECT) return stages;
   // The recovered application-attributes product is an independent
-  // nine-stage pipeline. Summary-v3 structural migrations must never append
+  // seven-stage pipeline. Summary-v3 structural migrations must never append
   // Summary judges or Conversation Store stages to this product.
   if(IS_APPLICATION_ATTRIBUTES_PROJECT){
     // Revision 18 physically replaces three legacy Judges and the Merger
@@ -8156,7 +8156,7 @@ function mockPipelineResponse(prompt){
     if(source.startsWith('Ты — независимый проверщик атрибута заявки «Источник средств»')) return {decision:'approve',approved_value:'ипотека в процессе',rejected_value:null,evidence:'У меня ипотека сейчас в процессе одобрения, Сбербанк.',reason_codes:['mortgage_in_process_confirmed']};
     if(source.startsWith('Ты — независимый проверщик атрибута заявки «Срок покупки»')) return fundingFault?{decision:'approve',approved_value:'не определено',rejected_value:null,evidence:'',reason_codes:['no_confirmed_purchase_term']}:{decision:'approve',approved_value:'2–3 месяца',rejected_value:null,evidence:'Хотелось бы в ближайшие два-три месяца определиться.',reason_codes:['purchase_2_3_months']};
     if(source.startsWith('Ты объединяешь результаты трёх независимых Judge')) return fundingFault?{attributes:{interest:['Новостройки'],funding_source:null,purchase_term:'не определено'},attribute_statuses:{interest:'ready',funding_source:'technical_error',purchase_term:'ready'},evidence:{interest:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:'',purchase_term:''},source_decisions:{interest:'approve',funding_source:'technical_error',purchase_term:'approve'}}:{attributes:{interest:['Новостройки'],funding_source:'ипотека в процессе',purchase_term:'2–3 месяца'},attribute_statuses:{interest:'ready',funding_source:'ready',purchase_term:'ready'},evidence:{interest:['Клиент: «Я по объявлению звоню, новостройка в центре интересует»'],funding_source:'У меня ипотека сейчас в процессе одобрения, Сбербанк.',purchase_term:'Хотелось бы в ближайшие два-три месяца определиться.'},source_decisions:{interest:'approve',funding_source:'approve',purchase_term:'approve'}};
-    if(source.startsWith('Ты — Quality Gate атрибутов заявки')) return fundingFault?{decisions:{interest:'AUTO_SAVE',funding_source:'TECHNICAL_ERROR',purchase_term:'SAVE_UNDETERMINED'},values_for_save:{interest:['Новостройки'],funding_source:null,purchase_term:'не определено'},blocked_attributes:[],technical_errors:['funding_source'],gate_status:'PARTIAL_READY'}:{decisions:{interest:'AUTO_SAVE',funding_source:'AUTO_SAVE',purchase_term:'AUTO_SAVE'},values_for_save:{interest:['Новостройки'],funding_source:'ипотека в процессе',purchase_term:'2–3 месяца'},blocked_attributes:[],technical_errors:[],gate_status:'READY'};
+    if(source.startsWith('Ты — Quality Gate атрибутов заявки')) return fundingFault?{decisions:{interest:'AUTO_SAVE',funding_source:'TECHNICAL_ERROR',purchase_term:'DO_NOT_UPDATE'},values_for_save:{interest:['Новостройки'],funding_source:null,purchase_term:null},blocked_attributes:['purchase_term'],technical_errors:['funding_source'],gate_status:'PARTIAL_READY'}:{decisions:{interest:'AUTO_SAVE',funding_source:'AUTO_SAVE',purchase_term:'AUTO_SAVE'},values_for_save:{interest:['Новостройки'],funding_source:'ипотека в процессе',purchase_term:'2–3 месяца'},blocked_attributes:[],technical_errors:[],gate_status:'READY'};
   }
   const fact=(id,category,name,value,normalized_value,speaker,evidence)=>({id,category,name,value,normalized_value,speaker,evidence,confidence:.99,verification_status:'pending'});
   const facts=[
@@ -13592,10 +13592,9 @@ ${JSON.stringify(ctx.conversation_store)}${definition.criterion==='completeness'
 }
 
 const APPLICATION_ATTRIBUTE_KEYS=Object.freeze(['interest','funding_source','purchase_term','next_contact_date']);
-const APPLICATION_ATTRIBUTE_DECISIONS=Object.freeze(['AUTO_SAVE','SAVE_UNDETERMINED','DO_NOT_UPDATE','TECHNICAL_ERROR']);
 const APPLICATION_INTEREST_VALUES=Object.freeze(window.ApplicationAttributesV2.interest);
-const APPLICATION_FUNDING_VALUES=Object.freeze(['наличные / депозит','ипотека одобрена','ипотека в процессе','продажа своей квартиры','не определено']);
-const APPLICATION_PURCHASE_TERM_VALUES=Object.freeze(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев','не определено']);
+const APPLICATION_FUNDING_VALUES=Object.freeze(['наличные / депозит','ипотека одобрена','ипотека в процессе','продажа своей квартиры']);
+const APPLICATION_PURCHASE_TERM_VALUES=Object.freeze(['до 1 месяца','2–3 месяца','3–6 месяцев','более 6 месяцев']);
 const APPLICATION_NEXT_CONTACT_DATE_EXTRACTOR_KEY='next_contact_date_extractor';
 const APPLICATION_NEXT_CONTACT_DATE_CONTRACT_ID='application_next_contact_date_extractor_v4';
 const APPLICATION_NEXT_CONTACT_DATE_SCHEMA=window.__AI_APPLICATION_ATTRIBUTES_NEXT_CONTACT_DATE_SCHEMA_V2__;
@@ -15815,6 +15814,7 @@ function renderApplicationAttributesFinal(totalTokens,totalCost,stageReports){
     if(key==='next_contact_date'&&crmResult.next_contact_policy==='PRESERVE_SYSTEM_FALLBACK_24H')return 'Не определено — механизм +24 часа';
     if(crmResult.attribute_states?.[key]==='not_determined') return 'Не определено — не обновлять';
     if(key==='next_contact_date') return formatApplicationNextContactDate({detected:true,next_contact_at:attributes[key]})+(crmResult.next_contact_resolution?.action==='meeting'?' · встреча':' · из разговора')+(['date','daypart','range'].includes(ctx.attributes_judge?.attributes?.next_contact_date?.precision)?' (расчётный ориентир)':'');
+    if(key==='interest') return formatApplicationAttributeValue(gate.values_for_save?.interest);
     return formatApplicationAttributeValue(attributes[key]);
   };
   const percent=value=>value==null?'не рассчитана':Math.round(Number(value)*100)+'%';
@@ -15861,7 +15861,7 @@ function renderApplicationAttributesFinal(totalTokens,totalCost,stageReports){
     note.textContent='Отклонённые клиентом направления: '+crmResult.declined_interest_values.join(', ');
     finalEl.appendChild(note);
   }
-  const readyCount=Object.values(updateActions).filter(action=>['SET','SET_DECLINED','KEEP_FALLBACK'].includes(action)).length;
+  const readyCount=Object.values(updateActions).filter(action=>['SET','SET_DECLINED','KEEP_FALLBACK','ADD','REMOVE','ADD_REMOVE'].includes(action)).length;
   const readiness=document.createElement('div');readiness.className='hintbar';readiness.dataset.attributeReadiness='true';
   readiness.textContent='Готово к обновлению в CRM: '+readyCount+' из 4 атрибутов. Контекст для уточнения не записывается как подтверждённое значение.';finalEl.appendChild(readiness);
   for(const key of ['funding_source','purchase_term']){

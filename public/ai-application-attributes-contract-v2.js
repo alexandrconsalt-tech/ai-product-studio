@@ -49,11 +49,23 @@
   const perAttribute = schema => object(Object.fromEntries(keys.map(key=>[key,schema])));
   const savedValues = object({interest:{type:['array','null'],items:enumeration(interest)},
     funding_source:{type:['string','null'],enum:[...funding,null]},purchase_term:{type:['string','null'],enum:[...purchase,null]},next_contact_date:nullableText});
-  const gateSchema = object({decisions:perAttribute(enumeration(['AUTO_SAVE','SAVE_DECLINED','DO_NOT_UPDATE','TECHNICAL_ERROR','USE_SYSTEM_FALLBACK'])),
+  const gateDecisions = object({
+    interest:enumeration(['AUTO_SAVE','SAVE_DECLINED','DO_NOT_UPDATE','TECHNICAL_ERROR']),
+    funding_source:enumeration(['AUTO_SAVE','DO_NOT_UPDATE','TECHNICAL_ERROR']),
+    purchase_term:enumeration(['AUTO_SAVE','DO_NOT_UPDATE','TECHNICAL_ERROR']),
+    next_contact_date:enumeration(['AUTO_SAVE','SAVE_DECLINED','DO_NOT_UPDATE','TECHNICAL_ERROR','USE_SYSTEM_FALLBACK'])
+  });
+  const updateActions = object({
+    interest:enumeration(['ADD','REMOVE','ADD_REMOVE','KEEP','ERROR']),
+    funding_source:enumeration(['SET','SKIP','ERROR']),
+    purchase_term:enumeration(['SET','SKIP','ERROR']),
+    next_contact_date:enumeration(['SET','SET_DECLINED','SKIP','ERROR','KEEP_FALLBACK'])
+  });
+  const gateSchema = object({decisions:gateDecisions,
     values_for_save:savedValues,attribute_states:perAttribute(status),sources:perAttribute(enumeration(['ai','none','fallback'])),
     blocked_attributes:strings,technical_errors:strings,gate_status:enumeration(['READY','PARTIAL_READY','BLOCKED']),declined_interest_values:strings,declined_interest_evidence:strings,interest_operations:interestOperationsSchema,pending_attributes:strings,next_contact_resolution:resolutionSchema,attribute_context:contextsSchema,next_contact_schedule:relativeScheduleSchema});
   const crmSchema = object({attributes:savedValues,attribute_states:perAttribute(status),
-    update_actions:perAttribute(enumeration(['SET','SET_DECLINED','SKIP','ERROR','KEEP_FALLBACK'])),sources:perAttribute(enumeration(['ai','none','fallback'])),
+    update_actions:updateActions,sources:perAttribute(enumeration(['ai','none','fallback'])),
     pipeline_status:enumeration(['READY','PARTIAL_READY','BLOCKED']),blocked_attributes:strings,technical_errors:strings,declined_interest_values:strings,declined_interest_evidence:strings,interest_operations:interestOperationsSchema,
     pending_attributes:strings,next_contact_resolution:resolutionSchema,attribute_context:contextsSchema,next_contact_schedule:relativeScheduleSchema,
     next_contact_policy:enumeration(['NO_CONTACT','USE_AI','PRESERVE_SYSTEM_FALLBACK_24H'])});
@@ -238,13 +250,13 @@
         result.decisions[key]='AUTO_SAVE'; result.values_for_save[key]=key==='next_contact_date'?value.next_contact_at:value;
       } else if (state==='explicitly_declined') {
         if (value!==null||!proofPresent(evidence)) {result.blocked_attributes.push(key);continue;}
-        result.decisions[key]='SAVE_DECLINED';
+        result.decisions[key]=contextualKeys.includes(key)?'DO_NOT_UPDATE':'SAVE_DECLINED';
       } else if (value!==null) {result.blocked_attributes.push(key);continue;}
       if(state==='not_determined'&&contextualKeys.includes(key)&&judge.attribute_context?.[key]){
         try { validateSchema(judge.attribute_context[key],contextSchema);result.attribute_context[key]=JSON.parse(JSON.stringify(judge.attribute_context[key])); } catch { /* Invalid context must not affect another attribute. */ }
       }
       result.attribute_states[key]=state;
-      result.sources[key]=state==='not_determined'?'none':'ai';
+      result.sources[key]=state==='not_determined'||(state==='explicitly_declined'&&contextualKeys.includes(key))?'none':'ai';
       if (key==='interest') {
         result.declined_interest_values=[...(judge.declined_interest_values||[])];
         result.declined_interest_evidence=[...(judge.declined_interest_evidence||[])];
@@ -257,25 +269,19 @@
     result.gate_status=errors===0?'READY':errors<keys.length?'PARTIAL_READY':'BLOCKED';
     return validateSchema(result,gateSchema,'gate');
   }
-  function crm(gateResult, existingAttributes) {
+  function crm(gateResult) {
     validateSchema(gateResult,gateSchema,'gate');
-    const existing=normalizeExistingAttributes(existingAttributes);
     const result={attributes:{},attribute_states:{},update_actions:{},sources:{},pipeline_status:gateResult.gate_status,
       blocked_attributes:[...(gateResult.blocked_attributes||[])],technical_errors:[...(gateResult.technical_errors||[])],
       declined_interest_values:[...(gateResult.declined_interest_values||[])],declined_interest_evidence:[...(gateResult.declined_interest_evidence||[])],interest_operations:{...gateResult.interest_operations,add:[...gateResult.interest_operations.add],remove:[...gateResult.interest_operations.remove]},pending_attributes:[...gateResult.pending_attributes],next_contact_resolution:gateResult.next_contact_resolution,attribute_context:gateResult.attribute_context,next_contact_schedule:gateResult.next_contact_schedule};
     for (const key of keys) {
       const decision=gateResult.decisions[key];
       if(key==='interest'){
-        const current=Array.isArray(existing.interest)?[...existing.interest]:[];
-        const merged=[...current];
-        for(const item of result.interest_operations.add) if(!merged.includes(item)) merged.push(item);
-        const removed=new Set(result.interest_operations.remove);
-        result.attributes[key]=decision==='TECHNICAL_ERROR'&&!Object.hasOwn(existing,'interest')?null:merged.filter(item=>!removed.has(item));
-        if(!Object.hasOwn(existing,'interest')&&!result.interest_operations.add.length&&!result.interest_operations.remove.length) result.attributes[key]=null;
-      }else result.attributes[key]=decision==='AUTO_SAVE'||decision==='USE_SYSTEM_FALLBACK'?gateResult.values_for_save[key]:decision==='SAVE_DECLINED'?null:Object.hasOwn(existing,key)?existing[key]:null;
+        result.attributes[key]=null;
+      }else result.attributes[key]=decision==='AUTO_SAVE'||decision==='USE_SYSTEM_FALLBACK'?gateResult.values_for_save[key]:null;
       result.attribute_states[key]=gateResult.attribute_states[key];
       result.update_actions[key]=key==='interest'
-        ? decision==='TECHNICAL_ERROR'?'ERROR':result.interest_operations.add.length||result.interest_operations.remove.length?'SET':'SKIP'
+        ? decision==='TECHNICAL_ERROR'?'ERROR':result.interest_operations.add.length&&result.interest_operations.remove.length?'ADD_REMOVE':result.interest_operations.add.length?'ADD':result.interest_operations.remove.length?'REMOVE':'KEEP'
         : decision==='AUTO_SAVE'?'SET':decision==='USE_SYSTEM_FALLBACK'?'KEEP_FALLBACK':decision==='SAVE_DECLINED'?'SET_DECLINED':decision==='TECHNICAL_ERROR'?'ERROR':'SKIP';
       result.sources[key]=gateResult.sources[key];
     }

@@ -50,4 +50,5 @@
     }
   }
   config.revision=33;
+  config.canonicalVersion=33;
 })();

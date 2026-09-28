@@ -189,7 +189,7 @@ describe("PlaygroundScreen", () => {
     expect(iframeUrl.searchParams.has("preset")).toBe(false);
   });
 
-  it("opens AI Атрибуты в Заявке with its recovered nine-stage preset", () => {
+  it("opens AI Атрибуты в Заявке with its canonical seven-stage preset", () => {
     const project = {
       ...demoSnapshot.projects[0],
       id: "project_72f7b30d-0d09-49fd-81b7-82a8b8f88c4f",

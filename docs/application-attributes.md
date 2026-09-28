@@ -1,11 +1,11 @@
 # AI Атрибуты в Заявке
 
-Это каноническое описание текущей исполняемой реализации. Версия pipeline и промптов — **33**. Версионные отчёты `application-attributes-local-v*.md` и RTF-файлы являются историческими материалами.
+Это каноническое описание текущей исполняемой реализации. **v33 — единственная текущая каноническая версия Application Attributes Pipeline.** Версионные отчёты `application-attributes-local-v*.md`, RTF-файлы и миграции до v33 являются историческими материалами и не должны использоваться для выбора актуального контракта.
 
 ## Исполняемые файлы
 
-- `public/ai-application-attributes-pipeline-v14.js` … `v33.js` — последовательные совместимые миграции конфигурации. Финальная политика и промпты задаются `v32` и `v33`.
-- `public/ai-application-attributes-contract-v2.js` — справочники, response schemas, проверки, Judge adapter, Quality Gate и CRM result. Имя файла сохранено для совместимости; актуальные response contracts имеют версии v3/v4, Gate и CRM — v5.
+- `public/ai-application-attributes-pipeline-v14.js` … `v33.js` — последовательные совместимые миграции конфигурации. Только итоговая конфигурация после применения v33 является актуальной; финальная политика и промпты задаются v33 поверх предыдущих миграций.
+- `public/ai-application-attributes-contract-v2.js` — справочники, response schemas, проверки, Judge adapter, Quality Gate и атомарный CRM result. Имя файла сохранено для совместимости; актуальные response contracts имеют версии v3/v4, Gate и CRM — v5.
 - `public/ai-application-attributes-runtime-v29.js` и `public/ai-application-attributes-runtime.json` — temporal helpers и контроль ревизии 33.
 - `public/pipeline-lab-v3.html` — orchestration, передача context, детерминированная нормализация дат, отчёт и UI.
 
@@ -19,7 +19,7 @@ Metadata pipeline:
 |---|---|
 | `communication_created_at` | ISO datetime создания аудио/коммуникации; календарная опора относительных дат. Может быть передано как `audio_created_at` или `communication.created_at`. |
 | `timezone` | IANA timezone, по умолчанию `Europe/Moscow`. |
-| `current_attributes` | Текущие CRM-значения четырёх атрибутов. Нужны для безопасного обновления и сохранения старых значений. |
+| `current_attributes` | Снимок CRM на момент запуска. Используется только для проверки допустимости server fallback. Не включается в результат как состояние для последующей полной замены заявки. |
 | `next_contact_fallback_at` | Уже рассчитанная сервером fallback-дата. Pipeline не создаёт новый таймер и не называет fallback фактом разговора. |
 
 Если календарной опоры недостаточно, договорённость может быть сохранена как `unresolved` или `missing_reference`, но `next_contact_date` не записывается. Слова «позже», «попозже», «как освобожусь» и другие неточные выражения не превращаются в дату.
@@ -74,14 +74,16 @@ Metadata pipeline:
 | `AUTO_SAVE` | `SET` | Записать новое подтверждённое значение, заменив существующее scalar-значение. |
 | `DO_NOT_UPDATE` | `SKIP` | Сохранить существующее значение без изменения. |
 | `TECHNICAL_ERROR` | `ERROR` | Сохранить существующее значение проблемного атрибута; остальные обрабатываются независимо. |
-| `SAVE_DECLINED` | `SET_DECLINED` | Для scalar-поля записать явный отказ как очистку; для Interest применить только явно подтверждённые удаления. |
+| `SAVE_DECLINED` | `REMOVE` для Interest или `SET_DECLINED` для Next Contact | Для Interest удалить только явно отклонённые значения. Для Next Contact сохранить отдельную семантику отказа от контакта. Для `funding_source` и `purchase_term` это решение недопустимо. |
 | `USE_SYSTEM_FALLBACK` | `KEEP_FALLBACK` | Использовать переданный серверный fallback только при отсутствии существующей и подтверждённой AI-даты. |
 
-`SAVE_UNDETERMINED` и `SET_UNDETERMINED` встречаются в исторических промптах ранних версий, но актуальный Gate v5 их не выдаёт. `not_determined` преобразуется в `DO_NOT_UPDATE/SKIP`, поэтому отсутствие информации в новом звонке не очищает CRM.
+`SAVE_UNDETERMINED` и `SET_UNDETERMINED` относятся только к историческим миграциям до v33. Они отсутствуют в актуальном runtime/UI и не входят в текущий контракт. `not_determined` преобразуется в `DO_NOT_UPDATE/SKIP`, поэтому отсутствие информации в новом звонке не очищает CRM.
 
 ### Scalar attributes
 
-Для `funding_source`, `purchase_term` и `next_contact_date` подтверждённое новое значение имеет приоритет над `current_attributes`. При `not_determined`, отклонении Judge или технической ошибке старое значение сохраняется.
+Для `funding_source`, `purchase_term` и `next_contact_date` подтверждённое новое значение формирует операцию `SET`. При `not_determined`, отклонении Judge или технической ошибке pipeline возвращает `SKIP` или `ERROR`, не передаёт старое значение обратно как payload и не меняет CRM.
+
+`explicit_declined` для `funding_source` и `purchase_term` также формирует `DO_NOT_UPDATE/SKIP`. Отказ отвечать или обсуждать способ оплаты либо срок покупки не очищает существующее подтверждённое значение. Новый подтверждённый факт по этим атрибутам по-прежнему формирует `AUTO_SAVE/SET`.
 
 Подтверждённая AI-дата контакта заменяет существующую или default/fallback дату. Неточная договорённость не меняет CRM-дату.
 
@@ -93,7 +95,7 @@ Interest не заменяется полным массивом текущег�
 - `remove` — направления с явным подтверждённым отказом;
 - `keep` — отсутствие операций.
 
-CRM result объединяет `add` с существующим массивом и удаляет только элементы из `remove`. Неупомянутые направления сохраняются.
+CRM result не объединяет массив со снимком `current_attributes`. Он передаёт только атомарные операции: `ADD`, `REMOVE`, их сочетание `ADD_REMOVE` или `KEEP`, а также конкретные списки `interest_operations.add/remove`. Backend применяет их к актуальному массиву CRM на момент записи. Неупомянутые направления сохраняются.
 
 ## Фактическое поведение
 
@@ -101,6 +103,7 @@ CRM result объединяет `add` с существующим массиво
 |---|---|
 | Новое достоверное scalar-значение | Обновить (`SET`) |
 | В новом звонке значение не определено | Старое не трогать (`SKIP`) |
+| Отказ обсуждать Funding Source или Purchase Term | Старое не трогать (`SKIP`) |
 | Technical error | Старое не трогать (`ERROR`) |
 | Новый Interest | Добавить через `interest_operations.add` |
 | Старый Interest не упомянут | Оставить |
@@ -110,13 +113,17 @@ CRM result объединяет `add` с существующим массиво
 
 ## Интеграционная граница
 
-Репозиторий формирует и проверяет `crm_attributes_result`, включая `update_actions`, `interest_operations`, итоговые значения и сохранение `current_attributes`. Отдельного production-адаптера, отправляющего этот payload во внешнюю CRM, в репозитории нет.
+Репозиторий формирует и проверяет `crm_attributes_result`, включая `update_actions`, `interest_operations` и только новые значения для операций `SET`. Поле `attributes` является payload изменений: при `SKIP`, `ERROR` и для Interest оно содержит `null`; оно не является итоговым снимком заявки. Отдельного production-адаптера, отправляющего этот payload во внешнюю CRM, в репозитории нет.
 
 Минимальная интеграция backend должна:
 
 1. передать в запуск `current_attributes` и server-generated `next_contact_fallback_at`, если он существует;
-2. применить `SET`, пропустить `SKIP/ERROR`, обработать `SET_DECLINED` и `KEEP_FALLBACK`;
-3. для Interest применять `add/remove`, не заменяя поле только массивом значений текущего звонка.
+2. непосредственно перед записью прочитать актуальное состояние заявки;
+3. применить scalar `SET` к конкретному полю, пропустить `SKIP/ERROR`, отдельно обработать `SET_DECLINED` для Next Contact и `KEEP_FALLBACK`;
+4. для Interest атомарно применить `interest_operations.add/remove` к актуальному массиву: добавить отсутствующие значения, удалить только явно перечисленные и сохранить все неупомянутые;
+5. не заменять заявку или Interest состоянием из `current_attributes`, полученным до начала анализа.
+
+Пример: если во время анализа оператор изменил заявку, backend применяет полученный `SET` или `ADD/REMOVE` поверх этого нового состояния. Pipeline не возвращает старые значения как инструкцию восстановить прежний снимок.
 
 Realtime-обновление открытой карточки и provenance вида `updated_by=AI/user` в текущий контракт не входят.
 
