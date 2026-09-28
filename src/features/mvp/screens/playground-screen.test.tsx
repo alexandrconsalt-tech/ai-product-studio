@@ -206,6 +206,7 @@ describe("PlaygroundScreen", () => {
 
     const iframe = screen.getByTitle("Pipeline Lab v3") as HTMLIFrameElement;
     const iframeUrl = new URL(iframe.src);
+    expect(iframeUrl.pathname).toBe("/pipeline-lab-v26.html");
     expect(iframeUrl.searchParams.get("productId")).toBe(project.id);
     expect(iframeUrl.searchParams.has("preset")).toBe(false);
   });

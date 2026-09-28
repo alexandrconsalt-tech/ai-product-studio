@@ -32,10 +32,11 @@ export type PipelineLabV3ScreenProps = Readonly<{
   productId?: string;
   productName?: string;
   preset?: "default" | "blank";
+  documentPath?: string;
   onRunComplete?: (payload: PipelineLabV3RunPayload) => void;
 }>;
 
-export function PipelineLabV3Screen({ productId, productName, preset, onRunComplete }: PipelineLabV3ScreenProps) {
+export function PipelineLabV3Screen({ productId, productName, preset, documentPath = "/pipeline-lab-v3.html", onRunComplete }: PipelineLabV3ScreenProps) {
   const iframeRef = React.useRef<HTMLIFrameElement>(null);
   const [runtimeConfig, setRuntimeConfig] = React.useState<PipelineRuntimeConfig | null>(null);
 
@@ -107,7 +108,7 @@ export function PipelineLabV3Screen({ productId, productName, preset, onRunCompl
   if (productName) params.set("productName", productName);
   if (preset) params.set("preset", preset);
   const query = params.toString();
-  const src = query ? `/pipeline-lab-v3.html?${query}` : "/pipeline-lab-v3.html";
+  const src = query ? `${documentPath}?${query}` : documentPath;
 
   return (
     <div className="h-full min-h-0 w-full">
